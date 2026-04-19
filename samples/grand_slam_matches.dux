@@ -1,0 +1,5 @@
+EVALUATE
+    FILTER(
+        matches,
+        matches[tourney_level] = "G"
+    )

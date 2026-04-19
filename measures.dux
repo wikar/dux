@@ -1,0 +1,15 @@
+DEFINE
+    MEASURE matches[Total Matches] =
+        COUNT(matches[match_num])
+
+    MEASURE matches[Distinct Winners] =
+        DISTINCTCOUNT(matches[winner_id])
+
+    MEASURE matches[Avg Winner Age] =
+        AVERAGE(matches[winner_age])
+
+    MEASURE matches[Avg Loser Age] =
+        AVERAGE(matches[loser_age])
+
+    MEASURE players[Total Players] =
+        COUNT(players[player_id])

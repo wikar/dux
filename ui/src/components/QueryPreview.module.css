@@ -1,0 +1,33 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--surface1);
+}
+
+.header {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--subtext0);
+  flex-shrink: 0;
+}
+
+.code {
+  margin: 0;
+  padding: 8px 12px 12px;
+  font-family: "Cascadia Code", "Fira Code", ui-monospace, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 60px;
+}
+
+.empty {
+  color: var(--subtext0);
+  font-style: italic;
+}

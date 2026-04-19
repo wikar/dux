@@ -1,0 +1,14 @@
+.icon {
+  display: inline-block;
+  min-width: 28px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--surface0);
+  color: var(--blue);
+  font-size: 10px;
+  font-weight: 700;
+  font-family: ui-monospace, monospace;
+  text-align: center;
+  user-select: none;
+  flex-shrink: 0;
+}

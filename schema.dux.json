@@ -1,0 +1,22 @@
+{
+  "relationships": [
+    {
+      "fromTable": "matches",
+      "fromColumn": "winner_id",
+      "toTable": "players",
+      "toColumn": "player_id"
+    },
+    {
+      "fromTable": "matches",
+      "fromColumn": "round",
+      "toTable": "rounds",
+      "toColumn": "name"
+    },
+    {
+      "fromTable": "matches",
+      "fromColumn": "tourney_level",
+      "toTable": "levels",
+      "toColumn": "short_name"
+    }
+  ]
+}

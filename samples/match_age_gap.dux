@@ -1,0 +1,5 @@
+EVALUATE
+    ADDCOLUMNS(
+        matches,
+        "Age Gap", matches[winner_age] - matches[loser_age]
+    )

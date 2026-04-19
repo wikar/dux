@@ -1,0 +1,39 @@
+.zone {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 80px;
+  border: 1.5px dashed var(--surface2);
+  border-radius: 6px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.zone.over {
+  border-color: var(--blue);
+  background: rgba(137, 180, 250, 0.06);
+}
+
+.label {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--subtext0);
+  flex-shrink: 0;
+}
+
+.pillList {
+  padding: 2px 6px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.empty {
+  padding: 8px 6px;
+  font-size: 12px;
+  color: var(--surface2);
+  font-style: italic;
+}
