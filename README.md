@@ -5,7 +5,42 @@ An analytical query language that compiles to DuckDB SQL. Syntax inspired by [DA
 ## Requirements
 
 - Go 1.25+
+- A C compiler (required by `go-duckdb` via CGO)
+- [Bun](https://bun.sh) (for building the UI)
 - A DuckDB `.duckdb` file
+
+### Installing a C compiler
+
+**Windows** — install [MSYS2](https://www.msys2.org/), then run:
+```sh
+pacman -S mingw-w64-ucrt-x86_64-gcc
+```
+
+**macOS** — Xcode Command Line Tools include `clang`:
+```sh
+xcode-select --install
+```
+
+**Linux** — install GCC via your package manager:
+```sh
+# Debian / Ubuntu
+sudo apt install build-essential
+
+# Fedora / RHEL
+sudo dnf install gcc
+```
+
+### Installing Bun
+
+**Windows**
+```sh
+powershell -c "irm bun.sh/install.ps1 | iex"
+```
+
+**macOS / Linux**
+```sh
+curl -fsSL https://bun.sh/install | bash
+```
 
 ## Build
 
