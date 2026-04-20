@@ -13,8 +13,8 @@ Build the UI first — `duxd` embeds the compiled assets at Go build time:
 
 ```sh
 cd ui
-npm install
-npm run build
+bun install
+bun run build
 cd ..
 ```
 
