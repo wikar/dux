@@ -9,6 +9,17 @@ An analytical query language that compiles to DuckDB SQL. Syntax inspired by [DA
 
 ## Build
 
+Build the UI first — `duxd` embeds the compiled assets at Go build time:
+
+```sh
+cd ui
+npm install
+npm run build
+cd ..
+```
+
+Then build the binaries:
+
 ```sh
 go build ./cmd/dux     # CLI
 go build ./cmd/duxd    # query server
