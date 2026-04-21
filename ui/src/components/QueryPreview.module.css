@@ -16,29 +16,70 @@
   flex-shrink: 0;
 }
 
+/* ── Overlay editor ─────────────────────────────────────────────────── */
+
+.codeWrapper {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Shared geometry — both layers must be pixel-identical */
+.highlight,
 .code {
+  position: absolute;
+  inset: 0;
   margin: 0;
-  padding: 8px 12px 12px;
+  padding: 8px 12px;
   font-family: "Cascadia Code", "Fira Code", ui-monospace, monospace;
   font-size: 12.5px;
   line-height: 1.55;
+  white-space: pre;
+  word-break: normal;
+  overflow: auto;
+  tab-size: 4;
+  box-sizing: border-box;
+}
+
+/* Highlighted underlay */
+.highlight {
+  pointer-events: none;
   color: var(--text);
+  background: transparent;
+  border: none;
+  /* Hide scrollbars — textarea drives scrolling */
+  scrollbar-width: none;
+}
+.highlight::-webkit-scrollbar { display: none; }
+
+/* Editable overlay — text is transparent, only cursor/selection shows */
+.code {
+  color: transparent;
+  caret-color: var(--text);
   background: transparent;
   border: none;
   outline: none;
   resize: none;
-  white-space: pre;
-  word-break: normal;
-  flex: 1;
-  overflow-y: auto;
   width: 100%;
-  box-sizing: border-box;
+  height: 100%;
 }
 
 .code::placeholder {
   color: var(--subtext0);
   font-style: italic;
 }
+
+/* ── highlight.js token colours (Catppuccin Mocha) ──────────────────── */
+
+.highlight :global(.hljs-keyword)  { color: var(--mauve); }
+.highlight :global(.hljs-built_in) { color: var(--blue); }
+.highlight :global(.hljs-string)   { color: var(--green); }
+.highlight :global(.hljs-title)    { color: var(--peach); }  /* [ColRef] */
+.highlight :global(.hljs-meta)     { color: var(--teal); }   /* 'Table' */
+.highlight :global(.hljs-number)   { color: var(--peach); }
+.highlight :global(.hljs-comment)  { color: var(--surface2); font-style: italic; }
+
+/* ── Toolbar ────────────────────────────────────────────────────────── */
 
 .toolbar {
   display: flex;

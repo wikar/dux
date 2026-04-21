@@ -13,29 +13,19 @@ const isNumeric = (dt: string) =>
 export function generateQuery(fields: DropField[], filters: FilterField[]): string {
   if (fields.length === 0) return "";
 
-  // Group-by columns (non-numeric)
-  const groupCols = fields.filter(
-    (f) => f.kind === "column" && !isNumeric(f.dataType)
-  );
-
-  // Aggregated numeric columns
-  const aggCols = fields.filter(
-    (f) => f.kind === "column" && isNumeric(f.dataType)
-  );
-
-  // Measures (ColRef style)
-  const measureCols = fields.filter((f) => f.kind === "measure");
-
-  // ── Group-by columns then measure ColRefs ──
-  const groupByArgs = [
-    ...groupCols.map((f) => `${f.table}[${f.name}]`),
-    ...measureCols.map((f) => `${f.table}[${f.name}]`),
-  ];
-
-  // ── Named aggregates ──
-  const aggArgs = aggCols.flatMap((f) => {
-    const agg = f.aggregate ?? "SUM";
-    return [`"${f.name}"`, `${agg}(${f.table}[${f.name}])`];
+  // Emit each field in its original order so reordering is reflected immediately.
+  const fieldArgs = fields.flatMap((f) => {
+    if (f.kind === "measure") {
+      // Pre-defined measure → named pair
+      return [`"${f.name}"`, `${f.table}[${f.name}]`];
+    }
+    if (isNumeric(f.dataType)) {
+      // Numeric column → named aggregate pair
+      const agg = f.aggregate ?? "SUM";
+      return [`"${f.name}"`, `${agg}(${f.table}[${f.name}])`];
+    }
+    // Non-numeric column → group-by ColRef
+    return [`${f.table}[${f.name}]`];
   });
 
   // ── TREATAS filter args (only when a value has been entered) ──
@@ -51,7 +41,7 @@ export function generateQuery(fields: DropField[], filters: FilterField[]): stri
       return `TREATAS({${valList}}, ${f.table}[${f.name}])`;
     });
 
-  const allArgs = [...groupByArgs, ...aggArgs, ...treatasArgs];
+  const allArgs = [...fieldArgs, ...treatasArgs];
 
   return `EVALUATE SUMMARIZECOLUMNS(\n    ${allArgs.join(",\n    ")}\n)`;
 }

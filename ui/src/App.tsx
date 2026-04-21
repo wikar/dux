@@ -45,6 +45,11 @@ const App: Component = () => {
     setIsDirty(false);
   }
 
+  // A field is a "metric" if it's a pre-defined measure or a numeric column.
+  // Non-metric (group-by) columns always sort before metrics.
+  const isMetric = (f: DropField) =>
+    f.kind === "measure" || (f.kind === "column" && isNumeric(f.dataType));
+
   function addToFields(payload: DragPayload) {
     if (state.fields.some((f) => f.table === payload.table && f.name === payload.name)) return;
     const field: DropField = {
@@ -54,7 +59,19 @@ const App: Component = () => {
       dataType: payload.dataType,
       aggregate: payload.kind === "column" && isNumeric(payload.dataType) ? "SUM" : undefined,
     };
-    setState("fields", (f) => [...f, field]);
+    if (isMetric(field)) {
+      // Metrics go at the end.
+      setState("fields", (f) => [...f, field]);
+    } else {
+      // Non-metric columns insert before the first metric.
+      setState("fields", (f) => {
+        const insertAt = f.findIndex(isMetric);
+        if (insertAt === -1) return [...f, field];
+        const next = [...f];
+        next.splice(insertAt, 0, field);
+        return next;
+      });
+    }
   }
 
   function addToFilters(payload: DragPayload) {
@@ -69,9 +86,22 @@ const App: Component = () => {
   }
 
   function reorderFields(from: number, to: number) {
+    const item = state.fields[from];
+    // Non-metric columns always precede metrics. Clamp target to enforce this.
+    let clamped = to;
+    // Count of non-metric items excluding the dragged item.
+    const nonMetricCount = state.fields.filter((f, i) => i !== from && !isMetric(f)).length;
+    if (isMetric(item)) {
+      // Metric: cannot go before a non-metric column.
+      clamped = Math.max(to, nonMetricCount);
+    } else {
+      // Non-metric: cannot go after a metric.
+      clamped = Math.min(to, nonMetricCount);
+    }
+    if (clamped === from) return;
     setState("fields", produce((arr) => {
-      const [item] = arr.splice(from, 1);
-      arr.splice(to, 0, item);
+      const [moved] = arr.splice(from, 1);
+      arr.splice(clamped, 0, moved);
     }));
   }
 
