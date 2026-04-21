@@ -1,4 +1,4 @@
-import { createMemo } from "solid-js";
+import { createMemo, createSignal, createEffect } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type { Component } from "solid-js";
 import type { DropField, FilterField, DragPayload, Aggregate } from "./types/schema";
@@ -19,6 +19,11 @@ const App: Component = () => {
   });
 
   const query = createMemo(() => generateQuery(state.fields, state.filters));
+
+  // activeQuery is what gets sent to the server. Resets to the generated query
+  // whenever fields/filters change, but the user can freely edit it manually.
+  const [activeQuery, setActiveQuery] = createSignal("");
+  createEffect(() => { setActiveQuery(query()); });
 
   function addToFields(payload: DragPayload) {
     if (state.fields.some((f) => f.table === payload.table && f.name === payload.name)) return;
@@ -88,8 +93,8 @@ const App: Component = () => {
 
       {/* Column 3 — Query + results */}
       <div class={styles.col3}>
-        <QueryPreview query={query()} />
-        <ResultTable query={query()} />
+        <QueryPreview query={activeQuery()} onQueryChange={setActiveQuery} />
+        <ResultTable query={activeQuery()} />
       </div>
     </div>
   );

@@ -1,13 +1,17 @@
 import type { Component } from "solid-js";
 import styles from "./QueryPreview.module.css";
 
-const QueryPreview: Component<{ query: string }> = (props) => {
+const QueryPreview: Component<{ query: string; onQueryChange: (q: string) => void }> = (props) => {
   return (
     <div class={styles.panel}>
       <div class={styles.header}>Generated Query</div>
-      <pre class={styles.code}>
-        {props.query || <span class={styles.empty}>// Drop fields to build a query</span>}
-      </pre>
+      <textarea
+        class={styles.code}
+        value={props.query}
+        placeholder="// Drop fields to build a query"
+        spellcheck={false}
+        onInput={(e) => props.onQueryChange(e.currentTarget.value)}
+      />
     </div>
   );
 };
