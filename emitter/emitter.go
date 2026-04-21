@@ -128,29 +128,27 @@ func (e *Emitter) emitTerm(t *parser.Term) (string, error) {
 //     all tables in the measure store (requires the name to be unique).
 //  4. Plain column name (lowest priority, no table qualifier).
 func (e *Emitter) emitColRef(cr *parser.ColRef) (string, error) {
-	col := toSnakeCase(semantic.StripBrackets(cr.Column))
+	stripped := semantic.StripBrackets(cr.Column)
 
 	// Bare name used for lookups (row context, measure store) — strip quotes.
 	tableKey := semantic.StripSingleQuotes(cr.Table)
 
 	// Iterator row-context alias takes highest priority.
 	if alias, ok := e.rowCtx.ResolveAlias(tableKey); ok {
-		return alias + "." + col, nil
+		return alias + "." + e.resolveColName(tableKey, stripped), nil
 	}
 
 	if measures := e.effectiveMeasures(); measures != nil {
 		if tableKey != "" {
 			// Table-qualified measure expansion.
 			if tableMeasures, ok := measures[tableKey]; ok {
-				measureName := semantic.StripBrackets(cr.Column)
-				if def, ok := tableMeasures[measureName]; ok && def.Expr != nil {
+				if def, ok := tableMeasures[stripped]; ok && def.Expr != nil {
 					return e.emitExpr(def.Expr)
 				}
 			}
 		} else {
 			// Bare [MeasureName] — scan all tables; name must be unique.
-			measureName := semantic.StripBrackets(cr.Column)
-			def, err := semantic.FindMeasureByName(measureName, measures)
+			def, err := semantic.FindMeasureByName(stripped, measures)
 			if err != nil {
 				return "", err
 			}
@@ -160,8 +158,9 @@ func (e *Emitter) emitColRef(cr *parser.ColRef) (string, error) {
 		}
 	}
 
-	// Plain column reference — emit without table qualifier.
-	return col, nil
+	// Plain column reference — use the exact name from the schema when available
+	// so that mixed-case column names (e.g. l_1stIn) are preserved verbatim.
+	return e.resolveColName(tableKey, stripped), nil
 }
 
 // effectiveMeasures returns the measure lookup map: e.Measures (explicit,
@@ -175,6 +174,21 @@ func (e *Emitter) effectiveMeasures() map[string]map[string]*parser.MeasureDefin
 		return e.Schema.Measures
 	}
 	return nil
+}
+
+// resolveColName returns the exact column name to use in emitted SQL.
+// When the schema is available and the table+column are found, the schema's
+// own casing is used verbatim (e.g. "l_1stIn" stays "l_1stIn").
+// Falls back to toSnakeCase for schema-free unit tests or unknown columns.
+func (e *Emitter) resolveColName(table, stripped string) string {
+	if e.Schema != nil && table != "" {
+		if t, ok := e.Schema.Tables[table]; ok {
+			if col, ok := t.Columns[stripped]; ok {
+				return col.Name
+			}
+		}
+	}
+	return toSnakeCase(stripped)
 }
 
 // ─── Literals ────────────────────────────────────────────────────────────────
