@@ -40,6 +40,52 @@
   font-style: italic;
 }
 
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  padding: 4px 8px;
+  min-height: 32px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--surface1);
+}
+
+.runBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px 3px 7px;
+  border: 1px solid var(--surface1);
+  border-radius: 4px;
+  background: var(--surface0);
+  color: var(--subtext0);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.1s, border-color 0.1s, background 0.1s;
+}
+
+.runBtn:hover {
+  background: var(--surface1);
+  color: var(--text);
+}
+
+.runBtnActive {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.runBtnActive:hover {
+  background: var(--surface1);
+  color: var(--green);
+}
+
+.runBtn svg {
+  width: 10px;
+  height: 10px;
+}
+
 .empty {
   color: var(--subtext0);
   font-style: italic;

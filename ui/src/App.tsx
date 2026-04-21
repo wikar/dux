@@ -20,10 +20,30 @@ const App: Component = () => {
 
   const query = createMemo(() => generateQuery(state.fields, state.filters));
 
-  // activeQuery is what gets sent to the server. Resets to the generated query
-  // whenever fields/filters change, but the user can freely edit it manually.
+  // activeQuery mirrors what is shown in the Query panel.
+  // committedQuery is what ResultTable actually executes.
+  // When the generated query changes (drag-drop), both update and isDirty resets.
+  // When the user edits manually, only activeQuery updates and isDirty becomes true.
   const [activeQuery, setActiveQuery] = createSignal("");
-  createEffect(() => { setActiveQuery(query()); });
+  const [committedQuery, setCommittedQuery] = createSignal("");
+  const [isDirty, setIsDirty] = createSignal(false);
+
+  createEffect(() => {
+    const q = query();
+    setActiveQuery(q);
+    setCommittedQuery(q);
+    setIsDirty(false);
+  });
+
+  function handleQueryChange(q: string) {
+    setActiveQuery(q);
+    setIsDirty(true);
+  }
+
+  function commitQuery() {
+    setCommittedQuery(activeQuery());
+    setIsDirty(false);
+  }
 
   function addToFields(payload: DragPayload) {
     if (state.fields.some((f) => f.table === payload.table && f.name === payload.name)) return;
@@ -93,8 +113,8 @@ const App: Component = () => {
 
       {/* Column 3 — Query + results */}
       <div class={styles.col3}>
-        <QueryPreview query={activeQuery()} onQueryChange={setActiveQuery} />
-        <ResultTable query={activeQuery()} />
+        <QueryPreview query={activeQuery()} isDirty={isDirty()} onQueryChange={handleQueryChange} onRun={commitQuery} />
+        <ResultTable query={committedQuery()} />
       </div>
     </div>
   );
