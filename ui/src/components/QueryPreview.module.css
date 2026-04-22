@@ -69,6 +69,31 @@
   font-style: italic;
 }
 
+/* ── Ghost text autocomplete ────────────────────────────────────────── */
+
+/* Hidden single-char span used to measure monospace character width */
+.ruler {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: pre;
+  font-family: "Cascadia Code", "Fira Code", ui-monospace, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+/* Inline ghost-text suggestion rendered on top of the textarea */
+.ghost {
+  position: absolute;
+  pointer-events: none;
+  white-space: pre;
+  font-family: "Cascadia Code", "Fira Code", ui-monospace, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--subtext0);
+  opacity: 0.5;
+}
+
 /* ── highlight.js token colours (Catppuccin Mocha) ──────────────────── */
 
 .highlight :global(.hljs-keyword)  { color: var(--mauve); }
