@@ -1,4 +1,5 @@
 import type { LanguageFn } from "highlight.js";
+import { DUX_KEYWORDS, DUX_BUILTINS } from "./duxKeywords";
 
 // DUX highlight.js language definition.
 // Token mapping (Catppuccin Mocha):
@@ -14,13 +15,8 @@ const duxLanguage: LanguageFn = (hljs) => ({
   name: "DUX",
   case_insensitive: true,
   keywords: {
-    keyword: "DEFINE EVALUATE MEASURE RETURN VAR AND OR NOT TRUE FALSE",
-    built_in:
-      "SUM AVERAGE COUNT COUNTA COUNTBLANK COUNTROWS DISTINCTCOUNT " +
-      "MIN MAX MEDIAN SUMX AVERAGEX COUNTX MINX MAXX CONCATENATEX " +
-      "SUMMARIZECOLUMNS FILTER CALCULATE ADDCOLUMNS SELECTCOLUMNS " +
-      "TOPN UNION INTERSECT EXCEPT VALUES DISTINCT TREATAS " +
-      "DIVIDE ISBLANK BLANK IF SWITCH",
+    keyword: DUX_KEYWORDS.join(" "),
+    built_in: DUX_BUILTINS.join(" "),
   },
   contains: [
     hljs.COMMENT("//", "$"),

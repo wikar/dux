@@ -3,24 +3,10 @@ import type { Component } from "solid-js";
 import hljs from "highlight.js/lib/core";
 import type { Schema } from "../types/schema";
 import duxLanguage from "../utils/duxLanguage";
+import { DUX_KEYWORDS, DUX_BUILTINS } from "../utils/duxKeywords";
 import styles from "./QueryPreview.module.css";
 
 hljs.registerLanguage("dux", duxLanguage);
-
-// ─── Autocomplete candidates ─────────────────────────────────────────────────
-
-const KEYWORDS = [
-  "DEFINE", "EVALUATE", "MEASURE", "RETURN", "VAR",
-  "AND", "OR", "NOT", "TRUE", "FALSE",
-];
-
-const BUILTINS = [
-  "SUM", "AVERAGE", "COUNT", "COUNTA", "COUNTBLANK", "COUNTROWS", "DISTINCTCOUNT",
-  "MIN", "MAX", "MEDIAN", "SUMX", "AVERAGEX", "COUNTX", "MINX", "MAXX", "CONCATENATEX",
-  "SUMMARIZECOLUMNS", "FILTER", "CALCULATE", "ADDCOLUMNS", "SELECTCOLUMNS",
-  "TOPN", "UNION", "INTERSECT", "EXCEPT", "VALUES", "DISTINCT", "TREATAS",
-  "DIVIDE", "ISBLANK", "BLANK", "IF", "SWITCH",
-];
 
 async function fetchSchema(): Promise<Schema> {
   const res = await fetch("/schema");
@@ -122,7 +108,7 @@ function getCompletion(text: string, pos: number, schema: Schema | undefined): s
   if (word.length < 1) return "";
   const upper = word.toUpperCase();
   const tableNames = schema ? Object.keys(schema.Tables) : [];
-  const match = [...KEYWORDS, ...BUILTINS, ...tableNames].find(
+  const match = [...DUX_KEYWORDS, ...DUX_BUILTINS, ...tableNames].find(
     (c) => c.toUpperCase().startsWith(upper) && c.toUpperCase() !== upper
   );
   return match ? match.slice(word.length) : "";
