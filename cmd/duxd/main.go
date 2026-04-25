@@ -133,6 +133,30 @@ const openAPISpec = `{
       }
     },
     "/measures": {
+      "get": {
+        "summary": "List measures",
+        "description": "Returns all measures as a flat JSON array.",
+        "responses": {
+          "200": {
+            "description": "Array of measures",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "table":      { "type": "string" },
+                      "name":       { "type": "string" },
+                      "expression": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "summary": "Add a measure",
         "description": "Create or update a named measure. The expression is validated through the DUX parser.",
@@ -172,6 +196,31 @@ const openAPISpec = `{
       }
     },
     "/relationships": {
+      "get": {
+        "summary": "List relationships",
+        "description": "Returns all relationships as a JSON array.",
+        "responses": {
+          "200": {
+            "description": "Array of relationships",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "from_table":  { "type": "string" },
+                      "from_column": { "type": "string" },
+                      "to_table":    { "type": "string" },
+                      "to_column":   { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "summary": "Add a relationship",
         "description": "Declare a foreign-key relationship between two tables.",
@@ -232,12 +281,18 @@ Usage:
   duxd [flags]
 
 Endpoints served on :80:
-  POST /query    Accept a raw DUX query string, return a JSON result set
-  GET  /schema   Return tables, columns, and relationships as JSON
-  GET  /export   Export measures and relationships as dux.toml
-  POST /import   Import a dux.toml body into the metadata database
-  GET  /docs/*   Scalar interactive API reference
-  GET  /         Query builder UI
+  POST /query          Accept a raw DUX query string, return a JSON result set
+  GET  /schema         Return tables, columns, and relationships as JSON
+  GET  /export         Export measures and relationships as dux.toml
+  POST /import         Import a dux.toml body into the metadata database
+  GET  /measures       List all measures
+  POST /measures       Add a measure
+  DELETE /measures/:table/:name  Delete a measure
+  GET  /relationships  List all relationships
+  POST /relationships  Add a relationship
+  DELETE /relationships  Delete a relationship
+  GET  /docs/*         Scalar interactive API reference
+  GET  /               Query builder UI
 
 Flags:
 `
@@ -341,8 +396,10 @@ func main() {
 	app.Get("/schema", fiberSchemaHandler(schema, &schemaMu))
 	app.Get("/export", fiberExportHandler(schema, &schemaMu))
 	app.Post("/import", fiberImportHandler(metaDB, schema, &schemaMu))
+	app.Get("/measures", fiberListMeasuresHandler(schema, &schemaMu))
 	app.Post("/measures", fiberAddMeasureHandler(metaDB, schema, &schemaMu))
 	app.Delete("/measures/:table/:name", fiberDeleteMeasureHandler(metaDB, schema, &schemaMu))
+	app.Get("/relationships", fiberListRelationshipsHandler(schema, &schemaMu))
 	app.Post("/relationships", fiberAddRelationshipHandler(metaDB, schema, &schemaMu))
 	app.Delete("/relationships", fiberDeleteRelationshipHandler(metaDB, schema, &schemaMu))
 
@@ -510,6 +567,30 @@ type measureRequest struct {
 	Expression string `json:"expression"`
 }
 
+// fiberListMeasuresHandler serves GET /measures.
+// Returns all measures as a flat JSON array.
+func fiberListMeasuresHandler(schema *semantic.Schema, mu *sync.RWMutex) fiber.Handler {
+	return func(c fiber.Ctx) error {
+		type item struct {
+			Table      string `json:"table"`
+			Name       string `json:"name"`
+			Expression string `json:"expression"`
+		}
+		mu.RLock()
+		var out []item
+		for table, defs := range schema.Measures {
+			for name, def := range defs {
+				out = append(out, item{Table: table, Name: name, Expression: def.Expression})
+			}
+		}
+		mu.RUnlock()
+		if out == nil {
+			out = []item{}
+		}
+		return c.JSON(out)
+	}
+}
+
 // fiberAddMeasureHandler serves POST /measures.
 // Body: {"table":"...","name":"...","expression":"..."}
 func fiberAddMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) fiber.Handler {
@@ -582,6 +663,20 @@ type relationshipRequest struct {
 	FromColumn string `json:"from_column"`
 	ToTable    string `json:"to_table"`
 	ToColumn   string `json:"to_column"`
+}
+
+// fiberListRelationshipsHandler serves GET /relationships.
+// Returns all relationships as a JSON array.
+func fiberListRelationshipsHandler(schema *semantic.Schema, mu *sync.RWMutex) fiber.Handler {
+	return func(c fiber.Ctx) error {
+		mu.RLock()
+		rels := schema.Relationships
+		mu.RUnlock()
+		if rels == nil {
+			rels = []*semantic.Relationship{}
+		}
+		return c.JSON(rels)
+	}
 }
 
 // fiberAddRelationshipHandler serves POST /relationships.

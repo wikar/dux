@@ -171,6 +171,9 @@ POST /import          ← dux.toml body; replaces all measures and relationships
 ### Measures
 
 ```
+GET /measures
+→ [{"table": "atp.matches", "name": "Total Matches", "expression": "COUNT(atp.matches[match_num])"}]
+
 POST /measures
 {"table": "atp.matches", "name": "Total Matches", "expression": "COUNT(atp.matches[match_num])"}
 → 201 Created
@@ -182,6 +185,9 @@ DELETE /measures/:table/:name
 ### Relationships
 
 ```
+GET /relationships
+→ [{"from_table": "atp.matches", "from_column": "winner_id", "to_table": "atp.players", "to_column": "player_id"}]
+
 POST /relationships
 {"from_table": "atp.matches", "from_column": "winner_id", "to_table": "atp.players", "to_column": "player_id"}
 → 201 Created
