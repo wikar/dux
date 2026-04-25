@@ -394,9 +394,142 @@ const AddMeasureModal: Component<{
   );
 };
 
+// ─── Add relationship modal ───────────────────────────────────────────────────
+
+type RelTarget = { FromTable: string; FromColumn: string; ToTable: string; ToColumn: string };
+
+const AddRelationshipModal: Component<{
+  schema: Schema;
+  initial?: RelTarget;
+  onClose: () => void;
+  onSaved: () => void;
+}> = (props) => {
+  const isEdit = () => !!props.initial;
+  const tables = () => Object.keys(props.schema.Tables).filter((n) => !isMetaTable(n)).sort();
+
+  // Relationship FromTable/ToTable may be bare ("matches") while schema.Tables
+  // keys are qualified ("atp.matches"). Resolve bare names to their full key.
+  const resolveTable = (name: string) => {
+    const keys = tables();
+    // exact match first
+    if (keys.includes(name)) return name;
+    // try matching the part after the dot
+    const match = keys.find((k) => k.endsWith("." + name));
+    return match ?? name;
+  };
+
+  const colsFor = (t: string) => {
+    const tbl = props.schema.Tables[t];
+    return tbl ? Object.values(tbl.Columns).map((c) => c.Name).sort() : [];
+  };
+
+  const initFrom = resolveTable(props.initial?.FromTable ?? "");
+  const initTo = resolveTable(props.initial?.ToTable ?? "");
+  const [fromTable, setFromTable] = createSignal(initFrom);
+  const [fromCol, setFromCol] = createSignal(props.initial?.FromColumn ?? "");
+  const [toTable, setToTable] = createSignal(initTo);
+  const [toCol, setToCol] = createSignal(props.initial?.ToColumn ?? "");
+  const [error, setError] = createSignal("");
+  const [saving, setSaving] = createSignal(false);
+
+  async function save() {
+    if (!fromTable() || !fromCol() || !toTable() || !toCol()) {
+      setError("All four fields are required.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      const orig = props.initial;
+      if (orig && (
+        orig.FromTable !== fromTable() || orig.FromColumn !== fromCol() ||
+        orig.ToTable !== toTable() || orig.ToColumn !== toCol()
+      )) {
+        await fetch("/relationships", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            from_table: orig.FromTable, from_column: orig.FromColumn,
+            to_table: orig.ToTable, to_column: orig.ToColumn,
+          }),
+        });
+      }
+      const res = await fetch("/relationships", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from_table: fromTable(), from_column: fromCol(),
+          to_table: toTable(), to_column: toCol(),
+        }),
+      });
+      if (!res.ok) setError(await res.text());
+      else props.onSaved();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div class={styles.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) props.onClose(); }}>
+      <div class={styles.modal}>
+        <div class={styles.modalHeader}>
+          <span>{isEdit() ? "Edit Relationship" : "New Relationship"}</span>
+          <button class={styles.modalClose} onClick={props.onClose}>✕</button>
+        </div>
+        <div class={styles.modalBody}>
+          <label class={styles.modalLabel}>From table</label>
+          <select class={styles.modalSelect}
+            onChange={(e) => { setFromTable((e.currentTarget as HTMLSelectElement).value); setFromCol(""); }}>
+            <option value="">— select table —</option>
+            {tables().map(t => <option value={t} selected={t === fromTable()}>{t}</option>)}
+          </select>
+
+          <label class={styles.modalLabel}>From column</label>
+          <select class={styles.modalSelect}
+            onChange={(e) => setFromCol((e.currentTarget as HTMLSelectElement).value)}>
+            <option value="">— select column —</option>
+            {colsFor(fromTable()).map(c => <option value={c} selected={c === fromCol()}>{c}</option>)}
+          </select>
+
+          <label class={styles.modalLabel}>To table</label>
+          <select class={styles.modalSelect}
+            onChange={(e) => { setToTable((e.currentTarget as HTMLSelectElement).value); setToCol(""); }}>
+            <option value="">— select table —</option>
+            {tables().map(t => <option value={t} selected={t === toTable()}>{t}</option>)}
+          </select>
+
+          <label class={styles.modalLabel}>To column</label>
+          <select class={styles.modalSelect}
+            onChange={(e) => setToCol((e.currentTarget as HTMLSelectElement).value)}>
+            <option value="">— select column —</option>
+            {colsFor(toTable()).map(c => <option value={c} selected={c === toCol()}>{c}</option>)}
+          </select>
+
+          <Show when={error()}>
+            <div class={styles.modalError}>{error()}</div>
+          </Show>
+        </div>
+        <div class={styles.modalFooter}>
+          <button class={styles.modalBtn} onClick={props.onClose} disabled={saving()}>Cancel</button>
+          <button class={`${styles.modalBtn} ${styles.modalBtnPrimary}`} onClick={save} disabled={saving()}>
+            {saving() ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ─── Relationships section ────────────────────────────────────────────────────
 
-const RelationshipsSection: Component<{ schema: Schema }> = (props) => {
+const RelationshipsSection: Component<{
+  schema: Schema;
+  onAdd: () => void;
+  onEdit: (r: RelTarget) => void;
+  onDelete: (r: RelTarget) => void;
+}> = (props) => {
   const [open, setOpen] = createSignal(false);
   const rels = () => props.schema.Relationships ?? [];
 
@@ -406,6 +539,14 @@ const RelationshipsSection: Component<{ schema: Schema }> = (props) => {
         <span class={styles.chevron}>{open() ? "▾" : "▸"}</span>
         <span class={styles.sideSectionTitle}>Relationships</span>
         <span class={styles.fieldCount}>{rels().length}</span>
+        <span
+          class={styles.addBtn}
+          title="Add relationship"
+          role="button"
+          tabIndex={0}
+          onClick={(e) => { e.stopPropagation(); props.onAdd(); }}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); props.onAdd(); } }}
+        >+</span>
       </button>
       <Show when={open()}>
         <div class={styles.sideSectionBody}>
@@ -415,12 +556,23 @@ const RelationshipsSection: Component<{ schema: Schema }> = (props) => {
           >
             <For each={rels()}>
               {(r) => (
-                <div class={styles.relRow}>
-                  <span class={styles.relTable}>{r.FromTable}</span>
-                  <span class={styles.relCol}>[{r.FromColumn}]</span>
-                  <span class={styles.relArrow}>→</span>
-                  <span class={styles.relTable}>{r.ToTable}</span>
-                  <span class={styles.relCol}>[{r.ToColumn}]</span>
+                <div
+                  class={styles.relRow}
+                  style="cursor:pointer"
+                  onClick={() => props.onEdit(r)}
+                >
+                  <span class={styles.relLabel}>
+                    <span class={styles.relTable}>{r.FromTable}</span>
+                    <span class={styles.relCol}>[{r.FromColumn}]</span>
+                    <span class={styles.relArrow}>→</span>
+                    <span class={styles.relTable}>{r.ToTable}</span>
+                    <span class={styles.relCol}>[{r.ToColumn}]</span>
+                  </span>
+                  <button
+                    class={styles.deleteBtn}
+                    title="Remove relationship"
+                    onClick={(e) => { e.stopPropagation(); props.onDelete(r); }}
+                  >−</button>
                 </div>
               )}
             </For>
@@ -502,10 +654,13 @@ const MeasuresSection: Component<{
 
 // ─── Schema tree panel ───────────────────────────────────────────────────────
 
+type ModalMode = "measure-add" | "measure-edit" | "relationship-add" | "relationship-edit";
+
 const SchemaTree: Component = () => {
   const [schema, { refetch }] = createResource(fetchSchema);
-  const [showModal, setShowModal] = createSignal(false);
+  const [modal, setModal] = createSignal<ModalMode | null>(null);
   const [editTarget, setEditTarget] = createSignal<EditTarget | undefined>(undefined);
+  const [relEditTarget, setRelEditTarget] = createSignal<RelTarget | undefined>(undefined);
 
   const tableNames = () =>
     Object.keys(schema()?.Tables ?? {}).filter((n) => !isMetaTable(n)).sort();
@@ -517,15 +672,25 @@ const SchemaTree: Component = () => {
     refetch();
   }
 
-  function openAdd() {
-    setEditTarget(undefined);
-    setShowModal(true);
+  async function deleteRelationship(r: { FromTable: string; FromColumn: string; ToTable: string; ToColumn: string }) {
+    await fetch("/relationships", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from_table: r.FromTable, from_column: r.FromColumn,
+        to_table: r.ToTable, to_column: r.ToColumn,
+      }),
+    });
+    refetch();
   }
 
-  function openEdit(table: string, name: string, expression: string) {
-    setEditTarget({ table, name, expression });
-    setShowModal(true);
+  function openMeasureAdd() { setEditTarget(undefined); setModal("measure-add"); }
+  function openMeasureEdit(table: string, name: string, expression: string) {
+    setEditTarget({ table, name, expression }); setModal("measure-edit");
   }
+  function openRelEdit(r: RelTarget) { setRelEditTarget(r); setModal("relationship-edit"); }
+  function closeModal() { setModal(null); }
+  function saved() { closeModal(); refetch(); }
 
   return (
     <div class={styles.panel}>
@@ -546,20 +711,33 @@ const SchemaTree: Component = () => {
         </Show>
       </div>
       <Show when={schema()}>
-        <RelationshipsSection schema={schema()!} />
+        <RelationshipsSection
+          schema={schema()!}
+          onAdd={() => { setRelEditTarget(undefined); setModal("relationship-add"); }}
+          onEdit={openRelEdit}
+          onDelete={deleteRelationship}
+        />
         <MeasuresSection
           schema={schema()!}
-          onAdd={openAdd}
-          onEdit={openEdit}
+          onAdd={openMeasureAdd}
+          onEdit={openMeasureEdit}
           onDelete={deleteMeasure}
         />
       </Show>
-      <Show when={showModal() && schema()}>
+      <Show when={(modal() === "measure-add" || modal() === "measure-edit") && schema()}>
         <AddMeasureModal
           schema={schema()!}
           initial={editTarget()}
-          onClose={() => setShowModal(false)}
-          onSaved={() => { setShowModal(false); refetch(); }}
+          onClose={closeModal}
+          onSaved={saved}
+        />
+      </Show>
+      <Show when={(modal() === "relationship-add" || modal() === "relationship-edit") && schema()}>
+        <AddRelationshipModal
+          schema={schema()!}
+          initial={relEditTarget()}
+          onClose={closeModal}
+          onSaved={saved}
         />
       </Show>
     </div>
