@@ -49,6 +49,10 @@ func (e *Emitter) emitTableExpr(t *parser.TableExpr) (string, error) {
 	if t.Func != nil {
 		return e.emitFuncCall(t.Func)
 	}
+	if t.QualifiedTable != "" {
+		// db.table syntax — emit as-is; DuckDB resolves the attachment alias.
+		return fmt.Sprintf("SELECT * FROM %s", sqlQualifiedIdent(t.QualifiedTable)), nil
+	}
 	if t.QuotedTable != "" {
 		return fmt.Sprintf("SELECT * FROM %s", sqlIdent(semantic.StripSingleQuotes(t.QuotedTable))), nil
 	}
@@ -106,6 +110,9 @@ func (e *Emitter) emitTerm(t *parser.Term) (string, error) {
 	case t.QuotedIdent != "":
 		// Single-quoted table name as a bare term (e.g. 'Order Lines' argument).
 		return sqlIdent(semantic.StripSingleQuotes(t.QuotedIdent)), nil
+	case t.QualifiedIdent != "":
+		// db.table as a bare term (e.g. first argument of FILTER(atp.matches, ...)).
+		return sqlQualifiedIdent(t.QualifiedIdent), nil
 	case t.Ident != "":
 		// Check scalar VAR substitution before treating as a table name.
 		if e.ScalarVars != nil {
@@ -931,12 +938,27 @@ func (e *Emitter) emitPassthrough(fc *parser.FuncCall) (string, error) {
 // sqlIdent returns a DuckDB-safe SQL identifier for a bare (unquoted) table
 // name. Names that contain spaces are wrapped in double quotes; simple
 // all-lowercase names are returned as-is in lowercase.
+// For db-qualified names (db.table) use sqlQualifiedIdent instead.
 func sqlIdent(name string) string {
 	if strings.Contains(name, " ") {
 		// Escape any embedded double-quotes and wrap in double-quotes.
 		return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 	}
+	// Qualified names (db.table) are passed through without lowercasing the dot.
+	if strings.Contains(name, ".") {
+		return sqlQualifiedIdent(name)
+	}
 	return strings.ToLower(name)
+}
+
+// sqlQualifiedIdent returns a DuckDB-safe SQL identifier for a db-qualified
+// table name (e.g. "atp.matches" → atp.matches, "my db.my table" → "my db"."my table").
+func sqlQualifiedIdent(name string) string {
+	parts := strings.SplitN(name, ".", 2)
+	if len(parts) != 2 {
+		return strings.ToLower(name)
+	}
+	return sqlIdent(parts[0]) + "." + sqlIdent(parts[1])
 }
 
 // isStringLiteral reports whether expr is a bare string literal node.
@@ -1033,6 +1055,8 @@ func (e *Emitter) tableNameFromExpr(expr *parser.Expr) (string, error) {
 		return t.Ident, nil
 	case t.QuotedIdent != "":
 		return semantic.StripSingleQuotes(t.QuotedIdent), nil
+	case t.QualifiedIdent != "":
+		return t.QualifiedIdent, nil
 	case t.ColRef != nil && t.ColRef.Table != "":
 		return t.ColRef.Table, nil
 	case t.FuncCall != nil:

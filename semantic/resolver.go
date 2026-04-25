@@ -171,7 +171,9 @@ func (r *Resolver) resolveTableExpr(t *parser.TableExpr) error {
 	}
 	// Determine the bare table name (strip quotes if needed).
 	tableName := t.Table
-	if t.QuotedTable != "" {
+	if t.QualifiedTable != "" {
+		tableName = t.QualifiedTable
+	} else if t.QuotedTable != "" {
 		tableName = StripSingleQuotes(t.QuotedTable)
 	}
 	if tableName == "" {
@@ -181,8 +183,8 @@ func (r *Resolver) resolveTableExpr(t *parser.TableExpr) error {
 	if r.varNames[strings.ToLower(tableName)] {
 		return nil
 	}
-	// Verify the table exists in the schema.
-	if _, ok := r.Schema.Tables[tableName]; !ok {
+	// Verify the table exists in the schema (bare or qualified key).
+	if !r.tableExists(tableName) {
 		return &SemanticError{
 			Node:    t,
 			Message: fmt.Sprintf("unknown table %q", tableName),
@@ -228,6 +230,9 @@ func (r *Resolver) resolveTerm(t *parser.Term) error {
 		return nil // literals always valid
 	case t.SubExpr != nil:
 		return r.resolveExpr(t.SubExpr)
+	case t.QualifiedIdent != "":
+		// db.table as a bare term (e.g. first arg of FILTER(atp.matches, ...))
+		return nil
 	case t.Ident != "":
 		// Bare identifier: VAR names and unknown idents are accepted at runtime.
 		return nil
@@ -319,7 +324,7 @@ func (r *Resolver) resolveColRef(cr *parser.ColRef) error {
 		// without a table qualifier is resolved at runtime against the active scope.
 		return nil
 	}
-	tableName := StripSingleQuotes(cr.Table)
+	tableName := tableKey(cr.Table)
 	// VAR-declared names are not in the schema but are valid at execution time.
 	if r.varNames[strings.ToLower(tableName)] {
 		return nil
@@ -332,6 +337,8 @@ func (r *Resolver) resolveColRef(cr *parser.ColRef) error {
 			return nil
 		}
 	}
+	// Look up the table in the schema. Accept both the bare name and the
+	// qualified name (db.table) transparently.
 	t, ok := r.Schema.Tables[tableName]
 	if !ok {
 		return &SemanticError{
@@ -346,6 +353,31 @@ func (r *Resolver) resolveColRef(cr *parser.ColRef) error {
 		}
 	}
 	return nil
+}
+
+// tableKey normalises a raw table token to the schema lookup key.
+// Single-quoted table names are stripped; qualified names (db.table) are
+// returned as-is since that is how IntrospectDuckDB keys them.
+func tableKey(raw string) string {
+	return StripSingleQuotes(raw)
+}
+
+// tableExists reports whether tableName is present in the schema. It checks
+// both the raw key and, for unqualified names, scans all qualified keys so
+// that "matches" resolves when tables are keyed as "atp.matches".
+func (r *Resolver) tableExists(tableName string) bool {
+	if _, ok := r.Schema.Tables[tableName]; ok {
+		return true
+	}
+	// Allow bare table name when exactly one qualified key ends with .tableName.
+	suffix := "." + tableName
+	matches := 0
+	for k := range r.Schema.Tables {
+		if strings.HasSuffix(k, suffix) {
+			matches++
+		}
+	}
+	return matches == 1
 }
 
 // StripBrackets removes the surrounding [ ] from a ColRef token value.
@@ -381,6 +413,9 @@ func extractTableName(e *parser.Expr) string {
 	t := e.Left
 	if t.QuotedIdent != "" {
 		return StripSingleQuotes(t.QuotedIdent)
+	}
+	if t.QualifiedIdent != "" {
+		return t.QualifiedIdent // return as-is; caller uses it as a schema key
 	}
 	if t.Ident != "" {
 		return t.Ident

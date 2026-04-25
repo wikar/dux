@@ -36,7 +36,9 @@ ui/dist/*
 ui/node_modules/*
 
 # Logs and databases
-db/atp.duckdb
+db/*.duckdb
+db/*.db
+db/*.wal
 
 # Reference data
 reference/

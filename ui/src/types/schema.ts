@@ -5,6 +5,7 @@ export interface Column {
 
 export interface Table {
   Name: string;
+  Database?: string;
   Columns: Record<string, Column>;
 }
 

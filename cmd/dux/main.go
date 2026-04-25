@@ -38,6 +38,9 @@ Flags:
 func main() {
 	dbPath := flag.String("db", "", "DuckDB database file path (required)")
 	measuresPath := flag.String("measures", "measures.dux", "path to global measures file (optional)")
+	tomlPath := flag.String("toml", "dux.toml", "path to dux.toml (optional)")
+	importPath := flag.String("import", "", "import this dux.toml into the metadata DB then exit")
+	exportPath := flag.String("export", "", "export measures and schema to this path then exit")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, usage)
@@ -64,6 +67,39 @@ func main() {
 
 	if err := semantic.LoadMeasuresFile(*measuresPath, schema); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: measures file: %v\n", err)
+	}
+
+	if err := semantic.LoadDuxTOML(*tomlPath, schema); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: dux.toml: %v\n", err)
+	}
+
+	// --import: parse the given TOML and write it to a metadata DB alongside
+	// the main DuckDB file, then exit.
+	if *importPath != "" {
+		importSchema := semantic.NewSchema()
+		if err := semantic.LoadDuxTOML(*importPath, importSchema); err != nil {
+			fatal("import: %v", err)
+		}
+		metaPath := *dbPath[:len(*dbPath)-len(".duckdb")] + ".dux.duckdb"
+		metaDB, err := semantic.OpenMetadataDB(metaPath)
+		if err != nil {
+			fatal("open metadata db: %v", err)
+		}
+		defer metaDB.Close()
+		if err := metaDB.ReplaceAllFromSchema(importSchema); err != nil {
+			fatal("import: write metadata: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "imported %q into %q\n", *importPath, metaPath)
+		os.Exit(0)
+	}
+
+	// --export: write the current schema + measures to a dux.toml file.
+	if *exportPath != "" {
+		if err := semantic.WriteDuxTOML(*exportPath, schema); err != nil {
+			fatal("export: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "exported schema to %q\n", *exportPath)
+		os.Exit(0)
 	}
 
 	if args := flag.Args(); len(args) > 0 {

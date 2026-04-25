@@ -22,8 +22,9 @@ type Schema struct {
 
 // Table represents a table in the schema.
 type Table struct {
-	Name    string
-	Columns map[string]*Column
+	Name     string
+	Database string // empty for the primary (main) database; attachment alias otherwise
+	Columns  map[string]*Column
 }
 
 // Column represents a single column within a Table.
@@ -61,10 +62,10 @@ func IntrospectDuckDB(db *sql.DB) (*Schema, error) {
 	schema := NewSchema()
 
 	rows, err := db.Query(`
-		SELECT table_name, column_name, data_type
+		SELECT table_catalog, table_name, column_name, data_type
 		FROM information_schema.columns
 		WHERE table_schema = 'main'
-		ORDER BY table_name, ordinal_position
+		ORDER BY table_catalog, table_name, ordinal_position
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("introspect columns: %w", err)
@@ -72,14 +73,29 @@ func IntrospectDuckDB(db *sql.DB) (*Schema, error) {
 	defer rows.Close()
 
 	for rows.Next() {
-		var tableName, columnName, dataType string
-		if err := rows.Scan(&tableName, &columnName, &dataType); err != nil {
+		var catalog, tableName, columnName, dataType string
+		if err := rows.Scan(&catalog, &tableName, &columnName, &dataType); err != nil {
 			return nil, fmt.Errorf("scan column row: %w", err)
 		}
-		t, ok := schema.Tables[tableName]
+		// For attached databases the catalog differs from the primary db name.
+		// We key the table as "db.table" so that qualified DUX references resolve
+		// unambiguously. The primary database uses a bare table name as key.
+		key := tableName
+		dbAlias := ""
+		if catalog != "memory" && catalog != "" {
+			// catalog holds the attachment alias (e.g. "atp") for attached databases,
+			// and the filename stem for the primary. We distinguish them by checking
+			// whether the catalog matches the reserved primary marker stored in the
+			// schema — but since we don't know the primary name here, we key ALL
+			// non-memory catalogs with a qualified key and let the resolver strip the
+			// prefix for plain (unqualified) references.
+			key = catalog + "." + tableName
+			dbAlias = catalog
+		}
+		t, ok := schema.Tables[key]
 		if !ok {
-			t = &Table{Name: tableName, Columns: make(map[string]*Column)}
-			schema.Tables[tableName] = t
+			t = &Table{Name: tableName, Database: dbAlias, Columns: make(map[string]*Column)}
+			schema.Tables[key] = t
 		}
 		t.Columns[columnName] = &Column{Name: columnName, DataType: dataType}
 	}

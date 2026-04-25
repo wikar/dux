@@ -13,11 +13,13 @@ type Query struct {
 //
 //	MEASURE Sales[Total Revenue] = SUMX(Sales, Sales[Quantity] * Sales[UnitPrice])
 //	MEASURE 'Order Lines'[Amount] = SUM('Order Lines'[Amount])
+//	MEASURE atp.matches[Total] = COUNT(atp.matches[match_num])
 type MeasureDefinition struct {
 	// Table is the table name that owns this measure. For tables with spaces it
 	// is stored with surrounding single quotes (e.g. "'Order Lines'"); use
-	// semantic.StripSingleQuotes to obtain the bare name.
-	Table string `parser:"'MEASURE' @( Ident | QuotedIdent )"`
+	// semantic.StripSingleQuotes to obtain the bare name. For db-qualified tables
+	// it is stored as "db.table" (e.g. "atp.matches").
+	Table string `parser:"'MEASURE' @( QualifiedIdent | Ident | QuotedIdent )"`
 	// Column is the raw ColRef token (e.g. "[Total Revenue]"). Brackets are
 	// stripped by the semantic resolver.
 	Column string `parser:"@ColRef '='"`
@@ -26,12 +28,14 @@ type MeasureDefinition struct {
 
 // TableExpr is a table-returning expression. It is either a function call
 // (FILTER, SUMMARIZECOLUMNS, ADDCOLUMNS, etc.) or a bare table reference.
-// Bare references may be a plain Ident (e.g. Sales) or a QuotedIdent for
-// table names that contain spaces (e.g. 'Order Lines').
+// Bare references may be a plain Ident (e.g. Sales), a QuotedIdent for
+// table names that contain spaces (e.g. 'Order Lines'), or a QualifiedIdent
+// for db-qualified names (e.g. atp.matches).
 type TableExpr struct {
-	Func        *FuncCall `parser:"  @@"`
-	QuotedTable string    `parser:"| @QuotedIdent"`
-	Table       string    `parser:"| @Ident"`
+	Func           *FuncCall `parser:"  @@"`
+	QualifiedTable string    `parser:"| @QualifiedIdent"`
+	QuotedTable    string    `parser:"| @QuotedIdent"`
+	Table          string    `parser:"| @Ident"`
 }
 
 // Expr is a binary expression. Operator precedence is not encoded in the
@@ -64,6 +68,7 @@ type TableConstructor struct {
 // FuncCall is tried next because it and a bare column ref both begin with
 // an identifier token; UseLookahead(2) in the parser lets participle peek
 // at the token after the name to decide which branch to commit to.
+// QualifiedIdent (db.table) is tried before QuotedIdent and plain Ident.
 // QuotedIdent handles single-quoted table names as bare arguments to table
 // functions (e.g. FILTER('Order Lines', ...)).
 // A bare Ident (no following '(' or ColRef token) is matched last.
@@ -73,6 +78,7 @@ type Term struct {
 	ColRef           *ColRef           `parser:"| @@"`
 	Literal          *Literal          `parser:"| @@"`
 	SubExpr          *Expr             `parser:"| '(' @@ ')'"`
+	QualifiedIdent   string            `parser:"| @QualifiedIdent"`
 	QuotedIdent      string            `parser:"| @QuotedIdent"`
 	Ident            string            `parser:"| @Ident"`
 }
@@ -87,19 +93,19 @@ type FuncCall struct {
 
 // ColRef is a table-qualified or bare column reference.
 //
-//	Sales[Amount]        → Table="Sales",       Column="[Amount]"
-//	'Order Lines'[Amount] → Table="'Order Lines'", Column="[Amount]"
-//	[Amount]             → Table="",              Column="[Amount]"
+//	Sales[Amount]          → Table="Sales",         Column="[Amount]"
+//	'Order Lines'[Amount]  → Table="'Order Lines'",  Column="[Amount]"
+//	atp.matches[Amount]    → Table="atp.matches",    Column="[Amount]"
+//	[Amount]               → Table="",               Column="[Amount]"
 //
 // No dot separator is used between the table name and the column bracket.
 // The surrounding brackets in Column are stripped by StripBrackets during
 // semantic resolution and SQL emission. The surrounding single quotes in Table
 // are stripped by StripSingleQuotes when used as a schema key or SQL identifier.
 type ColRef struct {
-	// Table is the optional table qualifier — either a plain Ident (e.g. "Sales")
-	// or a single-quoted QuotedIdent (e.g. "'Order Lines'") immediately preceding
-	// the ColRef token.
-	Table  string `parser:"( @( Ident | QuotedIdent ) )?"`
+	// Table is the optional table qualifier — a plain Ident, a single-quoted
+	// QuotedIdent, or a dot-separated QualifiedIdent (db.table).
+	Table  string `parser:"( @( QualifiedIdent | Ident | QuotedIdent ) )?"`
 	Column string `parser:"@ColRef"`
 }
 
