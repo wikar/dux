@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -382,6 +383,7 @@ func fiberAddMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema
 			return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("invalid expression: %v", err))
 		}
 		def := defines[0]
+		def.Expression = req.Expression
 
 		// Persist to the metadata DB.
 		if err := metaDB.SaveMeasure(req.Table, req.Name, req.Expression); err != nil {
@@ -403,8 +405,8 @@ func fiberAddMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema
 // fiberDeleteMeasureHandler serves DELETE /measures/:table/:name.
 func fiberDeleteMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) fiber.Handler {
 	return func(c fiber.Ctx) error {
-		table := c.Params("table")
-		name := c.Params("name")
+		table, _ := url.PathUnescape(c.Params("table"))
+		name, _ := url.PathUnescape(c.Params("name"))
 		if table == "" || name == "" {
 			return c.Status(fiber.StatusBadRequest).SendString("table and name are required")
 		}

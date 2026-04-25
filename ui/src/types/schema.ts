@@ -12,6 +12,7 @@ export interface Table {
 export interface MeasureDef {
   Table: string;
   Column: string;
+  Expression?: string;
 }
 
 export interface Relationship {

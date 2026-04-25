@@ -130,6 +130,7 @@ func (m *MetadataDB) loadMeasures(schema *Schema) error {
 			return fmt.Errorf("parse stored measure %q.%q: %w", tableName, name, err)
 		}
 		for _, def := range defines {
+			def.Expression = expression
 			table := StripSingleQuotes(def.Table)
 			n := StripBrackets(def.Column)
 			if schema.Measures[table] == nil {

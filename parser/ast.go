@@ -24,6 +24,9 @@ type MeasureDefinition struct {
 	// stripped by the semantic resolver.
 	Column string `parser:"@ColRef '='"`
 	Expr   *Expr  `parser:"@@"`
+	// Expression holds the raw DUX expression string as entered by the user
+	// (e.g. "COUNT(matches[match_num])"). Populated at load time; not parsed.
+	Expression string `parser:""`
 }
 
 // TableExpr is a table-returning expression. It is either a function call
