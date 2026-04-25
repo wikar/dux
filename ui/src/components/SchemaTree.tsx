@@ -70,7 +70,13 @@ const TableGroup: Component<{
   };
 
   const measures = () => {
-    const tblMeasures = props.schema.Measures?.[props.tableName];
+    const m = props.schema.Measures;
+    if (!m) return [];
+    // Measures may be keyed by bare name ("matches") or qualified ("atp.matches").
+    // Try both so qualified table names in the schema panel still find their measures.
+    const dot = props.tableName.indexOf(".");
+    const bare = dot >= 0 ? props.tableName.slice(dot + 1) : props.tableName;
+    const tblMeasures = m[props.tableName] ?? m[bare];
     if (!tblMeasures) return [];
     return Object.keys(tblMeasures).sort();
   };
