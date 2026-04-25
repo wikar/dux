@@ -73,6 +73,7 @@ func LoadDuxTOML(path string, schema *Schema) error {
 			return fmt.Errorf("dux.toml %q: measure %q: %w", path, m.Name, err)
 		}
 		for _, def := range defines {
+			def.Expression = m.Expression
 			table := StripSingleQuotes(def.Table)
 			name := StripBrackets(def.Column)
 			for existingTable, defs := range schema.Measures {
@@ -122,6 +123,7 @@ func LoadDuxTOMLBytes(data []byte, schema *Schema) error {
 			return fmt.Errorf("measure %q: %w", m.Name, err)
 		}
 		for _, def := range defines {
+			def.Expression = m.Expression
 			table := StripSingleQuotes(def.Table)
 			name := StripBrackets(def.Column)
 			if schema.Measures[table] == nil {
