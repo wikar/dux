@@ -23,6 +23,14 @@ const isMetaTable = (name: string) => {
   return name.startsWith("dux_");
 };
 
+// Resolve a possibly bare table name (e.g. "matches") to its fully-qualified
+// schema key (e.g. "atp.matches") using the list of known table keys.
+const resolveTable = (name: string, tableKeys: string[]) => {
+  if (tableKeys.includes(name)) return name;
+  const match = tableKeys.find((k) => k.endsWith("." + name));
+  return match ?? name;
+};
+
 // ─── Draggable field row ─────────────────────────────────────────────────────
 
 const FieldRow: Component<{ payload: DragPayload }> = (props) => {
@@ -408,24 +416,13 @@ const AddRelationshipModal: Component<{
   const isEdit = () => !!props.initial;
   const tables = () => Object.keys(props.schema.Tables).filter((n) => !isMetaTable(n)).sort();
 
-  // Relationship FromTable/ToTable may be bare ("matches") while schema.Tables
-  // keys are qualified ("atp.matches"). Resolve bare names to their full key.
-  const resolveTable = (name: string) => {
-    const keys = tables();
-    // exact match first
-    if (keys.includes(name)) return name;
-    // try matching the part after the dot
-    const match = keys.find((k) => k.endsWith("." + name));
-    return match ?? name;
-  };
-
   const colsFor = (t: string) => {
     const tbl = props.schema.Tables[t];
     return tbl ? Object.values(tbl.Columns).map((c) => c.Name).sort() : [];
   };
 
-  const initFrom = resolveTable(props.initial?.FromTable ?? "");
-  const initTo = resolveTable(props.initial?.ToTable ?? "");
+  const initFrom = resolveTable(props.initial?.FromTable ?? "", tables());
+  const initTo = resolveTable(props.initial?.ToTable ?? "", tables());
   const [fromTable, setFromTable] = createSignal(initFrom);
   const [fromCol, setFromCol] = createSignal(props.initial?.FromColumn ?? "");
   const [toTable, setToTable] = createSignal(initTo);
@@ -565,11 +562,20 @@ const RelationshipsSection: Component<{
                   onClick={() => props.onEdit(r)}
                 >
                   <span class={styles.relLabel}>
-                    <span class={styles.relTable}>{r.FromTable}</span>
-                    <span class={styles.relCol}>[{r.FromColumn}]</span>
-                    <span class={styles.relArrow}>→</span>
-                    <span class={styles.relTable}>{r.ToTable}</span>
-                    <span class={styles.relCol}>[{r.ToColumn}]</span>
+                    {(() => {
+                      const tkeys = Object.keys(props.schema.Tables).filter((n) => !isMetaTable(n));
+                      const from = resolveTable(r.FromTable, tkeys);
+                      const to = resolveTable(r.ToTable, tkeys);
+                      return (
+                        <>
+                          <span class={styles.relTable}>{from}</span>
+                          <span class={styles.relCol}>[{r.FromColumn}]</span>
+                          <span class={styles.relArrow}>→</span>
+                          <span class={styles.relTable}>{to}</span>
+                          <span class={styles.relCol}>[{r.ToColumn}]</span>
+                        </>
+                      );
+                    })()}
                   </span>
                   <button
                     class={styles.deleteBtn}
