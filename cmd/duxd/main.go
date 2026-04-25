@@ -251,7 +251,9 @@ func attachDataDBs(db *sql.DB, dir, metaPath string) error {
 		}
 
 		stem := strings.TrimSuffix(name, filepath.Ext(name))
-		q := fmt.Sprintf("ATTACH '%s' AS %s (READ_ONLY)", absPath, stem)
+		escapedPath := strings.ReplaceAll(absPath, "'", "''")
+		quotedStem := `"` + strings.ReplaceAll(stem, `"`, `""`) + `"`
+		q := fmt.Sprintf("ATTACH '%s' AS %s (READ_ONLY)", escapedPath, quotedStem)
 		if _, err := db.Exec(q); err != nil {
 			log.Printf("warning: attach %q as %q: %v", absPath, stem, err)
 		} else {
@@ -348,7 +350,10 @@ func fiberImportHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu
 		mu.Lock()
 		schema.Relationships = nil
 		schema.Measures = make(map[string]map[string]*parser.MeasureDefinition)
-		_ = metaDB.LoadIntoSchema(schema)
+		if err := metaDB.LoadIntoSchema(schema); err != nil {
+			mu.Unlock()
+			return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		}
 		mu.Unlock()
 
 		return c.SendString("imported successfully")

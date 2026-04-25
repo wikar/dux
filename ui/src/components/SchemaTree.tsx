@@ -311,13 +311,7 @@ const AddMeasureModal: Component<{
     setError("");
     try {
       const orig = props.initial;
-      // In edit mode, if the name changed delete the old entry first.
-      if (orig && (orig.table !== table() || orig.name !== name())) {
-        await fetch(
-          `/measures/${encodeURIComponent(orig.table)}/${encodeURIComponent(orig.name)}`,
-          { method: "DELETE" }
-        );
-      }
+      const nameChanged = orig && (orig.table !== table() || orig.name !== name());
       const res = await fetch("/measures", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -325,9 +319,16 @@ const AddMeasureModal: Component<{
       });
       if (!res.ok) {
         setError(await res.text());
-      } else {
-        props.onSaved();
+        return;
       }
+      // Only delete the old entry after the new one is saved.
+      if (nameChanged) {
+        await fetch(
+          `/measures/${encodeURIComponent(orig!.table)}/${encodeURIComponent(orig!.name)}`,
+          { method: "DELETE" }
+        );
+      }
+      props.onSaved();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -441,19 +442,10 @@ const AddRelationshipModal: Component<{
     setError("");
     try {
       const orig = props.initial;
-      if (orig && (
+      const changed = orig && (
         orig.FromTable !== fromTable() || orig.FromColumn !== fromCol() ||
         orig.ToTable !== toTable() || orig.ToColumn !== toCol()
-      )) {
-        await fetch("/relationships", {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            from_table: orig.FromTable, from_column: orig.FromColumn,
-            to_table: orig.ToTable, to_column: orig.ToColumn,
-          }),
-        });
-      }
+      );
       const res = await fetch("/relationships", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -462,8 +454,19 @@ const AddRelationshipModal: Component<{
           to_table: toTable(), to_column: toCol(),
         }),
       });
-      if (!res.ok) setError(await res.text());
-      else props.onSaved();
+      if (!res.ok) { setError(await res.text()); return; }
+      // Only delete the old relationship after the new one is saved.
+      if (changed) {
+        await fetch("/relationships", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            from_table: orig!.FromTable, from_column: orig!.FromColumn,
+            to_table: orig!.ToTable, to_column: orig!.ToColumn,
+          }),
+        });
+      }
+      props.onSaved();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -665,15 +668,19 @@ const SchemaTree: Component = () => {
   const tableNames = () =>
     Object.keys(schema()?.Tables ?? {}).filter((n) => !isMetaTable(n)).sort();
 
+  const [deleteError, setDeleteError] = createSignal("");
+
   async function deleteMeasure(table: string, name: string) {
-    await fetch(`/measures/${encodeURIComponent(table)}/${encodeURIComponent(name)}`, {
+    const res = await fetch(`/measures/${encodeURIComponent(table)}/${encodeURIComponent(name)}`, {
       method: "DELETE",
     });
+    if (!res.ok) { setDeleteError(`Failed to delete measure: ${await res.text()}`); return; }
+    setDeleteError("");
     refetch();
   }
 
   async function deleteRelationship(r: { FromTable: string; FromColumn: string; ToTable: string; ToColumn: string }) {
-    await fetch("/relationships", {
+    const res = await fetch("/relationships", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -681,6 +688,8 @@ const SchemaTree: Component = () => {
         to_table: r.ToTable, to_column: r.ToColumn,
       }),
     });
+    if (!res.ok) { setDeleteError(`Failed to delete relationship: ${await res.text()}`); return; }
+    setDeleteError("");
     refetch();
   }
 
@@ -723,6 +732,9 @@ const SchemaTree: Component = () => {
           onEdit={openMeasureEdit}
           onDelete={deleteMeasure}
         />
+      </Show>
+      <Show when={deleteError()}>
+        <div class={styles.statusError} style="padding:6px 12px;font-size:11px">{deleteError()}</div>
       </Show>
       <Show when={(modal() === "measure-add" || modal() === "measure-edit") && schema()}>
         <AddMeasureModal

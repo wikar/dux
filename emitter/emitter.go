@@ -484,7 +484,7 @@ func (e *Emitter) emitTreatas(fc *parser.FuncCall) (string, error) {
 	if targetTerm == nil || targetTerm.ColRef == nil {
 		return "", fmt.Errorf("TREATAS: second argument must be a column reference (e.g. matches[surface])")
 	}
-	col := toSnakeCase(semantic.StripBrackets(targetTerm.ColRef.Column))
+	col := e.resolveColName(semantic.StripSingleQuotes(targetTerm.ColRef.Table), semantic.StripBrackets(targetTerm.ColRef.Column))
 
 	// arg[0]: source — TableConstructor or VALUES(t[c]).
 	srcTerm := fc.Args[0].Left
@@ -513,7 +513,7 @@ func (e *Emitter) emitTreatas(fc *parser.FuncCall) (string, error) {
 		if vcr == nil || vcr.ColRef == nil {
 			return "", fmt.Errorf("TREATAS: VALUES argument must be a column reference")
 		}
-		srcCol := toSnakeCase(semantic.StripBrackets(vcr.ColRef.Column))
+		srcCol := e.resolveColName(semantic.StripSingleQuotes(vcr.ColRef.Table), semantic.StripBrackets(vcr.ColRef.Column))
 		srcTable := sqlIdent(semantic.StripSingleQuotes(vcr.ColRef.Table))
 		return fmt.Sprintf("%s IN (SELECT DISTINCT %s FROM %s)", col, srcCol, srcTable), nil
 
@@ -1312,7 +1312,7 @@ func anyToSQL(v any) string {
 		}
 		return "FALSE"
 	default:
-		return fmt.Sprintf("'%v'", val)
+		return "'" + strings.ReplaceAll(fmt.Sprintf("%v", val), "'", "''") + "'"
 	}
 }
 

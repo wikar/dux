@@ -51,6 +51,8 @@ func (r *emitterRepr) term(t *parser.Term) string {
 		return r.literal(t.Literal)
 	case t.SubExpr != nil:
 		return "(" + r.expr(t.SubExpr) + ")"
+	case t.QualifiedIdent != "":
+		return t.QualifiedIdent
 	case t.QuotedIdent != "":
 		return t.QuotedIdent
 	case t.Ident != "":
