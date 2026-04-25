@@ -3,7 +3,7 @@
 //
 // Usage:
 //
-//	dux [--db <path>] [file.dux]
+//	dux [flags] [file.dux]
 //
 // If no file is given, a REPL is started. Type a query (multiple lines), then
 // press Enter on a blank line to execute. Ctrl+C or Ctrl+D to exit.
@@ -14,7 +14,9 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	// Register the DuckDB driver with database/sql.
@@ -36,9 +38,9 @@ Flags:
 `
 
 func main() {
-	dbPath := flag.String("db", "", "DuckDB database file path (required)")
-	measuresPath := flag.String("measures", "measures.dux", "path to global measures file (optional)")
-	tomlPath := flag.String("toml", "dux.toml", "path to dux.toml (optional)")
+	dbDir := flag.String("db-dir", "db", "directory containing *.duckdb / *.db data files")
+	duxDB := flag.String("dux", "", "path to dux metadata database (default: <db-dir>/dux.duckdb)")
+	tomlPath := flag.String("toml", "dux.toml", "path to dux.toml configuration file")
 	importPath := flag.String("import", "", "import this dux.toml into the metadata DB then exit")
 	exportPath := flag.String("export", "", "export measures and schema to this path then exit")
 
@@ -49,47 +51,50 @@ func main() {
 
 	flag.Parse()
 
-	if *dbPath == "" {
-		flag.Usage()
-		os.Exit(1)
+	// Resolve metadata DB path.
+	metaPath := *duxDB
+	if metaPath == "" {
+		metaPath = filepath.Join(*dbDir, "dux.duckdb")
 	}
 
-	db, err := sql.Open("duckdb", *dbPath)
+	// Open (or create) the metadata database.
+	metaDB, err := semantic.OpenMetadataDB(metaPath)
 	if err != nil {
-		fatal("open database: %v", err)
+		fatal("open metadata db: %v", err)
 	}
-	defer db.Close()
+	defer metaDB.Close()
 
-	schema, err := semantic.IntrospectDuckDB(db)
+	// Attach all data databases (*.duckdb, *.db) in db-dir to the metadata DB.
+	if err := attachDataDBs(metaDB.DB(), *dbDir, metaPath); err != nil {
+		fatal("attach data databases: %v", err)
+	}
+
+	// Introspect schema from all attached databases.
+	schema, err := semantic.IntrospectDuckDB(metaDB.DB())
 	if err != nil {
 		fatal("introspect schema: %v", err)
 	}
 
-	if err := semantic.LoadMeasuresFile(*measuresPath, schema); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: measures file: %v\n", err)
+	// Load metadata (relationships + measures) from the metadata DB.
+	if err := metaDB.LoadIntoSchema(schema); err != nil {
+		fatal("load metadata: %v", err)
 	}
 
+	// Load dux.toml if present (supplements the metadata DB).
 	if err := semantic.LoadDuxTOML(*tomlPath, schema); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: dux.toml: %v\n", err)
+		fmt.Fprintf(os.Stderr, "warning: loading dux.toml: %v\n", err)
 	}
 
-	// --import: parse the given TOML and write it to a metadata DB alongside
-	// the main DuckDB file, then exit.
+	// --import: load TOML into metadata DB then exit.
 	if *importPath != "" {
 		importSchema := semantic.NewSchema()
 		if err := semantic.LoadDuxTOML(*importPath, importSchema); err != nil {
-			fatal("import: %v", err)
+			fatal("import: parse %q: %v", *importPath, err)
 		}
-		metaPath := *dbPath[:len(*dbPath)-len(".duckdb")] + ".dux.duckdb"
-		metaDB, err := semantic.OpenMetadataDB(metaPath)
-		if err != nil {
-			fatal("open metadata db: %v", err)
-		}
-		defer metaDB.Close()
 		if err := metaDB.ReplaceAllFromSchema(importSchema); err != nil {
-			fatal("import: write metadata: %v", err)
+			fatal("import: write to metadata DB: %v", err)
 		}
-		fmt.Fprintf(os.Stderr, "imported %q into %q\n", *importPath, metaPath)
+		log.Printf("imported %q into metadata DB", *importPath)
 		os.Exit(0)
 	}
 
@@ -98,14 +103,14 @@ func main() {
 		if err := semantic.WriteDuxTOML(*exportPath, schema); err != nil {
 			fatal("export: %v", err)
 		}
-		fmt.Fprintf(os.Stderr, "exported schema to %q\n", *exportPath)
+		log.Printf("exported schema to %q", *exportPath)
 		os.Exit(0)
 	}
 
 	if args := flag.Args(); len(args) > 0 {
-		runFile(db, schema, args[0])
+		runFile(metaDB.DB(), schema, args[0])
 	} else {
-		runREPL(db, schema)
+		runREPL(metaDB.DB(), schema)
 	}
 }
 
@@ -177,4 +182,43 @@ func printResults(rows []map[string]any) {
 func fatal(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "dux: "+format+"\n", args...)
 	os.Exit(1)
+}
+
+// attachDataDBs attaches every *.duckdb and *.db file in dir (except the
+// metadata DB itself) to db as a read-only named attachment.
+func attachDataDBs(db *sql.DB, dir, metaPath string) error {
+	absMetaPath, _ := filepath.Abs(metaPath)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // db-dir not created yet — no-op
+		}
+		return fmt.Errorf("read db-dir %q: %w", dir, err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		ext := strings.ToLower(filepath.Ext(name))
+		if ext != ".duckdb" && ext != ".db" {
+			continue
+		}
+
+		absPath, _ := filepath.Abs(filepath.Join(dir, name))
+		if absPath == absMetaPath {
+			continue // skip the metadata DB itself
+		}
+
+		stem := strings.TrimSuffix(name, filepath.Ext(name))
+		escapedPath := strings.ReplaceAll(absPath, "'", "''")
+		quotedStem := `"` + strings.ReplaceAll(stem, `"`, `""`) + `"`
+		q := fmt.Sprintf("ATTACH '%s' AS %s (READ_ONLY)", escapedPath, quotedStem)
+		if _, err := db.Exec(q); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: attach %q as %q: %v\n", absPath, stem, err)
+		}
+	}
+	return nil
 }
