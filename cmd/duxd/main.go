@@ -46,7 +46,7 @@ const openAPISpec = `{
   "info": {
     "title": "DUX Query API",
     "version": "1.0.0",
-    "description": "Execute DUX queries against an embedded DuckDB database."
+    "description": "Execute DUX queries against an embedded DuckDB database. Tables in attached databases are referenced with dot-qualified names (e.g. atp.matches)."
   },
   "paths": {
     "/query": {
@@ -58,7 +58,7 @@ const openAPISpec = `{
           "content": {
             "text/plain": {
               "schema": { "type": "string" },
-              "example": "EVALUATE SUMMARIZECOLUMNS(matches[surface], \"Matches\", COUNT(matches[match_num]))"
+              "example": "EVALUATE SUMMARIZECOLUMNS(atp.matches[surface], \"Matches\", COUNT(atp.matches[match_num]))"
             }
           }
         },
@@ -121,7 +121,8 @@ const openAPISpec = `{
           "required": true,
           "content": {
             "text/plain": {
-              "schema": { "type": "string" }
+              "schema": { "type": "string" },
+              "example": "[[relationship]]\nfrom_table = \"atp.matches\"\nfrom_column = \"winner_id\"\nto_table = \"atp.players\"\nto_column = \"player_id\"\n\n[[measure]]\ntable = \"atp.matches\"\nname = \"Total Matches\"\nexpression = \"COUNT(atp.matches[match_num])\""
             }
           }
         },
@@ -143,9 +144,9 @@ const openAPISpec = `{
                 "type": "object",
                 "required": ["table", "name", "expression"],
                 "properties": {
-                  "table":      { "type": "string", "example": "matches" },
+                  "table":      { "type": "string", "example": "atp.matches" },
                   "name":       { "type": "string", "example": "Total Matches" },
-                  "expression": { "type": "string", "example": "COUNT(matches[match_num])" }
+                  "expression": { "type": "string", "example": "COUNT(atp.matches[match_num])" }
                 }
               }
             }
@@ -182,9 +183,9 @@ const openAPISpec = `{
                 "type": "object",
                 "required": ["from_table", "from_column", "to_table", "to_column"],
                 "properties": {
-                  "from_table":  { "type": "string", "example": "matches" },
+                  "from_table":  { "type": "string", "example": "atp.matches" },
                   "from_column": { "type": "string", "example": "winner_id" },
-                  "to_table":    { "type": "string", "example": "players" },
+                  "to_table":    { "type": "string", "example": "atp.players" },
                   "to_column":   { "type": "string", "example": "player_id" }
                 }
               }

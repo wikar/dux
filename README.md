@@ -139,7 +139,7 @@ EVALUATE
 POST /query
 Content-Type: text/plain
 
-EVALUATE SUMMARIZECOLUMNS(matches[surface], "Matches", COUNT(matches[match_num]))
+EVALUATE SUMMARIZECOLUMNS(atp.matches[surface], "Matches", COUNT(atp.matches[match_num]))
 ```
 
 ```json
@@ -172,7 +172,7 @@ POST /import          ← dux.toml body; replaces all measures and relationships
 
 ```
 POST /measures
-{"table": "matches", "name": "Total Matches", "expression": "COUNT(matches[match_num])"}
+{"table": "atp.matches", "name": "Total Matches", "expression": "COUNT(atp.matches[match_num])"}
 → 201 Created
 
 DELETE /measures/:table/:name
@@ -183,11 +183,11 @@ DELETE /measures/:table/:name
 
 ```
 POST /relationships
-{"from_table": "matches", "from_column": "winner_id", "to_table": "players", "to_column": "player_id"}
+{"from_table": "atp.matches", "from_column": "winner_id", "to_table": "atp.players", "to_column": "player_id"}
 → 201 Created
 
 DELETE /relationships
-{"from_table": "matches", "from_column": "winner_id", "to_table": "players", "to_column": "player_id"}
+{"from_table": "atp.matches", "from_column": "winner_id", "to_table": "atp.players", "to_column": "player_id"}
 → 204 No Content
 ```
 
@@ -204,20 +204,20 @@ All measures and relationships are persisted in `db/dux.duckdb` and are availabl
 
 ```toml
 [[relationship]]
-from_table  = "matches"
+from_table  = "atp.matches"
 from_column = "winner_id"
-to_table    = "players"
+to_table    = "atp.players"
 to_column   = "player_id"
 
 [[measure]]
-table      = "matches"
+table      = "atp.matches"
 name       = "Total Matches"
-expression = "COUNT(matches[match_num])"
+expression = "COUNT(atp.matches[match_num])"
 
 [[measure]]
-table      = "matches"
+table      = "atp.matches"
 name       = "Avg Winner Age"
-expression = "AVERAGE(matches[winner_age])"
+expression = "AVERAGE(atp.matches[winner_age])"
 ```
 
 Export the current state, edit offline, re-import:
@@ -237,8 +237,8 @@ Every query starts with `EVALUATE`. An optional `DEFINE` block declares reusable
 ```dux
 EVALUATE
     SUMMARIZECOLUMNS(
-        matches[surface],
-        "Matches", COUNT(matches[match_num])
+        atp.matches[surface],
+        "Matches", COUNT(atp.matches[match_num])
     )
 ```
 
@@ -247,8 +247,8 @@ EVALUATE
 ```dux
 EVALUATE
     VAR gs_finals = FILTER(
-        matches,
-        matches[round] = "F" AND matches[tourney_level] = "G"
+        atp.matches,
+        atp.matches[round] = "F" AND atp.matches[tourney_level] = "G"
     )
     RETURN SUMMARIZECOLUMNS(
         gs_finals[winner_name],
@@ -260,13 +260,13 @@ EVALUATE
 
 ```dux
 DEFINE
-    MEASURE matches[Avg Winner Age] =
-        AVERAGE(matches[winner_age])
+    MEASURE atp.matches[Avg Winner Age] =
+        AVERAGE(atp.matches[winner_age])
 
 EVALUATE
     SUMMARIZECOLUMNS(
-        matches[surface],
-        "Avg Age", matches[Avg Winner Age]
+        atp.matches[surface],
+        "Avg Age", atp.matches[Avg Winner Age]
     )
 ```
 
