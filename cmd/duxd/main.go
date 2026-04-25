@@ -80,6 +80,147 @@ const openAPISpec = `{
           "400": { "description": "Parse or execution error" }
         }
       }
+    },
+    "/schema": {
+      "get": {
+        "summary": "Get schema",
+        "description": "Returns tables, columns, relationships, and measures as JSON.",
+        "responses": {
+          "200": {
+            "description": "Schema object",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/export": {
+      "get": {
+        "summary": "Export dux.toml",
+        "description": "Download all measures and relationships as a dux.toml file.",
+        "responses": {
+          "200": {
+            "description": "TOML file",
+            "content": {
+              "text/plain": {
+                "schema": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import": {
+      "post": {
+        "summary": "Import dux.toml",
+        "description": "Upload a dux.toml body. Replaces all measures and relationships in the metadata database.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/plain": {
+              "schema": { "type": "string" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Imported successfully" },
+          "400": { "description": "Invalid TOML" }
+        }
+      }
+    },
+    "/measures": {
+      "post": {
+        "summary": "Add a measure",
+        "description": "Create or update a named measure. The expression is validated through the DUX parser.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["table", "name", "expression"],
+                "properties": {
+                  "table":      { "type": "string", "example": "matches" },
+                  "name":       { "type": "string", "example": "Total Matches" },
+                  "expression": { "type": "string", "example": "COUNT(matches[match_num])" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Created" },
+          "400": { "description": "Validation error" }
+        }
+      }
+    },
+    "/measures/{table}/{name}": {
+      "delete": {
+        "summary": "Delete a measure",
+        "parameters": [
+          { "name": "table", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "name",  "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Deleted" },
+          "400": { "description": "Missing parameters" }
+        }
+      }
+    },
+    "/relationships": {
+      "post": {
+        "summary": "Add a relationship",
+        "description": "Declare a foreign-key relationship between two tables.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["from_table", "from_column", "to_table", "to_column"],
+                "properties": {
+                  "from_table":  { "type": "string", "example": "matches" },
+                  "from_column": { "type": "string", "example": "winner_id" },
+                  "to_table":    { "type": "string", "example": "players" },
+                  "to_column":   { "type": "string", "example": "player_id" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Created" },
+          "400": { "description": "Validation error" }
+        }
+      },
+      "delete": {
+        "summary": "Delete a relationship",
+        "description": "Remove an existing relationship. The body must match an existing relationship exactly.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["from_table", "from_column", "to_table", "to_column"],
+                "properties": {
+                  "from_table":  { "type": "string" },
+                  "from_column": { "type": "string" },
+                  "to_table":    { "type": "string" },
+                  "to_column":   { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": { "description": "Deleted" },
+          "400": { "description": "Validation error" }
+        }
+      }
     }
   }
 }`
