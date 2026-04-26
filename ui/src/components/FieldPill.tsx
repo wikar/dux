@@ -4,7 +4,7 @@ import type { DropField, FilterField, Aggregate } from "../types/schema";
 import TypeIcon from "./TypeIcon";
 import styles from "./FieldPill.module.css";
 
-const AGGREGATES: Aggregate[] = ["SUM", "COUNT", "AVERAGE", "MIN", "MAX", "DISTINCTCOUNT"];
+const AGGREGATES: Aggregate[] = ["SUM", "COUNT", "AVERAGE", "MIN", "MAX", "DISTINCTCOUNT", "VALUES"];
 
 const isNumeric = (dt: string) =>
   /^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|DOUBLE|FLOAT|REAL|DECIMAL|NUMERIC)/i.test(dt);

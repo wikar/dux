@@ -58,7 +58,7 @@ const App: Component = () => {
   // A field is a "metric" if it's a pre-defined measure or a numeric column.
   // Non-metric (group-by) columns always sort before metrics.
   const isMetric = (f: DropField) =>
-    f.kind === "measure" || (f.kind === "column" && isNumeric(f.dataType));
+    f.kind === "measure" || (f.kind === "column" && isNumeric(f.dataType) && f.aggregate !== "VALUES");
 
   function addToFields(payload: DragPayload) {
     if (state.fields.some((f) => f.table === payload.table && f.name === payload.name)) return;
@@ -93,6 +93,31 @@ const App: Component = () => {
       value: "",
     };
     setState("filters", (f) => [...f, filter]);
+  }
+
+  function handleAggChange(i: number, agg: Aggregate) {
+    const updated: DropField = { ...state.fields[i], aggregate: agg };
+    const wasMetric = isMetric(state.fields[i]);
+    const nowMetric = isMetric(updated);
+    if (wasMetric === nowMetric) {
+      // No positional change needed — just update the value.
+      setState("fields", i, "aggregate", agg);
+      return;
+    }
+    // The field crossed the dimension/metric boundary — update and reposition.
+    setState("fields", produce((arr) => {
+      arr[i] = updated;
+      const [item] = arr.splice(i, 1);
+      if (nowMetric) {
+        // Became a metric: move to after the last non-metric.
+        arr.push(item);
+      } else {
+        // Became a dimension (VALUES): insert before the first metric.
+        const insertAt = arr.findIndex(isMetric);
+        if (insertAt === -1) arr.push(item);
+        else arr.splice(insertAt, 0, item);
+      }
+    }));
   }
 
   function reorderFields(from: number, to: number) {
@@ -178,7 +203,7 @@ const App: Component = () => {
           items={state.fields}
           onDrop={addToFields}
           onRemove={(i) => setState("fields", produce((f) => { f.splice(i, 1); }))}
-          onAggChange={(i, agg) => setState("fields", i, "aggregate", agg as Aggregate)}
+          onAggChange={(i, agg) => handleAggChange(i, agg as Aggregate)}
           onReorder={reorderFields}
         />
         <DropZone

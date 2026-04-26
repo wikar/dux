@@ -30,7 +30,7 @@ export interface Schema {
 
 // ─── Query builder state types ──────────────────────────────────────────────
 
-export type Aggregate = "SUM" | "COUNT" | "AVERAGE" | "MIN" | "MAX" | "DISTINCTCOUNT";
+export type Aggregate = "SUM" | "COUNT" | "AVERAGE" | "MIN" | "MAX" | "DISTINCTCOUNT" | "VALUES";
 
 export interface DropField {
   table: string;

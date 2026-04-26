@@ -20,6 +20,10 @@ export function generateQuery(fields: DropField[], filters: FilterField[]): stri
       return [`"${f.name}"`, `${f.table}[${f.name}]`];
     }
     if (isNumeric(f.dataType)) {
+      // VALUES = treat numeric as a dimension group-by key
+      if (f.aggregate === "VALUES") {
+        return [`${f.table}[${f.name}]`];
+      }
       // Numeric column → named aggregate pair
       const agg = f.aggregate ?? "SUM";
       return [`"${f.name}"`, `${agg}(${f.table}[${f.name}])`];

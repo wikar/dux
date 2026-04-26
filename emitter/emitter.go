@@ -590,7 +590,10 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	pairArgs := fc.Args[split:]
 
 	if len(pairArgs)%2 != 0 {
-		return "", fmt.Errorf("SUMMARIZECOLUMNS: name/expr pairs must be even in count")
+		return "", fmt.Errorf(
+			"SUMMARIZECOLUMNS: expected name/expression pairs after the group columns, "+
+				"but got %d argument(s) — each measure must have a quoted name followed by its expression",
+			len(pairArgs))
 	}
 
 	// Emit group column SQL expressions. Arguments that resolve to measures are
