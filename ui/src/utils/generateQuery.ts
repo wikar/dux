@@ -13,24 +13,24 @@ const isNumeric = (dt: string) =>
 export function generateQuery(fields: DropField[], filters: FilterField[]): string {
   if (fields.length === 0) return "";
 
-  // Emit each field in its original order so reordering is reflected immediately.
-  const fieldArgs = fields.flatMap((f) => {
+  // Split fields into dimensions (group-by) and measure pairs.
+  const dimArgs: string[] = [];
+  const measureArgs: string[] = [];
+
+  for (const f of fields) {
     if (f.kind === "measure") {
-      // Pre-defined measure → named pair
-      return [`"${f.name}"`, `${f.table}[${f.name}]`];
-    }
-    if (isNumeric(f.dataType)) {
-      // VALUES = treat numeric as a dimension group-by key
+      measureArgs.push(`"${f.name}"`, `${f.table}[${f.name}]`);
+    } else if (isNumeric(f.dataType)) {
       if (f.aggregate === "VALUES") {
-        return [`${f.table}[${f.name}]`];
+        dimArgs.push(`${f.table}[${f.name}]`);
+      } else {
+        const agg = f.aggregate ?? "SUM";
+        measureArgs.push(`"${f.name}"`, `${agg}(${f.table}[${f.name}])`);
       }
-      // Numeric column → named aggregate pair
-      const agg = f.aggregate ?? "SUM";
-      return [`"${f.name}"`, `${agg}(${f.table}[${f.name}])`];
+    } else {
+      dimArgs.push(`${f.table}[${f.name}]`);
     }
-    // Non-numeric column → group-by ColRef
-    return [`${f.table}[${f.name}]`];
-  });
+  }
 
   // ── TREATAS filter args (only when a value has been entered) ──
   const treatasArgs = filters
@@ -45,7 +45,8 @@ export function generateQuery(fields: DropField[], filters: FilterField[]): stri
       return `TREATAS({${valList}}, ${f.table}[${f.name}])`;
     });
 
-  const allArgs = [...fieldArgs, ...treatasArgs];
+  // Order: dimensions → filters → measures (SUMMARIZECOLUMNS spec)
+  const allArgs = [...dimArgs, ...treatasArgs, ...measureArgs];
 
   return `EVALUATE SUMMARIZECOLUMNS(\n    ${allArgs.join(",\n    ")}\n)`;
 }
