@@ -1,8 +1,52 @@
-.explorer {
+.canvas {
+  flex: 1;
+  overflow: auto;
+  background-color: var(--base);
+  background-image: radial-gradient(circle, var(--surface0) 1px, transparent 1px);
+  background-size: 24px 24px;
+  position: relative;
+}
+
+.canvasInner {
+  position: relative;
+  width: 3600px;
+  height: 2400px;
+}
+
+.svgOverlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.relPath {
+  fill: none;
+  stroke: var(--surface2);
+  stroke-width: 1.5;
+  pointer-events: stroke;
+  cursor: default;
+}
+
+.relPath:hover {
+  stroke: var(--blue);
+  stroke-width: 2.5;
+}
+
+.dragLine {
+  stroke: var(--blue);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 3;
+  pointer-events: none;
+}
+
+.status {
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 1;
+  height: 100%;
+  font-size: 13px;
   color: var(--subtext0);
-  font-size: 14px;
 }
