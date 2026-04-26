@@ -599,9 +599,21 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	// Emit group column SQL expressions. Arguments that resolve to measures are
 	// treated as unnamed aggregate outputs (SELECT only) rather than grouping
 	// keys — placing an aggregate in GROUP BY is invalid SQL.
+	// TREATAS calls are separated into WHERE predicates.
 	var groupCols []string      // emitted SQL for true group-by keys
 	var inlineMeasures []string // emitted SQL for measure refs in the group position
+	var wherePreds []string     // emitted SQL for TREATAS filter predicates
 	for _, arg := range groupArgs {
+		// Check for a TREATAS call — emit as a WHERE predicate, not a group column.
+		if arg.Left != nil && arg.Left.FuncCall != nil &&
+			strings.ToUpper(arg.Left.FuncCall.Name) == "TREATAS" && len(arg.Right) == 0 {
+			pred, err := e.emitTreatas(arg.Left.FuncCall)
+			if err != nil {
+				return "", err
+			}
+			wherePreds = append(wherePreds, pred)
+			continue
+		}
 		if e.isMeasureColRef(arg) {
 			sql, err := e.emitExpr(arg)
 			if err != nil {
@@ -697,6 +709,9 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	fmt.Fprintf(&sb, "SELECT %s", strings.Join(selects, ", "))
 	if fromClause != "" {
 		fmt.Fprintf(&sb, "\nFROM %s", fromClause)
+	}
+	if len(wherePreds) > 0 {
+		fmt.Fprintf(&sb, "\nWHERE %s", strings.Join(wherePreds, " AND "))
 	}
 	if len(groupCols) > 0 {
 		fmt.Fprintf(&sb, "\nGROUP BY %s", strings.Join(groupCols, ", "))
