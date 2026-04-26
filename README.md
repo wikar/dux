@@ -77,7 +77,7 @@ samples/             Example .dux queries
 
 Both `dux` and `duxd` share the same database model: `db/dux.duckdb` is the read-write metadata store, and every other `*.duckdb` / `*.db` file in the directory is attached read-only. Tables inside an attachment are referenced with a dot-qualified name (e.g. `atp.matches`).
 
-## CLI
+## CLI (`dux`)
 
 Run a `.dux` file:
 
