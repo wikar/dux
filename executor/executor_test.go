@@ -353,6 +353,31 @@ func TestExecute_FilterContext(t *testing.T) {
 			t.Fatalf("expected 2 distinct regions, got %d", len(rows))
 		}
 	})
+
+	t.Run("CALCULATE_in_SUMMARIZECOLUMNS", func(t *testing.T) {
+		// CALCULATE inside SUMMARIZECOLUMNS must produce per-group results.
+		// Seed data qty: North 2,1,1 → only qty=2 passes filter → amount=100
+		//                South 3,4,2 → qty=3,4 pass → amount=150+250=400
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			sales[region],
+			"BigQty", CALCULATE(SUM(sales[amount]), sales[qty] > 2)
+		)`)
+		if len(rows) != 2 {
+			t.Fatalf("expected 2 rows, got %d", len(rows))
+		}
+		totals := map[string]float64{}
+		for _, row := range rows {
+			region, _ := row["region"].(string)
+			totals[region] = toFloat(row["BigQty"])
+		}
+		if totals["North"] != 0 {
+			// North has no rows with qty > 2, so FILTER excludes all → NULL (mapped to 0)
+			t.Errorf("North CALCULATE SUM: expected 0, got %v", totals["North"])
+		}
+		if totals["South"] != 400 {
+			t.Errorf("South CALCULATE SUM: expected 400, got %v", totals["South"])
+		}
+	})
 }
 
 // ─── Scalar / logical ─────────────────────────────────────────────────────────

@@ -282,9 +282,21 @@ func TestFilterContext(t *testing.T) {
 		assertContains(t, sql, "WHERE", "IN (SELECT DISTINCT", "FROM products")
 	})
 
-	t.Run("CALCULATE", func(t *testing.T) {
+	t.Run("CALCULATE_standalone", func(t *testing.T) {
 		sql := emit(t, `EVALUATE CALCULATE(SUM(sales[amount]), TREATAS({"North"}, sales[region]))`)
-		assertContains(t, sql, "SELECT", "SUM(", "WHERE", "IN (", "'North'")
+		assertContains(t, sql, "(SELECT", "SUM(", "WHERE", "IN (", "'North'")
+	})
+
+	t.Run("CALCULATE_in_SUMMARIZECOLUMNS", func(t *testing.T) {
+		// Inside SUMMARIZECOLUMNS, CALCULATE should use FILTER (WHERE ...) syntax
+		// so the aggregate respects the outer GROUP BY.
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			sales[region],
+			"Filtered", CALCULATE(SUM(sales[amount]), sales[qty] > 2)
+		)`)
+		assertContains(t, sql, "FILTER (WHERE", "GROUP BY")
+		// Must NOT produce a scalar subquery.
+		assertNotContains(t, sql, "(SELECT SUM(")
 	})
 
 	t.Run("VALUES", func(t *testing.T) {

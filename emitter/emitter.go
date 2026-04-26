@@ -441,15 +441,27 @@ func (e *Emitter) emitCalculate(fc *parser.FuncCall) (string, error) {
 		return inner, nil
 	}
 
-	// Determine the primary table from the inner expression's column refs.
-	tables := collectTables(fc.Args[0])
-	primaryTable := ""
-	if len(tables) > 0 {
-		primaryTable = sqlIdent(tables[0])
+	// Collect all tables: inner expression establishes the primary table,
+	// filter arguments may reference additional tables that need to be joined.
+	seen := map[string]bool{}
+	var allTables []string
+	addTbl := func(t string) {
+		tl := strings.ToLower(t)
+		if !seen[tl] {
+			seen[tl] = true
+			allTables = append(allTables, t)
+		}
+	}
+	for _, t := range collectTables(fc.Args[0]) {
+		addTbl(t)
+	}
+	for _, arg := range fc.Args[1:] {
+		for _, t := range collectTables(arg) {
+			addTbl(t)
+		}
 	}
 
-	// Emit filter predicates. Column refs are emitted without table qualifiers
-	// (the table qualifier identifies the filter context but is dropped in SQL).
+	// Emit filter predicates.
 	var filters []string
 	for _, arg := range fc.Args[1:] {
 		f, err := e.emitExpr(arg)
@@ -460,10 +472,76 @@ func (e *Emitter) emitCalculate(fc *parser.FuncCall) (string, error) {
 	}
 	whereClause := strings.Join(filters, " AND ")
 
-	if primaryTable == "" {
-		return fmt.Sprintf("SELECT %s WHERE %s", inner, whereClause), nil
+	// Build FROM clause, joining additional tables when needed.
+	var fromClause string
+	switch len(allTables) {
+	case 0:
+		// no tables
+	case 1:
+		fromClause = sqlIdent(allTables[0])
+	default:
+		if e.Schema != nil {
+			jp, jpErr := semantic.InferJoinPath(e.Schema, allTables)
+			if jpErr != nil {
+				return "", jpErr
+			}
+			var fbuf strings.Builder
+			fbuf.WriteString(sqlIdent(allTables[0]))
+			for _, step := range jp.Steps {
+				fmt.Fprintf(&fbuf, "\nLEFT JOIN %s ON %s.%s = %s.%s",
+					sqlIdent(step.Table),
+					sqlIdent(step.FromTable), step.OnFromCol,
+					sqlIdent(step.Table), step.OnToCol,
+				)
+			}
+			fromClause = fbuf.String()
+		} else {
+			parts := make([]string, len(allTables))
+			for i, t := range allTables {
+				parts[i] = sqlIdent(t)
+			}
+			fromClause = strings.Join(parts, ", ")
+		}
 	}
-	return fmt.Sprintf("SELECT %s FROM %s WHERE %s", inner, primaryTable, whereClause), nil
+
+	if fromClause == "" {
+		return fmt.Sprintf("(SELECT %s WHERE %s)", inner, whereClause), nil
+	}
+	return fmt.Sprintf("(SELECT %s FROM %s WHERE %s)", inner, fromClause, whereClause), nil
+}
+
+// emitCalculateAsFilter emits a CALCULATE call using the SQL aggregate FILTER
+// syntax:  AGG(col) FILTER (WHERE pred1 AND pred2).
+// This is used when CALCULATE appears as a measure expression inside
+// SUMMARIZECOLUMNS so the filter respects the outer GROUP BY context instead
+// of producing a non-correlated scalar subquery.
+func (e *Emitter) emitCalculateAsFilter(fc *parser.FuncCall) (string, error) {
+	if len(fc.Args) == 0 {
+		return "", fmt.Errorf("CALCULATE requires at least 1 argument")
+	}
+
+	// Emit the inner expression (aggregate).
+	inner, err := e.emitExpr(fc.Args[0])
+	if err != nil {
+		return "", err
+	}
+
+	// No filters → just return the aggregate as-is.
+	if len(fc.Args) == 1 {
+		return inner, nil
+	}
+
+	// Emit filter predicates.
+	var filters []string
+	for _, arg := range fc.Args[1:] {
+		f, err := e.emitExpr(arg)
+		if err != nil {
+			return "", err
+		}
+		filters = append(filters, f)
+	}
+
+	return fmt.Sprintf("%s FILTER (WHERE %s)", inner, strings.Join(filters, " AND ")), nil
 }
 
 // emitTreatas emits TREATAS(source, t[col]) as a SQL IN predicate for use
@@ -630,13 +708,23 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	}
 
 	// Emit name/expr measure pairs.
+	// When the value expression is a CALCULATE call, emit it using the SQL
+	// aggregate FILTER syntax so that the filter respects the outer GROUP BY.
 	var measures []string
 	for i := 0; i < len(pairArgs); i += 2 {
 		nameSQL, err := e.emitExpr(pairArgs[i])
 		if err != nil {
 			return "", err
 		}
-		valSQL, err := e.emitExpr(pairArgs[i+1])
+		valExpr := pairArgs[i+1]
+		var valSQL string
+		if valExpr.Left != nil && valExpr.Left.FuncCall != nil &&
+			strings.ToUpper(valExpr.Left.FuncCall.Name) == "CALCULATE" &&
+			len(valExpr.Right) == 0 {
+			valSQL, err = e.emitCalculateAsFilter(valExpr.Left.FuncCall)
+		} else {
+			valSQL, err = e.emitExpr(valExpr)
+		}
 		if err != nil {
 			return "", err
 		}
