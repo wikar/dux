@@ -1,6 +1,12 @@
 # DUX
 
-An analytical query language that compiles to DuckDB SQL. Syntax inspired by [DAX](https://learn.microsoft.com/en-us/dax/dax-overview) — column references, named measures, filter context, and iterator functions — without requiring a cube engine.
+An analytical query language and semantic modelling platform built on top of DuckDB. Syntax inspired by [DAX](https://learn.microsoft.com/en-us/dax/dax-overview) — column references, named measures, filter context, and iterator functions — without requiring a cube engine.
+
+DUX is more than a query interpreter. It ships with:
+
+- **A semantic model** — tables, relationships, and named measures are declared once in `dux.toml` or managed at runtime, and are automatically applied to every query.
+- **An HTTP server (`duxd`)** — exposes a REST API for executing queries, inspecting the schema, and managing measures and relationships. Embeds an interactive query builder UI and Scalar API reference.
+- **A CLI (`dux`)** — run one-off queries against the DUX semantic model directly from the terminal.
 
 ## Requirements
 
