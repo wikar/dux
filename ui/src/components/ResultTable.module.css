@@ -76,6 +76,35 @@
   white-space: nowrap;
 }
 
+.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.sortable:hover {
+  color: var(--text);
+  background: var(--surface1);
+}
+
+.sortActive {
+  color: var(--blue) !important;
+}
+
+.thInner {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sortArrow {
+  font-size: 10px;
+  opacity: 0.45;
+}
+
+.sortActive .sortArrow {
+  opacity: 1;
+}
+
 .table td {
   padding: 4px 10px;
   color: var(--text);
