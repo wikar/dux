@@ -13,7 +13,7 @@ import (
 
 // Schema holds the full set of tables, columns, measures, and relationships
 // known to the system. It is populated at startup by introspecting DuckDB
-// and optionally merging a sidecar schema.dux.json file.
+// and optionally merging metadata from dux.toml or the metadata database.
 type Schema struct {
 	Tables        map[string]*Table
 	Measures      map[string]map[string]*parser.MeasureDefinition // table → name → def
@@ -56,8 +56,7 @@ func NewSchema() *Schema {
 // joined with key_column_usage where those are declared.
 //
 // When DuckDB is used over flat Parquet sources without declared foreign keys,
-// relationships must be supplied via a sidecar schema.dux.json file merged in
-// a separate step.
+// relationships must be supplied via dux.toml or the metadata database.
 func IntrospectDuckDB(db *sql.DB) (*Schema, error) {
 	schema := NewSchema()
 
@@ -134,7 +133,7 @@ func introspectRelationships(db *sql.DB, schema *Schema) error {
 	rows, err := db.Query(q)
 	if err != nil {
 		// FK metadata is unavailable (Parquet/CSV sources, older DuckDB builds).
-		// Relationships can be supplied via schema.dux.json instead.
+		// Relationships can be supplied via dux.toml instead.
 		return nil
 	}
 	defer rows.Close()
