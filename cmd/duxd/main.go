@@ -12,7 +12,6 @@
 // Usage:
 //
 //	duxd [--db-dir <dir>] [--dux <metadata.duckdb>] [--toml <dux.toml>]
-//	     [--schema <schema.dux.json>] [--measures <measures.dux>]
 //	     [--import <file>] [--export <file>]
 package main
 
@@ -301,9 +300,6 @@ func main() {
 	dbDir := flag.String("db-dir", "db", "directory containing *.duckdb / *.db data files")
 	duxDB := flag.String("dux", "", "path to dux metadata database (default: <db-dir>/dux.duckdb)")
 	tomlPath := flag.String("toml", "dux.toml", "path to dux.toml configuration file")
-	// Legacy flags kept for backward compatibility.
-	sidecar := flag.String("schema", "", "deprecated: use dux.toml instead of schema.dux.json")
-	measuresPath := flag.String("measures", "", "deprecated: use dux.toml instead of measures.dux")
 	// One-shot import / export flags (run, then exit).
 	importPath := flag.String("import", "", "import this dux.toml into the metadata DB then start normally")
 	exportPath := flag.String("export", "", "export measures and schema to this path then exit")
@@ -347,18 +343,6 @@ func main() {
 	// Load dux.toml if present (supplements the metadata DB).
 	if err := semantic.LoadDuxTOML(*tomlPath, schema); err != nil {
 		log.Printf("warning: loading dux.toml: %v", err)
-	}
-
-	// Legacy backward-compat: load old sidecar and measures files if specified.
-	if *sidecar != "" {
-		if err := semantic.MergeSidecarSchema(*sidecar, schema); err != nil {
-			log.Printf("warning: loading sidecar schema: %v", err)
-		}
-	}
-	if *measuresPath != "" {
-		if err := semantic.LoadMeasuresFile(*measuresPath, schema); err != nil {
-			log.Printf("warning: loading measures file: %v", err)
-		}
 	}
 
 	// --import: load TOML into metadata DB then continue startup.

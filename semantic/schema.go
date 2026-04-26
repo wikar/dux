@@ -4,9 +4,7 @@ package semantic
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"os"
 
 	"github.com/danielwikar/dux/parser"
 )
@@ -151,86 +149,4 @@ func introspectRelationships(db *sql.DB, schema *Schema) error {
 		})
 	}
 	return rows.Err()
-}
-
-// ─── Sidecar schema ───────────────────────────────────────────────────────────
-
-// sidecarSchema is the JSON structure of schema.dux.json.
-type sidecarSchema struct {
-	Relationships []sidecarRelationship `json:"relationships"`
-}
-
-type sidecarRelationship struct {
-	FromTable  string `json:"fromTable"`
-	FromColumn string `json:"fromColumn"`
-	ToTable    string `json:"toTable"`
-	ToColumn   string `json:"toColumn"`
-}
-
-// MergeSidecarSchema reads path (a schema.dux.json file) and appends its
-// relationship declarations into schema. If path does not exist, it returns
-// nil without error — the sidecar file is optional.
-func MergeSidecarSchema(path string, schema *Schema) error {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read sidecar schema %q: %w", path, err)
-	}
-	var sc sidecarSchema
-	if err := json.Unmarshal(data, &sc); err != nil {
-		return fmt.Errorf("parse sidecar schema %q: %w", path, err)
-	}
-	for _, r := range sc.Relationships {
-		schema.Relationships = append(schema.Relationships, &Relationship{
-			FromTable:  r.FromTable,
-			FromColumn: r.FromColumn,
-			ToTable:    r.ToTable,
-			ToColumn:   r.ToColumn,
-		})
-	}
-	return nil
-}
-
-// ─── Central measure store ────────────────────────────────────────────────────
-
-// LoadMeasuresFile parses path as a DUX measures file and registers all
-// declared MEASURE definitions into schema.Measures (the global measure store).
-// This store persists across all queries served by duxd; per-query DEFINE
-// blocks are layered on top by the Resolver and do not modify this field.
-//
-// The file may omit the EVALUATE clause — see parser.ParseMeasures for details.
-// If path does not exist, nil is returned without error.
-func LoadMeasuresFile(path string, schema *Schema) error {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read measures file %q: %w", path, err)
-	}
-	defines, err := parser.ParseMeasures(string(data))
-	if err != nil {
-		return fmt.Errorf("parse measures file %q: %w", path, err)
-	}
-	for _, def := range defines {
-		table := StripSingleQuotes(def.Table)
-		name := StripBrackets(def.Column)
-		// Uniqueness check: reject a measure name that already exists under a
-		// different table, because bare [MeasureName] lookups require uniqueness.
-		for existingTable, defs := range schema.Measures {
-			if existingTable == table {
-				continue
-			}
-			if _, conflicts := defs[name]; conflicts {
-				return fmt.Errorf("measures file %q: measure name %q already defined in table %q; measure names must be unique", path, name, existingTable)
-			}
-		}
-		if schema.Measures[table] == nil {
-			schema.Measures[table] = make(map[string]*parser.MeasureDefinition)
-		}
-		schema.Measures[table][name] = def
-	}
-	return nil
 }
