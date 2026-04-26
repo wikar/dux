@@ -3,6 +3,7 @@ module github.com/danielwikar/dux
 go 1.25.0
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/alecthomas/participle/v2 v2.1.1
 	github.com/duckdb/duckdb-go/v2 v2.10501.0
 	github.com/gofiber/fiber/v3 v3.1.0
@@ -10,7 +11,6 @@ require (
 )
 
 require (
-	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/apache/arrow-go/v18 v18.5.1 // indirect

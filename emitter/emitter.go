@@ -321,7 +321,7 @@ func (e *Emitter) emitSimpleAgg(duckName string, fc *parser.FuncCall) (string, e
 	return fmt.Sprintf("%s(%s)", duckName, arg), nil
 }
 
-func (e *Emitter) emitCountRows(fc *parser.FuncCall) (string, error) {
+func (e *Emitter) emitCountRows(_ *parser.FuncCall) (string, error) {
 	// COUNTROWS(Table) → COUNT(*)
 	// The table argument is used in the FROM clause, not inside COUNT.
 	return "COUNT(*)", nil
@@ -539,7 +539,7 @@ func (e *Emitter) emitFilter(fc *parser.FuncCall) (string, error) {
 }
 
 // emitAll stubs ALL filter-clearing. Full semantics require filter-context integration.
-func (e *Emitter) emitAll(fc *parser.FuncCall) (string, error) {
+func (e *Emitter) emitAll(_ *parser.FuncCall) (string, error) {
 	// ALL() requires filter-context propagation which is not yet implemented.
 	// Returning an error is safer than silently emitting a no-op SQL comment.
 	return "", fmt.Errorf("ALL() requires filter-context support which is not yet implemented")
