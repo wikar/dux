@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	duckdb "github.com/duckdb/duckdb-go/v2"
+
 	"github.com/danielwikar/dux/emitter"
 	"github.com/danielwikar/dux/parser"
 	"github.com/danielwikar/dux/semantic"
@@ -147,9 +149,28 @@ func scanRows(rows *sql.Rows) ([]string, []map[string]any, error) {
 		}
 		row := make(map[string]any, len(cols))
 		for i, col := range cols {
-			row[col] = vals[i]
+			row[col] = normaliseValue(vals[i])
 		}
 		results = append(results, row)
 	}
 	return cols, results, rows.Err()
+}
+
+// normaliseValue converts DuckDB driver-specific types that do not JSON-marshal
+// cleanly into standard Go primitives that the frontend can consume directly.
+func normaliseValue(v any) any {
+	if v == nil {
+		return nil
+	}
+	switch t := v.(type) {
+	case duckdb.Decimal:
+		// Return as an exact decimal string (e.g. "1234.5600") to preserve
+		// full precision. float64 would introduce rounding errors for DECIMAL/NUMERIC.
+		return t.String()
+	case []byte:
+		// BLOB — return as hex string to avoid base64 surprises.
+		return fmt.Sprintf("%x", t)
+	default:
+		return v
+	}
 }
