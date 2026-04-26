@@ -63,7 +63,9 @@ const PreviewModal: Component<{
 
         <div class={styles.previewBody}>
           <Show when={loading()}>
-            <div class={styles.previewStatus}>Loading…</div>
+            <div class={styles.previewStatus}>
+              <span class={styles.spinner} />
+            </div>
           </Show>
           <Show when={error()}>
             <div class={styles.previewError}>{error()}</div>
