@@ -1,4 +1,4 @@
-import { createMemo, createSignal, createEffect } from "solid-js";
+import { createMemo, createSignal, createEffect, Show } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type { Component } from "solid-js";
 import type { DropField, FilterField, DragPayload, Aggregate } from "./types/schema";
@@ -7,12 +7,22 @@ import SchemaTree from "./components/SchemaTree";
 import DropZone from "./components/DropZone";
 import QueryPreview from "./components/QueryPreview";
 import ResultTable from "./components/ResultTable";
+import TopBar from "./components/TopBar";
+import type { Tab } from "./components/TopBar";
+import Explorer from "./components/Explorer";
 import styles from "./App.module.css";
 
 const isNumeric = (dt: string) =>
   /^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|DOUBLE|FLOAT|REAL|DECIMAL|NUMERIC)/i.test(dt);
 
+const TABS: Tab[] = [
+  { id: "home", label: "Home" },
+  { id: "explorer", label: "Explorer" },
+];
+
 const App: Component = () => {
+  const [activeTab, setActiveTab] = createSignal("home");
+  let importInputRef: HTMLInputElement | undefined;
   const [state, setState] = createStore<{ fields: DropField[]; filters: FilterField[] }>({
     fields: [],
     filters: [],
@@ -112,8 +122,49 @@ const App: Component = () => {
     }));
   }
 
+  function handleExportToml() {
+    const a = document.createElement("a");
+    a.href = "/export";
+    a.download = "dux.toml";
+    a.click();
+  }
+
+  async function handleImportFile(e: Event) {
+    const file = (e.currentTarget as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    await fetch("/import", {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: text,
+    });
+    (e.currentTarget as HTMLInputElement).value = "";
+  }
+
+  const homeActions = () => (
+    <>
+      <button class={styles.actionBtn} onClick={handleExportToml}>Export TOML</button>
+      <button class={styles.actionBtn} onClick={() => importInputRef?.click()}>Import TOML</button>
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".toml"
+        style="display:none"
+        onChange={handleImportFile}
+      />
+    </>
+  );
+
   return (
-    <div class={styles.layout}>
+    <div class={styles.appShell}>
+      <TopBar
+        tabs={TABS}
+        activeTab={activeTab()}
+        onTabChange={setActiveTab}
+        actions={activeTab() === "home" ? homeActions() : undefined}
+      />
+      <Show when={activeTab() === "home"}>
+        <div class={styles.layout}>
       {/* Column 1 — Schema tree */}
       <div class={styles.col1}>
         <SchemaTree />
@@ -146,6 +197,11 @@ const App: Component = () => {
         <QueryPreview query={activeQuery()} isDirty={isDirty()} onQueryChange={handleQueryChange} onRun={commitQuery} />
         <ResultTable query={committedQuery()} />
       </div>
+    </div>
+      </Show>
+      <Show when={activeTab() === "explorer"}>
+        <Explorer />
+      </Show>
     </div>
   );
 };

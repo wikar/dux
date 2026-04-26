@@ -1,0 +1,8 @@
+.explorer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  color: var(--subtext0);
+  font-size: 14px;
+}
