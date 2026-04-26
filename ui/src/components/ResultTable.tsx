@@ -92,6 +92,18 @@ const ResultTable: Component<{ query: string }> = (props) => {
     }
   }
 
+  /** Set of column indices where every non-null value is numeric. */
+  const numericCols = createMemo(() => {
+    const d = data();
+    if (!d) return new Set<number>();
+    const s = new Set<number>();
+    for (let ci = 0; ci < d.columns.length; ci++) {
+      const vals = d.rows.map((r) => r[ci]).filter((v) => v !== null);
+      if (vals.length > 0 && vals.every(isNumeric)) s.add(ci);
+    }
+    return s;
+  });
+
   const sortedRows = createMemo(() => {
     const d = data();
     if (!d) return [];
@@ -128,7 +140,7 @@ const ResultTable: Component<{ query: string }> = (props) => {
                   {(col, ci) => (
                     <th
                       class={styles.sortable}
-                      classList={{ [styles.sortActive]: sortCol() === ci() }}
+                      classList={{ [styles.sortActive]: sortCol() === ci(), [styles.numeric]: numericCols().has(ci()) }}
                       onClick={() => handleHeaderClick(ci())}
                     >
                       <span class={styles.thInner}>
@@ -147,7 +159,7 @@ const ResultTable: Component<{ query: string }> = (props) => {
                 {(row) => (
                   <tr>
                     <For each={row}>
-                      {(cell) => <td>{cell === null ? <span class={styles.null}>null</span> : String(cell)}</td>}
+                      {(cell, ci) => <td classList={{ [styles.numeric]: numericCols().has(ci()) }}>{cell === null ? <span class={styles.null}>null</span> : String(cell)}</td>}
                     </For>
                   </tr>
                 )}

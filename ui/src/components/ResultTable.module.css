@@ -120,3 +120,11 @@
   color: var(--subtext0);
   font-style: italic;
 }
+
+.numeric {
+  text-align: right;
+}
+
+.table th.numeric {
+  text-align: right;
+}
