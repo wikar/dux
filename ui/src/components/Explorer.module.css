@@ -28,11 +28,19 @@
   stroke-width: 1.5;
   pointer-events: stroke;
   cursor: default;
+  transition: stroke 0.12s, stroke-width 0.12s;
 }
 
 .relPath:hover {
   stroke: var(--blue);
   stroke-width: 2.5;
+  cursor: pointer;
+}
+
+.relPathHovered {
+  stroke: var(--red) !important;
+  stroke-width: 2.5;
+  cursor: pointer;
 }
 
 .dragLine {

@@ -194,6 +194,7 @@ const Explorer: Component = () => {
   // For columns inside a max-height scrollable card, dots that are scrolled out
   // of view are clamped to the card's visible bounds.
   const [lineData, setLineData] = createSignal<{ key: string; d: string }[]>([]);
+  const [hoveredRel, setHoveredRel] = createSignal<string | null>(null);
   let lineRaf = 0;
 
   /** Read a dot's canvas-local centre, clamped to its card's visible rect. */
@@ -242,8 +243,11 @@ const Explorer: Component = () => {
       const cxOff = Math.max(60, Math.abs(p2.x - p1.x) / 2);
       const dir = p2.x >= p1.x ? 1 : -1;
 
+      // Encode full rel metadata in the key so we can delete by key alone
+      const key = `${rel.FromTable}\0${rel.FromColumn}\0${rel.ToTable}\0${rel.ToColumn}`;
+
       return [{
-        key: `${fromKey}.${rel.FromColumn}→${toKey}.${rel.ToColumn}`,
+        key,
         d: `M${p1.x},${p1.y} C${p1.x + dir * cxOff},${p1.y} ${p2.x - dir * cxOff},${p2.y} ${p2.x},${p2.y}`,
       }];
     });
@@ -262,6 +266,25 @@ const Explorer: Component = () => {
   });
 
   onCleanup(() => cancelAnimationFrame(lineRaf));
+
+  // ── Delete hovered relationship on Del / Backspace ─────────────────────────
+  onMount(() => {
+    async function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      const key = hoveredRel();
+      if (!key) return;
+      const [fromTable, fromColumn, toTable, toColumn] = key.split("\0");
+      await fetch("/relationships", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from_table: fromTable, from_column: fromColumn, to_table: toTable, to_column: toColumn }),
+      });
+      setHoveredRel(null);
+      refetch();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    onCleanup(() => document.removeEventListener("keydown", onKeyDown));
+  });
 
   const tableNames = () => {
     const s = schema();
@@ -282,7 +305,15 @@ const Explorer: Component = () => {
           {/* SVG overlay: relationship lines + drag indicator */}
           <svg class={styles.svgOverlay}>
             <For each={lineData()}>
-              {(line) => <path class={styles.relPath} d={line.d} />}
+              {(line) => (
+                <path
+                  class={styles.relPath}
+                  classList={{ [styles.relPathHovered]: hoveredRel() === line.key }}
+                  d={line.d}
+                  onMouseEnter={() => setHoveredRel(line.key)}
+                  onMouseLeave={() => setHoveredRel((h) => h === line.key ? null : h)}
+                />
+              )}
             </For>
             <Show when={relDrag()}>
               {(rd) => (
