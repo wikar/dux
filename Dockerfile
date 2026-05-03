@@ -8,6 +8,7 @@ RUN bun run build
 
 # --- Go build stage ---
 FROM golang:1.25-alpine AS go-builder
+RUN apk add --no-cache gcc musl-dev
 WORKDIR /app
 ARG VERSION=dev
 COPY go.mod go.sum ./
