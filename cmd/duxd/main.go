@@ -400,8 +400,8 @@ func main() {
 	}
 	app.Use("/", static.New("", static.Config{FS: distFS}))
 
-	log.Printf("duxd listening on :80  (metadata: %s)", metaPath)
-	log.Fatal(app.Listen(":80"))
+	log.Printf("duxd listening on :8080  (metadata: %s)", metaPath)
+	log.Fatal(app.Listen(":8080"))
 }
 
 // attachDataDBs attaches every *.duckdb and *.db file in dir (except the
