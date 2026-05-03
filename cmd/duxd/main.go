@@ -39,6 +39,9 @@ import (
 	"github.com/danielwikar/dux/ui"
 )
 
+// version is overridden at build time via -ldflags="-X main.version=..."
+var version = "dev"
+
 // openAPISpec is a minimal OpenAPI 3.1 document describing the Fiber API.
 const openAPISpec = `{
   "openapi": "3.1.0",
@@ -297,6 +300,7 @@ Flags:
 `
 
 func main() {
+	showVersion := flag.Bool("version", false, "print version and exit")
 	dbDir := flag.String("db-dir", "db", "directory containing *.duckdb / *.db data files")
 	duxDB := flag.String("dux", "", "path to dux metadata database (default: <db-dir>/dux.duckdb)")
 	tomlPath := flag.String("toml", "dux.toml", "path to dux.toml configuration file")
@@ -309,6 +313,11 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("duxd", version)
+		os.Exit(0)
+	}
 
 	// Resolve metadata DB path.
 	metaPath := *duxDB
@@ -400,7 +409,7 @@ func main() {
 	}
 	app.Use("/", static.New("", static.Config{FS: distFS}))
 
-	log.Printf("duxd listening on :8080  (metadata: %s)", metaPath)
+	log.Printf("duxd %s listening on :8080  (metadata: %s)", version, metaPath)
 	log.Fatal(app.Listen(":8080"))
 }
 

@@ -26,6 +26,9 @@ import (
 	"github.com/danielwikar/dux/semantic"
 )
 
+// version is overridden at build time via -ldflags="-X main.version=..."
+var version = "dev"
+
 const usage = `dux — DUX query language CLI
 
 Usage:
@@ -38,6 +41,7 @@ Flags:
 `
 
 func main() {
+	showVersion := flag.Bool("version", false, "print version and exit")
 	dbDir := flag.String("db-dir", "db", "directory containing *.duckdb / *.db data files")
 	duxDB := flag.String("dux", "", "path to dux metadata database (default: <db-dir>/dux.duckdb)")
 	tomlPath := flag.String("toml", "dux.toml", "path to dux.toml configuration file")
@@ -50,6 +54,11 @@ func main() {
 	}
 
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("dux", version)
+		os.Exit(0)
+	}
 
 	// Resolve metadata DB path.
 	metaPath := *duxDB
