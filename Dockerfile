@@ -7,8 +7,7 @@ COPY ui/ .
 RUN bun run build
 
 # --- Go build stage ---
-FROM golang:1.25-alpine AS go-builder
-RUN apk add --no-cache gcc g++ musl-dev
+FROM golang:1.25 AS go-builder
 WORKDIR /app
 ARG VERSION=dev
 COPY go.mod go.sum ./
@@ -19,7 +18,7 @@ RUN go build -ldflags="-X main.version=${VERSION}" -o duxd ./cmd/duxd
 RUN go build -ldflags="-X main.version=${VERSION}" -o dux ./cmd/dux
 
 # --- Final image ---
-FROM alpine:3.20
+FROM debian:trixie-slim
 WORKDIR /app
 COPY --from=go-builder /app/duxd .
 COPY --from=go-builder /app/dux .
