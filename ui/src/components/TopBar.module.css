@@ -8,6 +8,14 @@
   flex-shrink: 0;
 }
 
+.logo {
+  width: 20px;
+  height: 20px;
+  align-self: center;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
 .tabs {
   display: flex;
   align-items: stretch;

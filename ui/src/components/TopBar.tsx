@@ -31,6 +31,7 @@ const TopBar: Component<Props> = (props) => {
       </nav>
       <div class={styles.spacer} />
       <div class={styles.actions}>{props.actions}</div>
+      <img src="/dux_logo_20x20.png" alt="DUX" class={styles.logo} />
     </div>
   );
 };
