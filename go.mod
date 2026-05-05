@@ -6,6 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/alecthomas/participle/v2 v2.1.1
 	github.com/duckdb/duckdb-go/v2 v2.10501.0
+	github.com/fsnotify/fsnotify v1.10.0
 	github.com/gofiber/fiber/v3 v3.1.0
 	github.com/yokeTH/gofiber-scalar/scalar/v3 v3.1.10
 )

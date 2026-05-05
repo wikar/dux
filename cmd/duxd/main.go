@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/static"
 	"github.com/yokeTH/gofiber-scalar/scalar/v3"
@@ -38,6 +39,9 @@ import (
 	"github.com/danielwikar/dux/semantic"
 	"github.com/danielwikar/dux/ui"
 )
+
+// version is overridden at build time via -ldflags="-X main.version=..."
+var version = "dev"
 
 // openAPISpec is a minimal OpenAPI 3.1 document describing the Fiber API.
 const openAPISpec = `{
@@ -297,6 +301,7 @@ Flags:
 `
 
 func main() {
+	showVersion := flag.Bool("version", false, "print version and exit")
 	dbDir := flag.String("db-dir", "db", "directory containing *.duckdb / *.db data files")
 	duxDB := flag.String("dux", "", "path to dux metadata database (default: <db-dir>/dux.duckdb)")
 	tomlPath := flag.String("toml", "dux.toml", "path to dux.toml configuration file")
@@ -309,6 +314,11 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("duxd", version)
+		os.Exit(0)
+	}
 
 	// Resolve metadata DB path.
 	metaPath := *duxDB
@@ -400,8 +410,11 @@ func main() {
 	}
 	app.Use("/", static.New("", static.Config{FS: distFS}))
 
-	log.Printf("duxd listening on :80  (metadata: %s)", metaPath)
-	log.Fatal(app.Listen(":80"))
+	// Watch db-dir for new database files and auto-attach them.
+	go watchDBDir(*dbDir, metaPath, metaDB, schema, &schemaMu)
+
+	log.Printf("duxd %s listening on :8080  (metadata: %s)", version, metaPath)
+	log.Fatal(app.Listen(":8080"))
 }
 
 // attachDataDBs attaches every *.duckdb and *.db file in dir (except the
@@ -444,6 +457,84 @@ func attachDataDBs(db *sql.DB, dir, metaPath string) error {
 		}
 	}
 	return nil
+}
+
+// watchDBDir monitors dir for new *.duckdb and *.db files, attaching them
+// to the metadata DB and merging their tables into the live schema.
+func watchDBDir(dir, metaPath string, metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("warning: db-dir watcher: %v", err)
+		return
+	}
+	defer watcher.Close()
+
+	// Ensure the directory exists before watching.
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Printf("warning: db-dir watcher: create %q: %v", dir, err)
+		return
+	}
+	if err := watcher.Add(dir); err != nil {
+		log.Printf("warning: db-dir watcher: watch %q: %v", dir, err)
+		return
+	}
+
+	absMetaPath, _ := filepath.Abs(metaPath)
+	log.Printf("watching %q for new databases", dir)
+
+	for {
+		select {
+		case ev, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if !ev.Has(fsnotify.Create) {
+				continue
+			}
+			name := filepath.Base(ev.Name)
+			ext := strings.ToLower(filepath.Ext(name))
+			if ext != ".duckdb" && ext != ".db" {
+				continue
+			}
+			absPath, _ := filepath.Abs(ev.Name)
+			if absPath == absMetaPath {
+				continue
+			}
+
+			stem := strings.TrimSuffix(name, filepath.Ext(name))
+			escapedPath := strings.ReplaceAll(absPath, "'", "''")
+			quotedStem := `"` + strings.ReplaceAll(stem, `"`, `""`) + `"`
+			q := fmt.Sprintf("ATTACH '%s' AS %s (READ_ONLY)", escapedPath, quotedStem)
+
+			db := metaDB.DB()
+			if _, err := db.Exec(q); err != nil {
+				log.Printf("warning: auto-attach %q as %q: %v", absPath, stem, err)
+				continue
+			}
+			log.Printf("auto-attached %q as %q (read-only)", name, stem)
+
+			// Re-introspect and merge new tables into the live schema.
+			fresh, err := semantic.IntrospectDuckDB(db)
+			if err != nil {
+				log.Printf("warning: re-introspect after attach %q: %v", stem, err)
+				continue
+			}
+			mu.Lock()
+			for k, t := range fresh.Tables {
+				if _, exists := schema.Tables[k]; !exists {
+					schema.Tables[k] = t
+				}
+			}
+			mu.Unlock()
+			log.Printf("schema refreshed — %d tables total", len(schema.Tables))
+
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Printf("warning: db-dir watcher: %v", err)
+		}
+	}
 }
 
 // queryResponse is the JSON shape returned by POST /query.
