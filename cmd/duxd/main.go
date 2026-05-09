@@ -35,6 +35,7 @@ import (
 	_ "github.com/duckdb/duckdb-go/v2"
 
 	"github.com/danielwikar/dux/executor"
+	"github.com/danielwikar/dux/internal/bootstrap"
 	"github.com/danielwikar/dux/parser"
 	"github.com/danielwikar/dux/semantic"
 	"github.com/danielwikar/dux/ui"
@@ -326,57 +327,25 @@ func main() {
 		metaPath = filepath.Join(*dbDir, "dux.duckdb")
 	}
 
-	// Open (or create) the metadata database.
-	metaDB, err := semantic.OpenMetadataDB(metaPath)
+	// Common startup: open metadata DB, attach data DBs, introspect, load metadata + TOML.
+	metaDB, db, schema, err := bootstrap.Bootstrap(*dbDir, metaPath, *tomlPath)
 	if err != nil {
-		log.Fatalf("open metadata db: %v", err)
+		log.Fatalf("%v", err)
 	}
 	defer metaDB.Close()
 
-	// Attach all data databases (*.duckdb, *.db) in db-dir to the metadata DB.
-	// dux.duckdb itself is the primary connection and is never attached.
-	if err := attachDataDBs(metaDB.DB(), *dbDir, metaPath); err != nil {
-		log.Fatalf("attach data databases: %v", err)
-	}
-
-	// Introspect schema from all attached databases.
-	schema, err := semantic.IntrospectDuckDB(metaDB.DB())
-	if err != nil {
-		log.Fatalf("introspect schema: %v", err)
-	}
-
-	// Load metadata (relationships + measures) from the metadata DB.
-	if err := metaDB.LoadIntoSchema(schema); err != nil {
-		log.Fatalf("load metadata: %v", err)
-	}
-
-	// Load dux.toml if present (supplements the metadata DB).
-	if err := semantic.LoadDuxTOML(*tomlPath, schema); err != nil {
-		log.Printf("warning: loading dux.toml: %v", err)
-	}
-
 	// --import: load TOML into metadata DB then continue startup.
 	if *importPath != "" {
-		importSchema := semantic.NewSchema()
-		if err := semantic.LoadDuxTOML(*importPath, importSchema); err != nil {
-			log.Fatalf("import: parse %q: %v", *importPath, err)
+		if err := bootstrap.ImportTOML(metaDB, *importPath, schema); err != nil {
+			log.Fatalf("import: %v", err)
 		}
-		if err := metaDB.ReplaceAllFromSchema(importSchema); err != nil {
-			log.Fatalf("import: write to metadata DB: %v", err)
-		}
-		// Reload schema with newly imported data.
-		if err := metaDB.LoadIntoSchema(schema); err != nil {
-			log.Fatalf("import: reload schema: %v", err)
-		}
-		log.Printf("imported %q into metadata DB", *importPath)
 	}
 
 	// --export: write TOML to file then exit.
 	if *exportPath != "" {
-		if err := semantic.WriteDuxTOML(*exportPath, schema); err != nil {
+		if err := bootstrap.ExportTOML(*exportPath, schema); err != nil {
 			log.Fatalf("export: %v", err)
 		}
-		log.Printf("exported schema to %q", *exportPath)
 		os.Exit(0)
 	}
 
@@ -386,7 +355,7 @@ func main() {
 	// Fiber app on :80 — primary API with Scalar docs.
 	app := fiber.New(fiber.Config{})
 
-	app.Post("/query", fiberQueryHandler(metaDB.DB(), schema, &schemaMu))
+	app.Post("/query", fiberQueryHandler(db, schema, &schemaMu))
 	app.Get("/schema", fiberSchemaHandler(schema, &schemaMu))
 	app.Get("/export", fiberExportHandler(schema, &schemaMu))
 	app.Post("/import", fiberImportHandler(metaDB, schema, &schemaMu))
@@ -421,42 +390,7 @@ func main() {
 // metadata DB itself) to db as a read-only named attachment.
 // The attachment alias is the filename stem (e.g. "atp.duckdb" → alias "atp").
 func attachDataDBs(db *sql.DB, dir, metaPath string) error {
-	absMetaPath, _ := filepath.Abs(metaPath)
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // db-dir not created yet — no-op
-		}
-		return fmt.Errorf("read db-dir %q: %w", dir, err)
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		ext := strings.ToLower(filepath.Ext(name))
-		if ext != ".duckdb" && ext != ".db" {
-			continue
-		}
-
-		absPath, _ := filepath.Abs(filepath.Join(dir, name))
-		if absPath == absMetaPath {
-			continue // skip the metadata DB itself
-		}
-
-		stem := strings.TrimSuffix(name, filepath.Ext(name))
-		escapedPath := strings.ReplaceAll(absPath, "'", "''")
-		quotedStem := `"` + strings.ReplaceAll(stem, `"`, `""`) + `"`
-		q := fmt.Sprintf("ATTACH '%s' AS %s (READ_ONLY)", escapedPath, quotedStem)
-		if _, err := db.Exec(q); err != nil {
-			log.Printf("warning: attach %q as %q: %v", absPath, stem, err)
-		} else {
-			log.Printf("attached %q as %q (read-only)", name, stem)
-		}
-	}
-	return nil
+	return bootstrap.AttachDataDBs(db, dir, metaPath)
 }
 
 // watchDBDir monitors dir for new *.duckdb and *.db files, attaching them
@@ -525,8 +459,11 @@ func watchDBDir(dir, metaPath string, metaDB *semantic.MetadataDB, schema *seman
 					schema.Tables[k] = t
 				}
 			}
+			for _, r := range fresh.Relationships {
+				schema.Relationships = append(schema.Relationships, r)
+			}
 			mu.Unlock()
-			log.Printf("schema refreshed — %d tables total", len(schema.Tables))
+			log.Printf("schema refreshed — %d tables, %d relationships total", len(schema.Tables), len(schema.Relationships))
 
 		case err, ok := <-watcher.Errors:
 			if !ok {

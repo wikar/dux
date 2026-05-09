@@ -23,6 +23,7 @@ import (
 	_ "github.com/duckdb/duckdb-go/v2"
 
 	"github.com/danielwikar/dux/executor"
+	"github.com/danielwikar/dux/internal/bootstrap"
 	"github.com/danielwikar/dux/semantic"
 )
 
@@ -66,60 +67,33 @@ func main() {
 		metaPath = filepath.Join(*dbDir, "dux.duckdb")
 	}
 
-	// Open (or create) the metadata database.
-	metaDB, err := semantic.OpenMetadataDB(metaPath)
+	// Common startup: open metadata DB, attach data DBs, introspect, load metadata + TOML.
+	metaDB, db, schema, err := bootstrap.Bootstrap(*dbDir, metaPath, *tomlPath)
 	if err != nil {
-		fatal("open metadata db: %v", err)
+		log.Fatalf("%v", err)
 	}
 	defer metaDB.Close()
 
-	// Attach all data databases (*.duckdb, *.db) in db-dir to the metadata DB.
-	if err := attachDataDBs(metaDB.DB(), *dbDir, metaPath); err != nil {
-		fatal("attach data databases: %v", err)
-	}
-
-	// Introspect schema from all attached databases.
-	schema, err := semantic.IntrospectDuckDB(metaDB.DB())
-	if err != nil {
-		fatal("introspect schema: %v", err)
-	}
-
-	// Load metadata (relationships + measures) from the metadata DB.
-	if err := metaDB.LoadIntoSchema(schema); err != nil {
-		fatal("load metadata: %v", err)
-	}
-
-	// Load dux.toml if present (supplements the metadata DB).
-	if err := semantic.LoadDuxTOML(*tomlPath, schema); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: loading dux.toml: %v\n", err)
-	}
-
 	// --import: load TOML into metadata DB then exit.
 	if *importPath != "" {
-		importSchema := semantic.NewSchema()
-		if err := semantic.LoadDuxTOML(*importPath, importSchema); err != nil {
-			fatal("import: parse %q: %v", *importPath, err)
+		if err := bootstrap.ImportTOML(metaDB, *importPath, schema); err != nil {
+			log.Fatalf("import: %v", err)
 		}
-		if err := metaDB.ReplaceAllFromSchema(importSchema); err != nil {
-			fatal("import: write to metadata DB: %v", err)
-		}
-		log.Printf("imported %q into metadata DB", *importPath)
 		os.Exit(0)
 	}
 
 	// --export: write the current schema + measures to a dux.toml file.
 	if *exportPath != "" {
-		if err := semantic.WriteDuxTOML(*exportPath, schema); err != nil {
-			fatal("export: %v", err)
+		if err := bootstrap.ExportTOML(*exportPath, schema); err != nil {
+			log.Fatalf("export: %v", err)
 		}
-		log.Printf("exported schema to %q", *exportPath)
 		os.Exit(0)
 	}
 
 	if args := flag.Args(); len(args) > 0 {
-		runFile(metaDB.DB(), schema, args[0])
+		runFile(db, schema, args[0])
 	} else {
-		runREPL(metaDB.DB(), schema)
+		runREPL(db, schema)
 	}
 }
 
@@ -127,7 +101,7 @@ func main() {
 func runFile(db *sql.DB, schema *semantic.Schema, path string) {
 	src, err := os.ReadFile(path)
 	if err != nil {
-		fatal("read file: %v", err)
+		log.Fatalf("read file: %v", err)
 	}
 	_, results, err := executor.Execute(db, schema, string(src))
 	if err != nil {
@@ -168,7 +142,7 @@ func runREPL(db *sql.DB, schema *semantic.Schema) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		fatal("read input: %v", err)
+		log.Fatalf("read input: %v", err)
 	}
 }
 
@@ -186,48 +160,4 @@ func printResults(rows []map[string]any) {
 			fmt.Printf("  %-20s %v\n", k+":", v)
 		}
 	}
-}
-
-func fatal(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "dux: "+format+"\n", args...)
-	os.Exit(1)
-}
-
-// attachDataDBs attaches every *.duckdb and *.db file in dir (except the
-// metadata DB itself) to db as a read-only named attachment.
-func attachDataDBs(db *sql.DB, dir, metaPath string) error {
-	absMetaPath, _ := filepath.Abs(metaPath)
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // db-dir not created yet — no-op
-		}
-		return fmt.Errorf("read db-dir %q: %w", dir, err)
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		ext := strings.ToLower(filepath.Ext(name))
-		if ext != ".duckdb" && ext != ".db" {
-			continue
-		}
-
-		absPath, _ := filepath.Abs(filepath.Join(dir, name))
-		if absPath == absMetaPath {
-			continue // skip the metadata DB itself
-		}
-
-		stem := strings.TrimSuffix(name, filepath.Ext(name))
-		escapedPath := strings.ReplaceAll(absPath, "'", "''")
-		quotedStem := `"` + strings.ReplaceAll(stem, `"`, `""`) + `"`
-		q := fmt.Sprintf("ATTACH '%s' AS %s (READ_ONLY)", escapedPath, quotedStem)
-		if _, err := db.Exec(q); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: attach %q as %q: %v\n", absPath, stem, err)
-		}
-	}
-	return nil
 }
