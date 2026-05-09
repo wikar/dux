@@ -7,7 +7,7 @@ import {
   onMount,
   onCleanup,
 } from "solid-js";
-import type { Component } from "solid-js";
+import type { Accessor, Component } from "solid-js";
 import type { Schema } from "../types/schema";
 import { fetchSchema, isMetaTable, resolveTable } from "../utils/schemaHelpers";
 import type { RelTarget } from "../utils/schemaHelpers";
@@ -61,8 +61,18 @@ function computeDagreLayout(s: Schema): Record<string, Pos> {
   return result;
 }
 
-const Explorer: Component = () => {
+const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
   const [schema, { refetch }] = createResource(fetchSchema);
+
+  // Re-fetch when the parent bumps the signal (e.g. after POST /refresh).
+  if (props.refetchSignal !== undefined) {
+    let initial = true;
+    createEffect(() => {
+      props.refetchSignal!();
+      if (initial) { initial = false; return; }
+      refetch();
+    });
+  }
 
   // Absolute positions for each table card on the canvas
   const [positions, setPositions] = createSignal<Record<string, Pos>>({});

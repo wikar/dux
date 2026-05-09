@@ -187,13 +187,19 @@ const App: Component = () => {
     </>
   );
 
+  const explorerActions = () => (
+    <>
+      <button class={styles.actionBtn} onClick={handleRefresh}>Refresh Schema</button>
+    </>
+  );
+
   return (
     <div class={styles.appShell}>
       <TopBar
         tabs={TABS}
         activeTab={activeTab()}
         onTabChange={setActiveTab}
-        actions={activeTab() === "home" ? homeActions() : undefined}
+        actions={activeTab() === "home" ? homeActions() : activeTab() === "explorer" ? explorerActions() : undefined}
       />
       <Show when={activeTab() === "home"}>
         <div class={styles.layout}>
@@ -232,7 +238,7 @@ const App: Component = () => {
     </div>
       </Show>
       <Show when={activeTab() === "explorer"}>
-        <Explorer />
+        <Explorer refetchSignal={refreshCount} />
       </Show>
     </div>
   );
