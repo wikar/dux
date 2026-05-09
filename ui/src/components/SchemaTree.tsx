@@ -1,5 +1,5 @@
-import { createMemo, createSignal, createResource, For, Show, onMount, onCleanup } from "solid-js";
-import type { Component } from "solid-js";
+import { createMemo, createSignal, createResource, createEffect, For, Show, onMount, onCleanup } from "solid-js";
+import type { Accessor, Component } from "solid-js";
 import type { Schema, DragPayload } from "../types/schema";
 import hljs from "highlight.js/lib/core";
 import duxLanguage from "../utils/duxLanguage";
@@ -539,8 +539,18 @@ const MeasuresSection: Component<{
 
 type ModalMode = "measure-add" | "measure-edit" | "relationship-add" | "relationship-edit";
 
-const SchemaTree: Component = () => {
+const SchemaTree: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
   const [schema, { refetch }] = createResource(fetchSchema);
+
+  // Re-fetch when the parent bumps the signal (e.g. after POST /refresh).
+  if (props.refetchSignal !== undefined) {
+    let initial = true;
+    createEffect(() => {
+      props.refetchSignal!();
+      if (initial) { initial = false; return; }
+      refetch();
+    });
+  }
   const [modal, setModal] = createSignal<ModalMode | null>(null);
   const [editTarget, setEditTarget] = createSignal<EditTarget | undefined>(undefined);
   const [relEditTarget, setRelEditTarget] = createSignal<RelTarget | undefined>(undefined);

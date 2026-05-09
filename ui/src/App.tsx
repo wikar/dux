@@ -23,6 +23,7 @@ const TABS: Tab[] = [
 const App: Component = () => {
   const [activeTab, setActiveTab] = createSignal("home");
   let importInputRef: HTMLInputElement | undefined;
+  const [refreshCount, setRefreshCount] = createSignal(0);
   const [state, setState] = createStore<{ fields: DropField[]; filters: FilterField[] }>({
     fields: [],
     filters: [],
@@ -166,8 +167,14 @@ const App: Component = () => {
     (e.currentTarget as HTMLInputElement).value = "";
   }
 
+  async function handleRefresh() {
+    await fetch("/refresh", { method: "POST" });
+    setRefreshCount((c) => c + 1);
+  }
+
   const homeActions = () => (
     <>
+      <button class={styles.actionBtn} onClick={handleRefresh}>Refresh Schema</button>
       <button class={styles.actionBtn} onClick={handleExportToml}>Export TOML</button>
       <button class={styles.actionBtn} onClick={() => importInputRef?.click()}>Import TOML</button>
       <input
@@ -192,7 +199,7 @@ const App: Component = () => {
         <div class={styles.layout}>
       {/* Column 1 — Schema tree */}
       <div class={styles.col1}>
-        <SchemaTree />
+        <SchemaTree refetchSignal={refreshCount} />
       </div>
 
       {/* Column 2 — Drop zones */}

@@ -6,6 +6,7 @@
 //	GET  /schema  — returns tables, columns, and relationships as JSON
 //	GET  /export  — exports measures and relationships as TOML
 //	POST /import  — imports a dux.toml body, updates the metadata DB
+//	POST /refresh — re-introspects attached databases and reloads metadata
 //	GET  /docs/*  — Scalar API reference UI
 //	GET  /        — query builder UI
 //
@@ -275,6 +276,16 @@ const openAPISpec = `{
           "400": { "description": "Validation error" }
         }
       }
+    },
+    "/refresh": {
+      "post": {
+        "summary": "Refresh schema metadata",
+        "description": "Re-introspect all attached databases and reload persisted metadata and TOML configuration. Use this after the underlying database schema has changed.",
+        "responses": {
+          "200": { "description": "Schema refreshed successfully" },
+          "500": { "description": "Introspection or reload error" }
+        }
+      }
     }
   }
 }`
@@ -295,6 +306,7 @@ Endpoints served on :80:
   GET  /relationships  List all relationships
   POST /relationships  Add a relationship
   DELETE /relationships  Delete a relationship
+  POST /refresh        Refresh schema from attached databases
   GET  /docs/*         Scalar interactive API reference
   GET  /               Query builder UI
 
@@ -365,6 +377,7 @@ func main() {
 	app.Get("/relationships", fiberListRelationshipsHandler(schema, &schemaMu))
 	app.Post("/relationships", fiberAddRelationshipHandler(metaDB, schema, &schemaMu))
 	app.Delete("/relationships", fiberDeleteRelationshipHandler(metaDB, schema, &schemaMu))
+	app.Post("/refresh", fiberRefreshHandler(metaDB, db, schema, &schemaMu, *tomlPath))
 
 	app.Get("/docs/*", scalar.New(scalar.Config{
 		Title:             "DUX Query API",
@@ -749,5 +762,39 @@ func fiberDeleteRelationshipHandler(metaDB *semantic.MetadataDB, schema *semanti
 		mu.Unlock()
 
 		return c.SendStatus(fiber.StatusNoContent)
+	}
+}
+
+// fiberRefreshHandler serves POST /refresh — re-introspects all attached
+// databases and reloads persisted metadata and TOML configuration.
+func fiberRefreshHandler(metaDB *semantic.MetadataDB, db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex, tomlPath string) fiber.Handler {
+	return func(c fiber.Ctx) error {
+		// Re-introspect the database to pick up schema changes.
+		fresh, err := semantic.IntrospectDuckDB(db)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("introspect: %v", err))
+		}
+
+		// Reload persisted metadata (relationships + measures) from the metadata DB.
+		if err := metaDB.LoadIntoSchema(fresh); err != nil {
+			return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("load metadata: %v", err))
+		}
+
+		// Re-apply TOML overlay if the file exists.
+		if _, statErr := os.Stat(tomlPath); statErr == nil {
+			if err := semantic.LoadDuxTOML(tomlPath, fresh); err != nil {
+				return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("load toml: %v", err))
+			}
+		}
+
+		// Swap the live schema under write lock.
+		mu.Lock()
+		schema.Tables = fresh.Tables
+		schema.Relationships = fresh.Relationships
+		schema.Measures = fresh.Measures
+		mu.Unlock()
+
+		log.Printf("schema refreshed — %d tables, %d relationships", len(fresh.Tables), len(fresh.Relationships))
+		return c.SendString("schema refreshed")
 	}
 }
