@@ -8,6 +8,14 @@ DUX is more than a query interpreter. It ships with:
 - **An HTTP server (`duxd`)** — exposes a REST API for executing queries, inspecting the schema, and managing measures and relationships. Embeds an interactive query builder UI and Scalar API reference.
 - **A CLI (`dux`)** — run one-off queries against the DUX semantic model directly from the terminal.
 
+## Quick start with Docker
+
+```sh
+docker run -d -v /db:/app/db ghcr.io/wikar/dux:latest
+```
+
+Mount your database directory to `/app/db` — the container runs `duxd` and listens on port 8080.
+
 ## Requirements
 
 - Go 1.25+
@@ -109,7 +117,7 @@ Starts a long-running query server. Uses the same `db/` directory convention as 
 duxd
 ```
 
-Listens on `:80`.
+Listens on `:8080`.
 
 **Flags**
 
