@@ -44,7 +44,7 @@ const TableCard: Component<{
         </button>
       </div>
 
-      <div class={styles.cardColumns} onScroll={() => props.onColumnsScroll?.()}>
+      <div class={styles.cardColumns} data-card-columns onScroll={() => props.onColumnsScroll?.()}>
         <For each={columns()}>
           {(col) => (
             <div

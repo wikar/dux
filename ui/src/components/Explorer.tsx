@@ -203,26 +203,26 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
   // are guaranteed to be painted before we call getBoundingClientRect.
   // For columns inside a max-height scrollable card, dots that are scrolled out
   // of view are clamped to the card's visible bounds.
-  const [lineData, setLineData] = createSignal<{ key: string; d: string }[]>([]);
+  const [lineData, setLineData] = createSignal<{ key: string; d: string; x1: number; y1: number; x2: number; y2: number }[]>([]);
   const [hoveredRel, setHoveredRel] = createSignal<string | null>(null);
   let lineRaf = 0;
 
-  /** Read a dot's canvas-local centre, clamped to its card's visible rect. */
+  /** Read a dot's canvas-local centre, clamped to its card's scrollable column area. */
   function dotPos(dot: HTMLElement, canvasRect: DOMRect): Pos {
     const dr = dot.getBoundingClientRect();
     let cx = dr.left + dr.width / 2 - canvasRect.left;
     let cy = dr.top + dr.height / 2 - canvasRect.top;
 
-    // Clamp to the enclosing card's visible bounds
-    const card = dot.closest("[data-card]") as HTMLElement | null;
-    if (card) {
-      const cr = card.getBoundingClientRect();
-      const cardTop = cr.top - canvasRect.top;
-      const cardBot = cr.bottom - canvasRect.top;
-      const cardLeft = cr.left - canvasRect.left;
-      const cardRight = cr.right - canvasRect.left;
-      cy = Math.max(cardTop, Math.min(cardBot, cy));
-      cx = Math.max(cardLeft, Math.min(cardRight, cx));
+    // Clamp to the scrollable columns container (not the full card with header)
+    const scrollArea = dot.closest("[data-card]")?.querySelector("[data-card-columns]") as HTMLElement | null;
+    if (scrollArea) {
+      const sr = scrollArea.getBoundingClientRect();
+      const areaTop = sr.top - canvasRect.top;
+      const areaBot = sr.bottom - canvasRect.top;
+      const areaLeft = sr.left - canvasRect.left;
+      const areaRight = sr.right - canvasRect.left;
+      cy = Math.max(areaTop, Math.min(areaBot, cy));
+      cx = Math.max(areaLeft, Math.min(areaRight, cx));
     }
     return { x: cx, y: cy };
   }
@@ -259,6 +259,7 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
       return [{
         key,
         d: `M${p1.x},${p1.y} C${p1.x + dir * cxOff},${p1.y} ${p2.x - dir * cxOff},${p2.y} ${p2.x},${p2.y}`,
+        x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y,
       }];
     });
 
@@ -314,12 +315,28 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
         <div class={styles.canvasInner} ref={canvasInnerEl}>
           {/* SVG overlay: relationship lines + drag indicator */}
           <svg class={styles.svgOverlay}>
+            <defs>
+              <For each={lineData()}>
+                {(line, i) => (
+                  <linearGradient
+                    id={`rel-grad-${i()}`}
+                    gradientUnits="userSpaceOnUse"
+                    x1={line.x1} y1={line.y1}
+                    x2={line.x2} y2={line.y2}
+                  >
+                    <stop offset="0%" stop-color="#f5c2e7" />
+                    <stop offset="100%" stop-color="#89b4fa" />
+                  </linearGradient>
+                )}
+              </For>
+            </defs>
             <For each={lineData()}>
-              {(line) => (
+              {(line, i) => (
                 <path
                   class={styles.relPath}
                   classList={{ [styles.relPathHovered]: hoveredRel() === line.key }}
                   d={line.d}
+                  stroke={`url(#rel-grad-${i()})`}
                   onMouseEnter={() => setHoveredRel(line.key)}
                   onMouseLeave={() => setHoveredRel((h) => h === line.key ? null : h)}
                 />
