@@ -79,6 +79,7 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
 
   // Modal state
   const [relPrefill, setRelPrefill] = createSignal<Partial<RelTarget> | null>(null);
+  const [relEdit, setRelEdit] = createSignal<RelTarget | null>(null);
   const [previewTable, setPreviewTable] = createSignal<string | null>(null);
 
   // In-progress relationship drag (renders as a dashed SVG line)
@@ -324,8 +325,8 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
                     x1={line.x1} y1={line.y1}
                     x2={line.x2} y2={line.y2}
                   >
-                    <stop offset="0%" stop-color="#f5c2e7" />
-                    <stop offset="100%" stop-color="#89b4fa" />
+                    <stop offset="0%" stop-color="#fab387" />
+                    <stop offset="30%" stop-color="#89b4fa" />
                   </linearGradient>
                 )}
               </For>
@@ -339,6 +340,10 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
                   stroke={`url(#rel-grad-${i()})`}
                   onMouseEnter={() => setHoveredRel(line.key)}
                   onMouseLeave={() => setHoveredRel((h) => h === line.key ? null : h)}
+                  onDblClick={() => {
+                    const [ft, fc, tt, tc] = line.key.split("\0");
+                    setRelEdit({ FromTable: ft, FromColumn: fc, ToTable: tt, ToColumn: tc });
+                  }}
                 />
               )}
             </For>
@@ -384,6 +389,19 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
           onClose={() => setRelPrefill(null)}
           onSaved={() => {
             setRelPrefill(null);
+            refetch();
+          }}
+        />
+      </Show>
+
+      {/* Relationship edit modal (from double-click on line) */}
+      <Show when={relEdit() !== null && schema()}>
+        <AddRelationshipModal
+          schema={schema()!}
+          initial={relEdit()!}
+          onClose={() => setRelEdit(null)}
+          onSaved={() => {
+            setRelEdit(null);
             refetch();
           }}
         />

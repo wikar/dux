@@ -51,6 +51,14 @@ const AddRelationshipModal: Component<{
     onCleanup(() => document.removeEventListener("keydown", onKey));
   });
 
+  function reverse() {
+    const ft = fromTable(), fc = fromCol(), tt = toTable(), tc = toCol();
+    setFromTable(tt);
+    setFromCol(tc);
+    setToTable(ft);
+    setToCol(fc);
+  }
+
   async function save() {
     if (!fromTable() || !fromCol() || !toTable() || !toCol()) {
       setError("All four fields are required.");
@@ -66,6 +74,27 @@ const AddRelationshipModal: Component<{
           orig.FromColumn !== fromCol() ||
           orig.ToTable !== toTable() ||
           orig.ToColumn !== toCol());
+
+      // Check if the exact reverse already exists and delete it.
+      const reverseExists = (props.schema.Relationships ?? []).some(
+        (r) =>
+          r.FromTable === toTable() &&
+          r.FromColumn === toCol() &&
+          r.ToTable === fromTable() &&
+          r.ToColumn === fromCol()
+      );
+      if (reverseExists) {
+        await fetch("/relationships", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            from_table: toTable(),
+            from_column: toCol(),
+            to_table: fromTable(),
+            to_column: fromCol(),
+          }),
+        });
+      }
       const res = await fetch("/relationships", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -179,6 +208,9 @@ const AddRelationshipModal: Component<{
           </Show>
         </div>
         <div class={styles.modalFooter}>
+          <button class={styles.modalBtn} onClick={reverse} disabled={saving()} style="margin-right:auto">
+            ⇄ Reverse
+          </button>
           <button class={styles.modalBtn} onClick={props.onClose} disabled={saving()}>
             Cancel
           </button>
