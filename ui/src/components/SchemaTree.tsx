@@ -1,13 +1,12 @@
 import { createMemo, createSignal, createResource, createEffect, For, Show, onMount, onCleanup } from "solid-js";
 import type { Accessor, Component } from "solid-js";
-import type { Schema, DragPayload } from "../types/schema";
+import type { Schema, DragPayload } from "dux-client";
+import { duxLanguage, DUX_KEYWORDS, DUX_BUILTINS, isMetaTable, resolveTable } from "dux-client";
+import type { RelTarget } from "dux-client";
 import hljs from "highlight.js/lib/core";
-import duxLanguage from "../utils/duxLanguage";
-import { DUX_KEYWORDS, DUX_BUILTINS } from "../utils/duxKeywords";
 import TypeIcon from "./TypeIcon";
 import styles from "./SchemaTree.module.css";
-import { fetchSchema, isMetaTable, resolveTable } from "../utils/schemaHelpers";
-import type { RelTarget } from "../utils/schemaHelpers";
+import { useDuxClient } from "../clientContext";
 import AddRelationshipModal from "./AddRelationshipModal";
 
 hljs.registerLanguage("dux", duxLanguage);
@@ -287,6 +286,7 @@ const AddMeasureModal: Component<{
   onClose: () => void;
   onSaved: () => void;
 }> = (props) => {
+  const client = useDuxClient();
   const isEdit = () => !!props.initial;
   const [table, setTable] = createSignal(props.initial?.table ?? "");
   const [name, setName] = createSignal(props.initial?.name ?? "");
@@ -313,25 +313,14 @@ const AddMeasureModal: Component<{
     try {
       const orig = props.initial;
       const nameChanged = orig && (orig.table !== table() || orig.name !== name());
-      const res = await fetch("/measures", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ table: table(), name: name(), expression: expression() }),
-      });
-      if (!res.ok) {
-        setError(await res.text());
-        return;
-      }
+      await client.addMeasure(table(), name(), expression());
       // Only delete the old entry after the new one is saved.
       if (nameChanged) {
-        await fetch(
-          `/measures/${encodeURIComponent(orig!.table)}/${encodeURIComponent(orig!.name)}`,
-          { method: "DELETE" }
-        );
+        await client.deleteMeasure(orig!.table, orig!.name);
       }
       props.onSaved();
     } catch (e) {
-      setError(String(e));
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
@@ -540,7 +529,8 @@ const MeasuresSection: Component<{
 type ModalMode = "measure-add" | "measure-edit" | "relationship-add" | "relationship-edit";
 
 const SchemaTree: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
-  const [schema, { refetch }] = createResource(fetchSchema);
+  const client = useDuxClient();
+  const [schema, { refetch }] = createResource(() => client.fetchSchema());
 
   // Re-fetch when the parent bumps the signal (e.g. after POST /refresh).
   if (props.refetchSignal !== undefined) {
@@ -561,26 +551,26 @@ const SchemaTree: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
   const [deleteError, setDeleteError] = createSignal("");
 
   async function deleteMeasure(table: string, name: string) {
-    const res = await fetch(`/measures/${encodeURIComponent(table)}/${encodeURIComponent(name)}`, {
-      method: "DELETE",
-    });
-    if (!res.ok) { setDeleteError(`Failed to delete measure: ${await res.text()}`); return; }
-    setDeleteError("");
-    refetch();
+    try {
+      await client.deleteMeasure(table, name);
+      setDeleteError("");
+      refetch();
+    } catch (e) {
+      setDeleteError(`Failed to delete measure: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   async function deleteRelationship(r: { FromTable: string; FromColumn: string; ToTable: string; ToColumn: string }) {
-    const res = await fetch("/relationships", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    try {
+      await client.deleteRelationship({
         from_table: r.FromTable, from_column: r.FromColumn,
         to_table: r.ToTable, to_column: r.ToColumn,
-      }),
-    });
-    if (!res.ok) { setDeleteError(`Failed to delete relationship: ${await res.text()}`); return; }
-    setDeleteError("");
-    refetch();
+      });
+      setDeleteError("");
+      refetch();
+    } catch (e) {
+      setDeleteError(`Failed to delete relationship: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   function openMeasureAdd() { setEditTarget(undefined); setModal("measure-add"); }

@@ -28,7 +28,7 @@ export interface Schema {
   Relationships: Relationship[] | null;
 }
 
-// ─── Query builder state types ──────────────────────────────────────────────
+// ─── Query builder state types ───────────────────────────────────────────────
 
 export type Aggregate = "SUM" | "COUNT" | "AVERAGE" | "MIN" | "MAX" | "DISTINCTCOUNT" | "VALUES";
 
@@ -49,10 +49,14 @@ export interface FilterField {
   value: string;
 }
 
-// Drag data payload attached to each draggable schema-tree item.
 export interface DragPayload {
   table: string;
   name: string;
   kind: "column" | "measure";
   dataType: string;
+}
+
+export interface QueryResponse {
+  columns: string[];
+  rows: (string | number | null)[][];
 }

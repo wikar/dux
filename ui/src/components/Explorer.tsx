@@ -8,14 +8,15 @@ import {
   onCleanup,
 } from "solid-js";
 import type { Accessor, Component } from "solid-js";
-import type { Schema } from "../types/schema";
-import { fetchSchema, isMetaTable, resolveTable } from "../utils/schemaHelpers";
-import type { RelTarget } from "../utils/schemaHelpers";
+import type { Schema } from "dux-client";
+import { isMetaTable, resolveTable } from "dux-client";
+import type { RelTarget } from "dux-client";
 import dagre from "dagre";
 import TableCard from "./TableCard";
 import AddRelationshipModal from "./AddRelationshipModal";
 import PreviewModal from "./PreviewModal";
 import styles from "./Explorer.module.css";
+import { useDuxClient } from "../clientContext";
 
 // ─── Layout constants ────────────────────────────────────────────────────────
 const CARD_WIDTH = 240;
@@ -62,7 +63,8 @@ function computeDagreLayout(s: Schema): Record<string, Pos> {
 }
 
 const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
-  const [schema, { refetch }] = createResource(fetchSchema);
+  const client = useDuxClient();
+  const [schema, { refetch }] = createResource(() => client.fetchSchema());
 
   // Re-fetch when the parent bumps the signal (e.g. after POST /refresh).
   if (props.refetchSignal !== undefined) {
@@ -286,11 +288,7 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
       const key = hoveredRel();
       if (!key) return;
       const [fromTable, fromColumn, toTable, toColumn] = key.split("\0");
-      await fetch("/relationships", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ from_table: fromTable, from_column: fromColumn, to_table: toTable, to_column: toColumn }),
-      });
+      await client.deleteRelationship({ from_table: fromTable, from_column: fromColumn, to_table: toTable, to_column: toColumn });
       setHoveredRel(null);
       refetch();
     }

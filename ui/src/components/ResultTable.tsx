@@ -1,11 +1,8 @@
 import { createSignal, createEffect, createMemo, For, Show } from "solid-js";
 import type { Component } from "solid-js";
+import type { QueryResponse } from "dux-client";
 import styles from "./ResultTable.module.css";
-
-interface QueryResponse {
-  columns: string[];
-  rows: (string | number | null)[][];
-}
+import { useDuxClient } from "../clientContext";
 
 type SortDir = "asc" | "desc";
 
@@ -37,6 +34,7 @@ function firstNumericCol(data: QueryResponse): number {
 }
 
 const ResultTable: Component<{ query: string }> = (props) => {
+  const client = useDuxClient();
   const [data, setData] = createSignal<QueryResponse | null>(null);
   const [loading, setLoading] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
@@ -57,23 +55,12 @@ const ResultTable: Component<{ query: string }> = (props) => {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch("/query", {
-          method: "POST",
-          headers: { "Content-Type": "text/plain" },
-          body: q,
-        });
-        const text = await res.text();
-        if (!res.ok) {
-          setError(text || `Error ${res.status}`);
-          setData(null);
-        } else {
-          const json = JSON.parse(text) as QueryResponse;
-          // Default: sort DESC by first numeric column
-          const firstNum = firstNumericCol(json);
-          setSortCol(firstNum);
-          setSortDir("desc");
-          setData(json);
-        }
+        const json = await client.executeQuery(q);
+        // Default: sort DESC by first numeric column
+        const firstNum = firstNumericCol(json);
+        setSortCol(firstNum);
+        setSortDir("desc");
+        setData(json);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
         setData(null);

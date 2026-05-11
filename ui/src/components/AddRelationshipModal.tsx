@@ -1,9 +1,10 @@
 import { createSignal, Show, onMount, onCleanup } from "solid-js";
 import type { Component } from "solid-js";
-import type { Schema } from "../types/schema";
-import { isMetaTable, resolveTable } from "../utils/schemaHelpers";
-import type { RelTarget } from "../utils/schemaHelpers";
+import type { Schema } from "dux-client";
+import { isMetaTable, resolveTable } from "dux-client";
+import type { RelTarget } from "dux-client";
 import styles from "./SchemaTree.module.css";
+import { useDuxClient } from "../clientContext";
 
 export type { RelTarget };
 
@@ -16,6 +17,7 @@ const AddRelationshipModal: Component<{
   onClose: () => void;
   onSaved: () => void;
 }> = (props) => {
+  const client = useDuxClient();
   const isEdit = () => !!props.initial;
   const tables = () => Object.keys(props.schema.Tables).filter((n) => !isMetaTable(n)).sort();
 
@@ -84,47 +86,25 @@ const AddRelationshipModal: Component<{
           r.ToColumn === fromCol()
       );
       if (reverseExists) {
-        await fetch("/relationships", {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            from_table: toTable(),
-            from_column: toCol(),
-            to_table: fromTable(),
-            to_column: fromCol(),
-          }),
+        await client.deleteRelationship({
+          from_table: toTable(), from_column: toCol(),
+          to_table: fromTable(), to_column: fromCol(),
         });
       }
-      const res = await fetch("/relationships", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          from_table: fromTable(),
-          from_column: fromCol(),
-          to_table: toTable(),
-          to_column: toCol(),
-        }),
+      await client.addRelationship({
+        from_table: fromTable(), from_column: fromCol(),
+        to_table: toTable(), to_column: toCol(),
       });
-      if (!res.ok) {
-        setError(await res.text());
-        return;
-      }
       // Only delete the old relationship after the new one is saved.
       if (changed) {
-        await fetch("/relationships", {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            from_table: orig!.FromTable,
-            from_column: orig!.FromColumn,
-            to_table: orig!.ToTable,
-            to_column: orig!.ToColumn,
-          }),
+        await client.deleteRelationship({
+          from_table: orig!.FromTable, from_column: orig!.FromColumn,
+          to_table: orig!.ToTable, to_column: orig!.ToColumn,
         });
       }
       props.onSaved();
     } catch (e) {
-      setError(String(e));
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }

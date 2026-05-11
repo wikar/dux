@@ -1,4 +1,4 @@
-import type { DropField, FilterField } from "../types/schema";
+import type { DropField, FilterField } from "./types";
 
 const isNumeric = (dt: string) =>
   /^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|DOUBLE|FLOAT|REAL|DECIMAL|NUMERIC)/i.test(dt);
@@ -32,7 +32,7 @@ export function generateQuery(fields: DropField[], filters: FilterField[]): stri
     }
   }
 
-  // ── TREATAS filter args (only when a value has been entered) ──
+  // TREATAS filter args (only when a value has been entered)
   const treatasArgs = filters
     .filter((f) => f.value.trim() !== "")
     .map((f) => {

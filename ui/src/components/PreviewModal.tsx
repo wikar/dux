@@ -1,17 +1,15 @@
 import { createSignal, onMount, onCleanup, For, Show } from "solid-js";
 import type { Component } from "solid-js";
+import type { QueryResponse } from "dux-client";
 import treeStyles from "./SchemaTree.module.css";
 import styles from "./PreviewModal.module.css";
-
-interface QueryResponse {
-  columns: string[];
-  rows: (string | number | null)[][];
-}
+import { useDuxClient } from "../clientContext";
 
 const PreviewModal: Component<{
   tableName: string;
   onClose: () => void;
 }> = (props) => {
+  const client = useDuxClient();
   const [data, setData] = createSignal<QueryResponse | null>(null);
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
@@ -19,20 +17,10 @@ const PreviewModal: Component<{
   onMount(() => {
     async function load() {
       try {
-        const res = await fetch("/query", {
-          method: "POST",
-          headers: { "Content-Type": "text/plain" },
-          body: `EVALUATE ${props.tableName}`,
-        });
-        const text = await res.text();
-        if (!res.ok) {
-          setError(text || `Error ${res.status}`);
-          return;
-        }
-        const json = JSON.parse(text) as QueryResponse;
+        const json = await client.executeQuery(`EVALUATE ${props.tableName}`);
         setData({ columns: json.columns, rows: json.rows.slice(0, 10) });
       } catch (e) {
-        setError(String(e));
+        setError(e instanceof Error ? e.message : String(e));
       } finally {
         setLoading(false);
       }

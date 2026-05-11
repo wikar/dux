@@ -1,11 +1,3 @@
-import type { Schema } from "../types/schema";
-
-export async function fetchSchema(): Promise<Schema> {
-  const res = await fetch("/schema");
-  if (!res.ok) throw new Error(`schema fetch failed: ${res.status}`);
-  return res.json();
-}
-
 // Tables whose names start with "dux_" (or come from the "dux" metadata DB)
 // are internal — hide from public views.
 export const isMetaTable = (name: string): boolean => {

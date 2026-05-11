@@ -34,6 +34,7 @@ go.work.sum
 # UI
 ui/dist/*
 ui/node_modules/*
+ui/packages/dux-client/node_modules/*
 
 # Logs and databases
 db/*.duckdb

@@ -1,18 +1,12 @@
 import { createMemo, createSignal, createResource, onMount } from "solid-js";
 import type { Component } from "solid-js";
 import hljs from "highlight.js/lib/core";
-import type { Schema } from "../types/schema";
-import duxLanguage from "../utils/duxLanguage";
-import { DUX_KEYWORDS, DUX_BUILTINS } from "../utils/duxKeywords";
+import type { Schema } from "dux-client";
+import { duxLanguage, DUX_KEYWORDS, DUX_BUILTINS } from "dux-client";
 import styles from "./QueryPreview.module.css";
+import { useDuxClient } from "../clientContext";
 
 hljs.registerLanguage("dux", duxLanguage);
-
-async function fetchSchema(): Promise<Schema> {
-  const res = await fetch("/schema");
-  if (!res.ok) throw new Error(`schema fetch failed: ${res.status}`);
-  return res.json();
-}
 
 // ─── Completion logic ─────────────────────────────────────────────────────────
 
@@ -135,11 +129,12 @@ const QueryPreview: Component<{
   onQueryChange: (q: string) => void;
   onRun: () => void;
 }> = (props) => {
+  const client = useDuxClient();
   let highlightEl: HTMLPreElement | undefined;
   let rulerEl: HTMLSpanElement | undefined;
   let charW = 7.5; // measured after mount
 
-  const [schema] = createResource(fetchSchema);
+  const [schema] = createResource(() => client.fetchSchema());
   const [ghost, setGhost] = createSignal("");
   const [ghostCursor, setGhostCursor] = createSignal(0);
   const [scrollTop, setScrollTop] = createSignal(0);

@@ -1,6 +1,6 @@
 import { For } from "solid-js";
 import type { Component } from "solid-js";
-import type { Table } from "../types/schema";
+import type { Table } from "dux-client";
 import TypeIcon from "./TypeIcon";
 import styles from "./TableCard.module.css";
 

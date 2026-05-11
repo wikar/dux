@@ -1,8 +1,10 @@
 import { createMemo, createSignal, createEffect, Show } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type { Component } from "solid-js";
-import type { DropField, FilterField, DragPayload, Aggregate } from "./types/schema";
-import { generateQuery } from "./utils/generateQuery";
+import { DuxClient } from "dux-client";
+import type { DropField, FilterField, DragPayload, Aggregate } from "dux-client";
+import { generateQuery } from "dux-client";
+import { DuxClientContext } from "./clientContext";
 import SchemaTree from "./components/SchemaTree";
 import DropZone from "./components/DropZone";
 import QueryPreview from "./components/QueryPreview";
@@ -21,6 +23,7 @@ const TABS: Tab[] = [
 ];
 
 const App: Component = () => {
+  const client = new DuxClient();
   const [activeTab, setActiveTab] = createSignal("home");
   let importInputRef: HTMLInputElement | undefined;
   const [refreshCount, setRefreshCount] = createSignal(0);
@@ -150,7 +153,7 @@ const App: Component = () => {
 
   function handleExportToml() {
     const a = document.createElement("a");
-    a.href = "/export";
+    a.href = client.exportTomlUrl();
     a.download = "dux.toml";
     a.click();
   }
@@ -159,16 +162,12 @@ const App: Component = () => {
     const file = (e.currentTarget as HTMLInputElement).files?.[0];
     if (!file) return;
     const text = await file.text();
-    await fetch("/import", {
-      method: "POST",
-      headers: { "Content-Type": "text/plain" },
-      body: text,
-    });
+    await client.importToml(text);
     (e.currentTarget as HTMLInputElement).value = "";
   }
 
   async function handleRefresh() {
-    await fetch("/refresh", { method: "POST" });
+    await client.refresh();
     setRefreshCount((c) => c + 1);
   }
 
@@ -194,7 +193,8 @@ const App: Component = () => {
   );
 
   return (
-    <div class={styles.appShell}>
+    <DuxClientContext.Provider value={client}>
+      <div class={styles.appShell}>
       <TopBar
         tabs={TABS}
         activeTab={activeTab()}
@@ -240,7 +240,8 @@ const App: Component = () => {
       <Show when={activeTab() === "explorer"}>
         <Explorer refetchSignal={refreshCount} />
       </Show>
-    </div>
+      </div>
+    </DuxClientContext.Provider>
   );
 };
 
