@@ -200,10 +200,17 @@ DELETE /measures/:table/:name
 
 ```
 GET /relationships
-→ [{"from_table": "atp.matches", "from_column": "winner_id", "to_table": "atp.players", "to_column": "player_id"}]
+→ [
+    {"from_table": "atp.matches", "from_column": "winner_id", "to_table": "atp.players", "to_column": "player_id"},
+    {"from_table": "Bridge", "from_column": "DimBKey", "to_table": "DimB", "to_column": "DimBKey", "bidirectional": true}
+  ]
 
 POST /relationships
 {"from_table": "atp.matches", "from_column": "winner_id", "to_table": "atp.players", "to_column": "player_id"}
+→ 201 Created
+
+POST /relationships          (bidirectional)
+{"from_table": "Bridge", "from_column": "DimBKey", "to_table": "DimB", "to_column": "DimBKey", "bidirectional": true}
 → 201 Created
 
 DELETE /relationships
@@ -228,6 +235,14 @@ from_table  = "atp.matches"
 from_column = "winner_id"
 to_table    = "atp.players"
 to_column   = "player_id"
+
+# Bidirectional — filter context propagates in both directions through Bridge
+[[relationship]]
+from_table     = "Bridge"
+from_column    = "DimBKey"
+to_table       = "DimB"
+to_column      = "DimBKey"
+bidirectional  = true
 
 [[measure]]
 table      = "atp.matches"
@@ -356,3 +371,65 @@ These evaluate an expression row-by-row over a table.
 | `NOT(expr)` | Logical negation |
 | `ISBLANK(expr)` | TRUE when `expr` is NULL |
 | `BLANK()` | NULL constant |
+
+## Bidirectional relationships
+
+By default, a relationship is unidirectional: filter context flows from the `from` table toward the `to` table and the emitter produces a `LEFT JOIN`. Setting `bidirectional = true` on a relationship allows filter context to propagate in both directions through a bridge (junction) table.
+
+### Schema pattern
+
+```
+DimA ←── Bridge ↔ DimB ──→ FactMeasures
+```
+
+```toml
+[[relationship]]
+from_table  = "Bridge"
+from_column = "DimAKey"
+to_table    = "DimA"
+to_column   = "DimAKey"
+
+[[relationship]]
+from_table     = "Bridge"
+from_column    = "DimBKey"
+to_table       = "DimB"
+to_column      = "DimBKey"
+bidirectional  = true
+
+[[relationship]]
+from_table  = "FactMeasures"
+from_column = "DimBKey"
+to_table    = "DimB"
+to_column   = "DimBKey"
+```
+
+### What the codegen emits
+
+For every `bidirectional = true` edge, DUX emits a `_bd_{ToTable}` CTE instead of a raw `LEFT JOIN`. The CTE `SELECT DISTINCT`s the bridge key after joining the filter source, ensuring no fan-out from many-to-many bridge rows:
+
+```sql
+WITH _bd_DimB AS (
+    SELECT DISTINCT bridge.DimBKey
+    FROM bridge
+    JOIN dima ON dima.DimAKey = bridge.DimAKey
+    WHERE Category IN ('X')
+)
+SELECT SUM(Amount) AS 'Total'
+FROM factmeasures
+JOIN _bd_dimb ON _bd_dimb.DimBKey = factmeasures.DimBKey
+```
+
+### Ambiguity detection
+
+Bidirectional edges can create ambiguous filter graphs when two tables are reachable from each other via more than one path. DUX rejects such schemas at startup and at the `POST /relationships` endpoint — ambiguity is never silently resolved at query time:
+
+```
+schema validation: ambiguous filter graph: tables "DimA" and "DimB" are connected
+by more than one path:
+  [1] DimA ↔ DimB (bidi edge)
+  [2] dima → ... → dimb
+```
+
+### UI
+
+In the Explorer canvas, bidirectional relationship lines are rendered with a **30 % orange / 40 % blue / 30 % orange** gradient to distinguish them from standard (orange → blue) unidirectional lines. The relationship modal has a **Bidirectional** checkbox next to the ⇄ Reverse button.

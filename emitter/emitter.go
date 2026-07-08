@@ -3,6 +3,7 @@ package emitter
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -23,6 +24,15 @@ type Emitter struct {
 	Measures   map[string]map[string]*parser.MeasureDefinition
 	ScalarVars map[string]any
 	rowCtx     semantic.RowContext
+}
+
+// taggedPred pairs an emitted SQL WHERE predicate with the lower-cased
+// canonical name of the table it logically filters (e.g. from a TREATAS call).
+// The bidi CTE builder uses this to route predicates into CTE bodies when
+// their source table is absorbed by the CTE.
+type taggedPred struct {
+	table string // lower-cased canonical table name; "" if unknown
+	sql   string
 }
 
 // Emit produces a DuckDB SQL string from a resolved Query.
@@ -272,9 +282,9 @@ func (e *Emitter) emitFuncCall(fc *parser.FuncCall) (string, error) {
 	case "SUMMARIZECOLUMNS":
 		return e.emitSummarizeColumns(fc)
 	case "ADDCOLUMNS":
-		return e.emitAddColumns(fc)
+		return e.emitProjectColumns(fc, "SELECT *, ")
 	case "SELECTCOLUMNS":
-		return e.emitSelectColumns(fc)
+		return e.emitProjectColumns(fc, "SELECT ")
 	case "UNION":
 		return e.emitSetOp("UNION ALL", fc)
 	case "INTERSECT":
@@ -677,19 +687,26 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	// Emit group column SQL expressions. Arguments that resolve to measures are
 	// treated as unnamed aggregate outputs (SELECT only) rather than grouping
 	// keys — placing an aggregate in GROUP BY is invalid SQL.
-	// TREATAS calls are separated into WHERE predicates.
+	// TREATAS calls are separated into WHERE predicates, paired with their
+	// target table for bidi CTE routing.
 	var groupCols []string      // emitted SQL for true group-by keys
 	var inlineMeasures []string // emitted SQL for measure refs in the group position
-	var wherePreds []string     // emitted SQL for TREATAS filter predicates
+	var wherePreds []taggedPred // TREATAS filter predicates with their source tables
 	for _, arg := range groupArgs {
 		// Check for a TREATAS call — emit as a WHERE predicate, not a group column.
 		if arg.Left != nil && arg.Left.FuncCall != nil &&
 			strings.ToUpper(arg.Left.FuncCall.Name) == "TREATAS" && len(arg.Right) == 0 {
-			pred, err := e.emitTreatas(arg.Left.FuncCall)
+			treatasFC := arg.Left.FuncCall
+			// Extract the target table name for bidi CTE routing.
+			var predTable string
+			if len(treatasFC.Args) == 2 && treatasFC.Args[1].Left != nil && treatasFC.Args[1].Left.ColRef != nil {
+				predTable = strings.ToLower(semantic.StripSingleQuotes(treatasFC.Args[1].Left.ColRef.Table))
+			}
+			pred, err := e.emitTreatas(treatasFC)
 			if err != nil {
 				return "", err
 			}
-			wherePreds = append(wherePreds, pred)
+			wherePreds = append(wherePreds, taggedPred{table: predTable, sql: pred})
 			continue
 		}
 		if e.isMeasureColRef(arg) {
@@ -755,28 +772,51 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	}
 
 	// Build FROM clause, using join inference when multiple tables are present.
+	var withClause string // non-empty when bidi CTEs are required
 	var fromClause string
+	var outerPreds []string // predicates remaining after bidi routing
 	switch len(allTables) {
 	case 0:
 		// No tables referenced — no FROM clause.
+		for _, p := range wherePreds {
+			outerPreds = append(outerPreds, p.sql)
+		}
 	case 1:
 		fromClause = sqlIdent(allTables[0])
+		for _, p := range wherePreds {
+			outerPreds = append(outerPreds, p.sql)
+		}
 	default:
 		if e.Schema != nil {
 			jp, jpErr := semantic.InferJoinPath(e.Schema, allTables)
 			if jpErr != nil {
 				return "", jpErr
 			}
-			var fbuf strings.Builder
-			fbuf.WriteString(sqlIdent(allTables[0]))
-			for _, step := range jp.Steps {
-				fmt.Fprintf(&fbuf, "\nLEFT JOIN %s ON %s.%s = %s.%s",
-					sqlIdent(step.Table),
-					sqlIdent(step.FromTable), step.OnFromCol,
-					sqlIdent(step.Table), step.OnToCol,
-				)
+			// Check for bidirectional steps — use CTE codegen when present.
+			hasBidi := slices.ContainsFunc(jp.Steps, func(s semantic.JoinStep) bool { return s.Bidirectional })
+			if hasBidi {
+				wc, fc, op, bErr := e.buildBidiSQL(allTables, jp, wherePreds)
+				if bErr != nil {
+					return "", bErr
+				}
+				withClause = wc
+				fromClause = fc
+				outerPreds = op
+			} else {
+				var fbuf strings.Builder
+				fbuf.WriteString(sqlIdent(allTables[0]))
+				for _, step := range jp.Steps {
+					fmt.Fprintf(&fbuf, "\nLEFT JOIN %s ON %s.%s = %s.%s",
+						sqlIdent(step.Table),
+						sqlIdent(step.FromTable), step.OnFromCol,
+						sqlIdent(step.Table), step.OnToCol,
+					)
+				}
+				fromClause = fbuf.String()
+				for _, p := range wherePreds {
+					outerPreds = append(outerPreds, p.sql)
+				}
 			}
-			fromClause = fbuf.String()
 		} else {
 			// No schema available — comma-join and let DuckDB report any errors.
 			parts := make([]string, len(allTables))
@@ -784,6 +824,9 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 				parts[i] = sqlIdent(t)
 			}
 			fromClause = strings.Join(parts, ", ")
+			for _, p := range wherePreds {
+				outerPreds = append(outerPreds, p.sql)
+			}
 		}
 	}
 
@@ -794,12 +837,15 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	selects = append(selects, measures...)
 
 	var sb strings.Builder
+	if withClause != "" {
+		fmt.Fprintf(&sb, "%s\n", withClause)
+	}
 	fmt.Fprintf(&sb, "SELECT %s", strings.Join(selects, ", "))
 	if fromClause != "" {
 		fmt.Fprintf(&sb, "\nFROM %s", fromClause)
 	}
-	if len(wherePreds) > 0 {
-		fmt.Fprintf(&sb, "\nWHERE %s", strings.Join(wherePreds, " AND "))
+	if len(outerPreds) > 0 {
+		fmt.Fprintf(&sb, "\nWHERE %s", strings.Join(outerPreds, " AND "))
 	}
 	if len(groupCols) > 0 {
 		fmt.Fprintf(&sb, "\nGROUP BY %s", strings.Join(groupCols, ", "))
@@ -807,50 +853,209 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	return sb.String(), nil
 }
 
-// emitAddColumns emits:
+// buildBidiSQL constructs the WITH CTE clause and main FROM clause for a query
+// whose BFS join path contains at least one bidirectional edge.
 //
-//	SELECT *, (expr1) AS "name1", ... FROM table
+// For every bidi edge in the path, a _bd_{ToTable} CTE is emitted that
+// SELECT DISTINCTs the bridge-side key after joining the filter-source chain.
+// Tables absorbed into the CTE are removed from the main FROM clause. WHERE
+// predicates whose source table is absorbed are routed inside the CTE; the
+// remainder are returned in outerPreds for the outer WHERE clause.
 //
-// Column references inside the expression arguments are emitted without table
-// qualifiers because the source table is the sole table in the FROM clause.
-func (e *Emitter) emitAddColumns(fc *parser.FuncCall) (string, error) {
-	if len(fc.Args) < 3 || (len(fc.Args)-1)%2 != 0 {
-		return "", fmt.Errorf("ADDCOLUMNS requires a table then name/expr pairs")
+// preds is a slice of (table string, sql string) pairs produced by
+// emitSummarizeColumns when processing TREATAS group arguments.
+func (e *Emitter) buildBidiSQL(
+	allTables []string,
+	jp *semantic.JoinPath,
+	preds []taggedPred,
+) (withClause, fromClause string, outerPreds []string, err error) {
+	// Find the first bidi step.
+	bidiIdx := -1
+	for i, step := range jp.Steps {
+		if step.Bidirectional {
+			bidiIdx = i
+			break
+		}
 	}
-	table, err := e.tableNameFromExpr(fc.Args[0])
-	if err != nil {
-		return "", fmt.Errorf("ADDCOLUMNS: first argument must be a table reference: %w", err)
+	if bidiIdx == -1 {
+		for _, p := range preds {
+			outerPreds = append(outerPreds, p.sql)
+		}
+		return "", "", outerPreds, nil
 	}
 
-	var cols []string
-	for i := 1; i < len(fc.Args); i += 2 {
-		nameExpr, err := e.emitExpr(fc.Args[i])
-		if err != nil {
-			return "", err
+	step := jp.Steps[bidiIdx]
+
+	// bridge: the many-side (bridge) table of the bidi relationship.
+	// target: the to-side (e.g. DimB) of the bidi relationship.
+	// cteKeyCol: the bridge-side column selected in the CTE (DISTINCT on this).
+	// cteJoinCol: the target-side column used when downstream joins reference target.
+	var bridge, target, cteKeyCol, cteJoinCol string
+	if step.BidiForward {
+		bridge = step.FromTable
+		target = step.Table
+		cteKeyCol = step.OnFromCol
+		cteJoinCol = step.OnToCol
+	} else {
+		bridge = step.Table
+		target = step.FromTable
+		cteKeyCol = step.OnToCol
+		cteJoinCol = step.OnFromCol
+	}
+	cteName := "_bd_" + target
+
+	// absorbed: set of lower-cased table names pulled into the CTE body.
+	// The bridge is always absorbed; the tables leading to or from the bridge
+	// (depending on traversal direction) are also absorbed.
+	absorbed := map[string]bool{strings.ToLower(bridge): true}
+	if step.BidiForward {
+		// Pre-bidi steps chain from the primary table to the bridge.
+		for _, s := range jp.Steps[:bidiIdx] {
+			absorbed[strings.ToLower(s.FromTable)] = true
+			absorbed[strings.ToLower(s.Table)] = true
 		}
-		valExpr, err := e.emitExpr(fc.Args[i+1])
-		if err != nil {
-			return "", err
+	} else {
+		// Post-bidi steps that continue from the bridge (not from the target)
+		// belong to the filter-source chain inside the CTE.
+		for _, s := range jp.Steps[bidiIdx+1:] {
+			if absorbed[strings.ToLower(s.FromTable)] {
+				absorbed[strings.ToLower(s.Table)] = true
+			}
 		}
-		cols = append(cols, fmt.Sprintf("(%s) AS %s", valExpr, nameExpr))
 	}
 
-	return fmt.Sprintf("SELECT *, %s FROM %s", strings.Join(cols, ", "), sqlIdent(table)), nil
+	// ── Build CTE SQL ────────────────────────────────────────────────────────
+	var cteBuf strings.Builder
+	fmt.Fprintf(&cteBuf, "SELECT DISTINCT %s.%s\nFROM %s",
+		sqlIdent(bridge), cteKeyCol,
+		sqlIdent(bridge),
+	)
+	if step.BidiForward {
+		// Inner JOINs from pre-bidi steps.  The bridge is already in FROM so
+		// we iterate in reverse order (closest-to-bridge first).
+		for i := bidiIdx - 1; i >= 0; i-- {
+			s := jp.Steps[i]
+			fmt.Fprintf(&cteBuf, "\nJOIN %s ON %s.%s = %s.%s",
+				sqlIdent(s.FromTable),
+				sqlIdent(s.FromTable), s.OnFromCol,
+				sqlIdent(s.Table), s.OnToCol,
+			)
+		}
+	} else {
+		// Inner JOINs from post-bidi absorbed steps in natural order.
+		for _, s := range jp.Steps[bidiIdx+1:] {
+			if absorbed[strings.ToLower(s.FromTable)] {
+				fmt.Fprintf(&cteBuf, "\nJOIN %s ON %s.%s = %s.%s",
+					sqlIdent(s.Table),
+					sqlIdent(s.Table), s.OnToCol,
+					sqlIdent(s.FromTable), s.OnFromCol,
+				)
+			}
+		}
+	}
+
+	// Route predicates: absorbed-table preds go into the CTE WHERE; others stay outer.
+	var ctePreds []string
+	for _, p := range preds {
+		if p.table != "" && absorbed[p.table] {
+			ctePreds = append(ctePreds, p.sql)
+		} else {
+			outerPreds = append(outerPreds, p.sql)
+		}
+	}
+	if len(ctePreds) > 0 {
+		fmt.Fprintf(&cteBuf, "\nWHERE %s", strings.Join(ctePreds, " AND "))
+	}
+
+	withClause = fmt.Sprintf("WITH %s AS (\n%s\n)", sqlIdent(cteName), cteBuf.String())
+
+	// ── Build main FROM clause ───────────────────────────────────────────────
+	// Primary = first table in allTables that is NOT absorbed.
+	var mainPrimary string
+	for _, t := range allTables {
+		if !absorbed[strings.ToLower(t)] {
+			mainPrimary = t
+			break
+		}
+	}
+	if mainPrimary == "" {
+		return "", "", nil, fmt.Errorf(
+			"bidirectional CTE %q absorbed all query tables; no primary table for FROM clause",
+			cteName,
+		)
+	}
+
+	var fromBuf strings.Builder
+	fromBuf.WriteString(sqlIdent(mainPrimary))
+	inFrom := map[string]bool{strings.ToLower(mainPrimary): true}
+
+	targetL := strings.ToLower(target)
+	// If the target IS the primary, immediately join the CTE to it.
+	if strings.ToLower(mainPrimary) == targetL {
+		fmt.Fprintf(&fromBuf, "\nJOIN %s ON %s.%s = %s.%s",
+			sqlIdent(cteName),
+			sqlIdent(cteName), cteKeyCol,
+			sqlIdent(target), cteJoinCol,
+		)
+		inFrom[strings.ToLower(cteName)] = true
+	}
+
+	// Downstream steps: all steps after the bidi step that are NOT absorbed.
+	for _, s := range jp.Steps[bidiIdx+1:] {
+		if absorbed[strings.ToLower(s.FromTable)] && absorbed[strings.ToLower(s.Table)] {
+			continue // entirely inside the CTE
+		}
+		tableL := strings.ToLower(s.Table)
+
+		// Determine the left-hand side of the join condition.
+		// If the driving side (FromTable) is the target, use the CTE alias.
+		fromRef := s.FromTable
+		fromKeyCol := s.OnFromCol
+		if strings.ToLower(s.FromTable) == targetL {
+			fromRef = cteName
+			fromKeyCol = cteKeyCol
+		}
+
+		if inFrom[tableL] {
+			// The table is already the primary; the join is the CTE itself
+			// (TC-01: FactMeasures is primary, CTE joins to it).
+			if !inFrom[strings.ToLower(cteName)] {
+				fmt.Fprintf(&fromBuf, "\nJOIN %s ON %s.%s = %s.%s",
+					sqlIdent(cteName),
+					sqlIdent(cteName), cteKeyCol,
+					sqlIdent(s.Table), s.OnToCol,
+				)
+				inFrom[strings.ToLower(cteName)] = true
+			}
+			continue
+		}
+		inFrom[tableL] = true
+		fmt.Fprintf(&fromBuf, "\nJOIN %s ON %s.%s = %s.%s",
+			sqlIdent(s.Table),
+			sqlIdent(fromRef), fromKeyCol,
+			sqlIdent(s.Table), s.OnToCol,
+		)
+	}
+
+	fromClause = fromBuf.String()
+	return withClause, fromClause, outerPreds, nil
 }
 
-// emitSelectColumns emits:
+// emitProjectColumns emits ADDCOLUMNS / SELECTCOLUMNS:
 //
-//	SELECT (expr1) AS "name1", ... FROM table
+//	<selectPrefix>(expr1) AS "name1", ... FROM table
 //
+// selectPrefix is "SELECT *, " for ADDCOLUMNS and "SELECT " for SELECTCOLUMNS.
 // Column references inside the expression arguments are emitted without table
 // qualifiers because the source table is the sole table in the FROM clause.
-func (e *Emitter) emitSelectColumns(fc *parser.FuncCall) (string, error) {
+func (e *Emitter) emitProjectColumns(fc *parser.FuncCall, selectPrefix string) (string, error) {
+	name := strings.ToUpper(fc.Name)
 	if len(fc.Args) < 3 || (len(fc.Args)-1)%2 != 0 {
-		return "", fmt.Errorf("SELECTCOLUMNS requires a table then name/expr pairs")
+		return "", fmt.Errorf("%s requires a table then name/expr pairs", name)
 	}
 	table, err := e.tableNameFromExpr(fc.Args[0])
 	if err != nil {
-		return "", fmt.Errorf("SELECTCOLUMNS: first argument must be a table reference: %w", err)
+		return "", fmt.Errorf("%s: first argument must be a table reference: %w", name, err)
 	}
 
 	var cols []string
@@ -866,7 +1071,7 @@ func (e *Emitter) emitSelectColumns(fc *parser.FuncCall) (string, error) {
 		cols = append(cols, fmt.Sprintf("(%s) AS %s", valExpr, nameExpr))
 	}
 
-	return fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), sqlIdent(table)), nil
+	return fmt.Sprintf("%s%s FROM %s", selectPrefix, strings.Join(cols, ", "), sqlIdent(table)), nil
 }
 
 func (e *Emitter) emitSetOp(op string, fc *parser.FuncCall) (string, error) {

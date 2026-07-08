@@ -34,10 +34,11 @@ type Column struct {
 // Relationship models a foreign-key edge from the fact side (Many) to the
 // dimension side (One).
 type Relationship struct {
-	FromTable  string
-	FromColumn string
-	ToTable    string
-	ToColumn   string
+	FromTable     string
+	FromColumn    string
+	ToTable       string
+	ToColumn      string
+	Bidirectional bool
 }
 
 // NewSchema returns an empty, initialised Schema.

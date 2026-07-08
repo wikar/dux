@@ -20,10 +20,11 @@ type duxTOML struct {
 
 // tomlRelationship is one [[relationship]] entry.
 type tomlRelationship struct {
-	FromTable  string `toml:"from_table"`
-	FromColumn string `toml:"from_column"`
-	ToTable    string `toml:"to_table"`
-	ToColumn   string `toml:"to_column"`
+	FromTable     string `toml:"from_table"`
+	FromColumn    string `toml:"from_column"`
+	ToTable       string `toml:"to_table"`
+	ToColumn      string `toml:"to_column"`
+	Bidirectional bool   `toml:"bidirectional,omitempty"`
 }
 
 // tomlMeasure is one [[measure]] entry.
@@ -45,52 +46,9 @@ func LoadDuxTOML(path string, schema *Schema) error {
 	if err != nil {
 		return fmt.Errorf("read dux.toml %q: %w", path, err)
 	}
-
-	var doc duxTOML
-	if err := toml.Unmarshal(data, &doc); err != nil {
-		return fmt.Errorf("parse dux.toml %q: %w", path, err)
+	if err := LoadDuxTOMLBytes(data, schema); err != nil {
+		return fmt.Errorf("dux.toml %q: %w", path, err)
 	}
-
-	// Merge relationships.
-	for _, r := range doc.Relationship {
-		schema.Relationships = append(schema.Relationships, &Relationship{
-			FromTable:  r.FromTable,
-			FromColumn: r.FromColumn,
-			ToTable:    r.ToTable,
-			ToColumn:   r.ToColumn,
-		})
-	}
-
-	// Merge measures.
-	for _, m := range doc.Measure {
-		if m.Table == "" || m.Name == "" || m.Expression == "" {
-			return fmt.Errorf("dux.toml %q: measure entry missing table, name, or expression", path)
-		}
-		defines, err := parser.ParseMeasures(
-			fmt.Sprintf("DEFINE\n    MEASURE %s[%s] = %s", m.Table, m.Name, m.Expression),
-		)
-		if err != nil {
-			return fmt.Errorf("dux.toml %q: measure %q: %w", path, m.Name, err)
-		}
-		for _, def := range defines {
-			def.Expression = m.Expression
-			table := StripSingleQuotes(def.Table)
-			name := StripBrackets(def.Column)
-			for existingTable, defs := range schema.Measures {
-				if existingTable == table {
-					continue
-				}
-				if _, conflicts := defs[name]; conflicts {
-					return fmt.Errorf("dux.toml %q: measure %q already defined in table %q", path, name, existingTable)
-				}
-			}
-			if schema.Measures[table] == nil {
-				schema.Measures[table] = make(map[string]*parser.MeasureDefinition)
-			}
-			schema.Measures[table][name] = def
-		}
-	}
-
 	return nil
 }
 
@@ -104,10 +62,11 @@ func LoadDuxTOMLBytes(data []byte, schema *Schema) error {
 	// Merge relationships.
 	for _, r := range doc.Relationship {
 		schema.Relationships = append(schema.Relationships, &Relationship{
-			FromTable:  r.FromTable,
-			FromColumn: r.FromColumn,
-			ToTable:    r.ToTable,
-			ToColumn:   r.ToColumn,
+			FromTable:     r.FromTable,
+			FromColumn:    r.FromColumn,
+			ToTable:       r.ToTable,
+			ToColumn:      r.ToColumn,
+			Bidirectional: r.Bidirectional,
 		})
 	}
 
@@ -126,6 +85,16 @@ func LoadDuxTOMLBytes(data []byte, schema *Schema) error {
 			def.Expression = m.Expression
 			table := StripSingleQuotes(def.Table)
 			name := StripBrackets(def.Column)
+			// Measure names must be unique across tables so that bare
+			// [MeasureName] references stay unambiguous.
+			for existingTable, defs := range schema.Measures {
+				if existingTable == table {
+					continue
+				}
+				if _, conflicts := defs[name]; conflicts {
+					return fmt.Errorf("measure %q already defined in table %q", name, existingTable)
+				}
+			}
 			if schema.Measures[table] == nil {
 				schema.Measures[table] = make(map[string]*parser.MeasureDefinition)
 			}
@@ -146,10 +115,11 @@ func ExportDuxTOML(schema *Schema) ([]byte, error) {
 	// Relationships — sort for deterministic output.
 	for _, r := range schema.Relationships {
 		doc.Relationship = append(doc.Relationship, tomlRelationship{
-			FromTable:  r.FromTable,
-			FromColumn: r.FromColumn,
-			ToTable:    r.ToTable,
-			ToColumn:   r.ToColumn,
+			FromTable:     r.FromTable,
+			FromColumn:    r.FromColumn,
+			ToTable:       r.ToTable,
+			ToColumn:      r.ToColumn,
+			Bidirectional: r.Bidirectional,
 		})
 	}
 	sort.Slice(doc.Relationship, func(i, j int) bool {
@@ -180,11 +150,10 @@ func ExportDuxTOML(schema *Schema) ([]byte, error) {
 	})
 
 	for _, entry := range entries {
-		expr := measureExprString(entry.def)
 		doc.Measure = append(doc.Measure, tomlMeasure{
 			Table:      entry.table,
 			Name:       entry.name,
-			Expression: expr,
+			Expression: entry.def.Expression,
 		})
 	}
 
@@ -204,21 +173,4 @@ func WriteDuxTOML(path string, schema *Schema) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0644)
-}
-
-// measureExprString reconstructs a canonical expression string from a
-// MeasureDefinition by re-serialising via the parser round-trip representation.
-// Since the AST does not store the raw source, we do a best-effort
-// reconstruction from the token fields that were stored.
-//
-// For measures loaded from dux.toml (where the expression was stored verbatim)
-// this is straightforward; for measures originally parsed from .dux files
-// we fall back to the table-qualified column syntax.
-func measureExprString(def *parser.MeasureDefinition) string {
-	if def == nil || def.Expr == nil {
-		return ""
-	}
-	// Re-emit via the emitter for a canonical form.
-	em := &emitterRepr{}
-	return em.expr(def.Expr)
 }

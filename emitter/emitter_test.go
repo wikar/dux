@@ -463,3 +463,189 @@ func TestEmitErrors(t *testing.T) {
 		})
 	}
 }
+
+// ─── Bidirectional relationships ──────────────────────────────────────────────
+
+// bidiSchema builds a schema that mirrors the spec example:
+//
+//	DimA.DimAKey → Bridge.DimAKey   (normal, many→one)
+//	Bridge.DimBKey ↔ DimB.DimBKey   (bidirectional)
+//	FactMeasures.DimBKey → DimB.DimBKey (normal, many→one)
+func bidiSchema() *semantic.Schema {
+	s := semantic.NewSchema()
+	s.Tables["DimA"] = &semantic.Table{Name: "DimA", Columns: map[string]*semantic.Column{
+		"DimAKey":  {Name: "DimAKey", DataType: "INTEGER"},
+		"Category": {Name: "Category", DataType: "TEXT"},
+	}}
+	s.Tables["Bridge"] = &semantic.Table{Name: "Bridge", Columns: map[string]*semantic.Column{
+		"DimAKey": {Name: "DimAKey", DataType: "INTEGER"},
+		"DimBKey": {Name: "DimBKey", DataType: "INTEGER"},
+	}}
+	s.Tables["DimB"] = &semantic.Table{Name: "DimB", Columns: map[string]*semantic.Column{
+		"DimBKey": {Name: "DimBKey", DataType: "INTEGER"},
+		"Name":    {Name: "Name", DataType: "TEXT"},
+	}}
+	s.Tables["FactMeasures"] = &semantic.Table{Name: "FactMeasures", Columns: map[string]*semantic.Column{
+		"DimBKey": {Name: "DimBKey", DataType: "INTEGER"},
+		"Amount":  {Name: "Amount", DataType: "DOUBLE"},
+	}}
+	// Bridge.DimAKey → DimA.DimAKey (normal)
+	s.Relationships = append(s.Relationships, &semantic.Relationship{
+		FromTable: "Bridge", FromColumn: "DimAKey",
+		ToTable: "DimA", ToColumn: "DimAKey",
+	})
+	// Bridge.DimBKey ↔ DimB.DimBKey (bidirectional)
+	s.Relationships = append(s.Relationships, &semantic.Relationship{
+		FromTable: "Bridge", FromColumn: "DimBKey",
+		ToTable: "DimB", ToColumn: "DimBKey",
+		Bidirectional: true,
+	})
+	// FactMeasures.DimBKey → DimB.DimBKey (normal)
+	s.Relationships = append(s.Relationships, &semantic.Relationship{
+		FromTable: "FactMeasures", FromColumn: "DimBKey",
+		ToTable: "DimB", ToColumn: "DimBKey",
+	})
+	return s
+}
+
+func emitBidi(t *testing.T, dux string) string {
+	t.Helper()
+	q := mustParse(t, dux)
+	em := &emitter.Emitter{Schema: bidiSchema()}
+	sql, err := em.Emit(q)
+	if err != nil {
+		t.Fatalf("emit (bidi): %v", err)
+	}
+	return sql
+}
+
+func TestBidirectionalCTE(t *testing.T) {
+	// TC-01: Measure only, filtered by DimA via TREATAS.
+	// The CTE should gate FactMeasures; DimB must not appear in main FROM.
+	t.Run("TC01_MeasureOnly", func(t *testing.T) {
+		sql := emitBidi(t,
+			`EVALUATE SUMMARIZECOLUMNS(
+				TREATAS({"X"}, DimA[Category]),
+				"Total", SUM(FactMeasures[Amount])
+			)`)
+		assertContains(t, sql,
+			"WITH",
+			"_bd_dimb",
+			"SELECT DISTINCT",
+			"bridge",
+			"DimAKey",
+			"FROM factmeasures",
+			"JOIN",
+		)
+		// DimB must NOT appear as a standalone table in the main FROM
+		assertNotContains(t, sql, "FROM dimb")
+		// DimA must be inside the CTE, not in the outer FROM
+		assertNotContains(t, sql, "FROM dima")
+	})
+
+	// TC-02: DimB attributes only, filtered by DimA.
+	// DimB is in main FROM; FactMeasures must not appear.
+	t.Run("TC02_DimBOnly", func(t *testing.T) {
+		sql := emitBidi(t,
+			`EVALUATE SUMMARIZECOLUMNS(
+				DimB[Name],
+				TREATAS({"X"}, DimA[Category])
+			)`)
+		assertContains(t, sql,
+			"WITH",
+			"_bd_dimb",
+			"SELECT DISTINCT",
+			"bridge",
+			"FROM dimb",
+		)
+		assertNotContains(t, sql, "FROM dima")
+		assertNotContains(t, sql, "factmeasures")
+	})
+
+	// TC-03: DimB attributes + measure, filtered by DimA (full chain).
+	t.Run("TC03_FullChain", func(t *testing.T) {
+		sql := emitBidi(t,
+			`EVALUATE SUMMARIZECOLUMNS(
+				DimB[Name],
+				TREATAS({"X"}, DimA[Category]),
+				"Total", SUM(FactMeasures[Amount])
+			)`)
+		assertContains(t, sql,
+			"WITH",
+			"_bd_dimb",
+			"SELECT DISTINCT",
+			"bridge",
+			"FROM dimb",
+			"JOIN _bd_dimb",
+			"JOIN factmeasures",
+			"GROUP BY",
+		)
+		assertNotContains(t, sql, "FROM dima")
+	})
+
+	// TC-04: Multiple DimA values — DISTINCT guard must be present.
+	t.Run("TC04_DistinctGuard", func(t *testing.T) {
+		sql := emitBidi(t,
+			`EVALUATE SUMMARIZECOLUMNS(
+				DimB[Name],
+				TREATAS({"X","Y"}, DimA[Category])
+			)`)
+		assertContains(t, sql, "SELECT DISTINCT", "_bd_dimb")
+	})
+
+	// TC-05: Empty filter context — same SQL shape as TC-01; no special-casing.
+	t.Run("TC05_EmptyFilter", func(t *testing.T) {
+		sql := emitBidi(t,
+			`EVALUATE SUMMARIZECOLUMNS(
+				TREATAS({"NONEXISTENT"}, DimA[Category]),
+				"Total", SUM(FactMeasures[Amount])
+			)`)
+		assertContains(t, sql, "WITH", "_bd_dimb", "SELECT DISTINCT")
+	})
+
+	// Unidirectional relationships must still emit LEFT JOIN, never a CTE.
+	t.Run("UniDirNotAffected", func(t *testing.T) {
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			products[category],
+			"Total", SUM(sales[amount])
+		)`)
+		assertContains(t, sql, "LEFT JOIN")
+		assertNotContains(t, sql, "WITH", "_bd_")
+	})
+}
+
+// ─── Bidirectional validation ─────────────────────────────────────────────────
+
+func TestValidateBidiPaths(t *testing.T) {
+	t.Run("ValidSchema", func(t *testing.T) {
+		if err := semantic.ValidateBidiPaths(bidiSchema()); err != nil {
+			t.Errorf("expected no error for valid bidi schema, got: %v", err)
+		}
+	})
+
+	t.Run("TC06_AmbiguousSchema", func(t *testing.T) {
+		s := bidiSchema()
+		// Add a direct DimA → FactMeasures relationship — now two paths exist:
+		//   [1] DimA → Bridge ↔ DimB → FactMeasures
+		//   [2] DimA → FactMeasures (direct)
+		s.Relationships = append(s.Relationships, &semantic.Relationship{
+			FromTable: "FactMeasures", FromColumn: "DimBKey",
+			ToTable: "DimA", ToColumn: "DimAKey",
+		})
+		// Mark the bidi edge to trigger the ambiguity check.
+		err := semantic.ValidateBidiPaths(s)
+		if err == nil {
+			t.Fatal("expected ambiguity error, got nil")
+		}
+		if !strings.Contains(err.Error(), "ambiguous") {
+			t.Errorf("expected error to mention 'ambiguous', got: %v", err)
+		}
+	})
+
+	t.Run("NoBidiEdges", func(t *testing.T) {
+		s := minSchema()
+		if err := semantic.ValidateBidiPaths(s); err != nil {
+			t.Errorf("expected no error when no bidi edges present, got: %v", err)
+		}
+	})
+}

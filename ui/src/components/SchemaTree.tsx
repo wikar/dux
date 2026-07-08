@@ -1,15 +1,12 @@
-import { createMemo, createSignal, createResource, createEffect, For, Show, onMount, onCleanup } from "solid-js";
+import { createSignal, createResource, createEffect, on, For, Show, onMount, onCleanup } from "solid-js";
 import type { Accessor, Component } from "solid-js";
-import type { Schema, DragPayload } from "dux-client";
-import { duxLanguage, DUX_KEYWORDS, DUX_BUILTINS, isMetaTable, resolveTable } from "dux-client";
-import type { RelTarget } from "dux-client";
-import hljs from "highlight.js/lib/core";
+import type { Schema, DragPayload, Relationship } from "dux-client";
+import { isMetaTable, resolveTable } from "dux-client";
 import TypeIcon from "./TypeIcon";
+import DuxEditor from "./DuxEditor";
 import styles from "./SchemaTree.module.css";
 import { useDuxClient } from "../clientContext";
 import AddRelationshipModal from "./AddRelationshipModal";
-
-hljs.registerLanguage("dux", duxLanguage);
 
 // ─── Draggable field row ─────────────────────────────────────────────────────
 
@@ -103,179 +100,6 @@ const TableGroup: Component<{
   );
 };
 
-// ─── Autocomplete for expression editor ──────────────────────────────────────
-
-function getExprCompletion(text: string, pos: number, schema: Schema | undefined): string {
-  if (pos === 0) return "";
-  const before = text.slice(0, pos);
-
-  const lastOpen = before.lastIndexOf("[");
-  const lastClose = before.lastIndexOf("]");
-  if (lastOpen > lastClose) {
-    const typed = before.slice(lastOpen + 1);
-    const preceding = before.slice(0, lastOpen);
-    let contextTable: string | undefined;
-    if (schema) {
-      const qm = preceding.match(/'([^']+)'\s*$/);
-      if (qm) contextTable = Object.keys(schema.Tables).find((t) => t.toLowerCase() === qm[1].toLowerCase());
-      if (!contextTable) {
-        const bm = preceding.match(/(\w+)\s*$/);
-        if (bm) contextTable = Object.keys(schema.Tables).find((t) => t.toLowerCase() === bm[1].toLowerCase());
-      }
-    }
-    const names: string[] = [];
-    if (schema) {
-      if (contextTable) {
-        const tbl = schema.Tables[contextTable];
-        if (tbl) for (const c of Object.values(tbl.Columns)) names.push(c.Name);
-        const ms = schema.Measures?.[contextTable];
-        if (ms) for (const n of Object.keys(ms)) names.push(n);
-      } else {
-        for (const tbl of Object.values(schema.Tables))
-          for (const c of Object.values(tbl.Columns)) names.push(c.Name);
-        if (schema.Measures)
-          for (const ms of Object.values(schema.Measures))
-            for (const n of Object.keys(ms)) names.push(n);
-      }
-    }
-    const upper = typed.toUpperCase();
-    const match = names.find((f) =>
-      typed.length === 0 ? true : f.toUpperCase().startsWith(upper) && f.toUpperCase() !== upper
-    );
-    return match ? match.slice(typed.length) + "]" : "";
-  }
-
-  if ((before.match(/'/g) || []).length % 2 === 1) {
-    const typed = before.slice(before.lastIndexOf("'") + 1);
-    const tables = schema ? Object.keys(schema.Tables).filter((n) => !isMetaTable(n)) : [];
-    const upper = typed.toUpperCase();
-    const match = tables.find((t) =>
-      typed.length === 0 ? true : t.toUpperCase().startsWith(upper) && t.toUpperCase() !== upper
-    );
-    return match ? match.slice(typed.length) + "'" : "";
-  }
-
-  let start = pos;
-  while (start > 0 && /\w/.test(text[start - 1])) start--;
-  const word = text.slice(start, pos);
-  if (word.length < 1) return "";
-  const upper = word.toUpperCase();
-  const tables = schema ? Object.keys(schema.Tables).filter((n) => !isMetaTable(n)) : [];
-  const match = [...DUX_KEYWORDS, ...DUX_BUILTINS, ...tables].find(
-    (c) => c.toUpperCase().startsWith(upper) && c.toUpperCase() !== upper
-  );
-  return match ? match.slice(word.length) : "";
-}
-
-// ─── Mini DUX expression editor ──────────────────────────────────────────────
-
-const ExprEditor: Component<{
-  value: string;
-  onChange: (v: string) => void;
-  schema: Schema | undefined;
-  placeholder?: string;
-}> = (props) => {
-  let rulerEl!: HTMLSpanElement;
-  let charW = 7.5;
-
-  onMount(() => {
-    const w = rulerEl?.getBoundingClientRect().width;
-    if (w > 0) charW = w;
-  });
-
-  const [ghost, setGhost] = createSignal("");
-  const [ghostCursor, setGhostCursor] = createSignal(0);
-  const [scrollTop, setScrollTop] = createSignal(0);
-  const [scrollLeft, setScrollLeft] = createSignal(0);
-
-  const highlighted = createMemo(() =>
-    props.value ? hljs.highlight(props.value, { language: "dux" }).value + "\n" : "\n"
-  );
-
-  const ghostStyle = createMemo(() => {
-    const g = ghost();
-    if (!g) return "display:none";
-    const before = props.value.slice(0, ghostCursor());
-    const lines = before.split("\n");
-    const top = 8 + (lines.length - 1) * (12.5 * 1.55) - scrollTop();
-    const left = 12 + lines[lines.length - 1].length * charW - scrollLeft();
-    return `display:block;top:${top}px;left:${left}px`;
-  });
-
-  function refresh(text: string, pos: number) {
-    setGhost(getExprCompletion(text, pos, props.schema));
-    setGhostCursor(pos);
-  }
-
-  function onInput(e: InputEvent) {
-    const el = e.currentTarget as HTMLTextAreaElement;
-    props.onChange(el.value);
-    refresh(el.value, el.selectionStart);
-  }
-
-  function onKeyDown(e: KeyboardEvent) {
-    const el = e.currentTarget as HTMLTextAreaElement;
-    const { selectionStart: start, selectionEnd: end, value: val } = el;
-    if (e.key === "Tab") {
-      e.preventDefault();
-      const g = ghost();
-      if (g && start === end) {
-        const nv = val.slice(0, start) + g + val.slice(start);
-        props.onChange(nv);
-        setGhost("");
-        requestAnimationFrame(() => {
-          el.selectionStart = el.selectionEnd = start + g.length;
-          refresh(nv, start + g.length);
-        });
-      } else {
-        setGhost("");
-        props.onChange(val.slice(0, start) + "    " + val.slice(end));
-        requestAnimationFrame(() => { el.selectionStart = el.selectionEnd = start + 4; });
-      }
-      return;
-    }
-    if (e.key === "Escape") setGhost("");
-  }
-
-  function onKeyUp(e: KeyboardEvent) {
-    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
-      const el = e.currentTarget as HTMLTextAreaElement;
-      refresh(el.value, el.selectionStart);
-    }
-  }
-
-  return (
-    <div class={styles.exprWrap}>
-      <span ref={rulerEl} class={styles.exprRuler} aria-hidden>m</span>
-      <pre
-        class={styles.exprHL}
-        style={`margin-top:${-scrollTop()}px;margin-left:${-scrollLeft()}px`}
-        innerHTML={highlighted()}
-        aria-hidden
-      />
-      <span class={styles.exprGhost} style={ghostStyle()} aria-hidden>{ghost()}</span>
-      <textarea
-        class={styles.exprTA}
-        value={props.value}
-        placeholder={props.placeholder}
-        spellcheck={false}
-        onInput={onInput}
-        onKeyDown={onKeyDown}
-        onKeyUp={(e) => onKeyUp(e)}
-        onScroll={(e) => {
-          const ta = e.currentTarget as HTMLTextAreaElement;
-          setScrollTop(ta.scrollTop);
-          setScrollLeft(ta.scrollLeft);
-        }}
-        onClick={(e) => {
-          const el = e.currentTarget as HTMLTextAreaElement;
-          refresh(el.value, el.selectionStart);
-        }}
-      />
-    </div>
-  );
-};
-
 // ─── Add / edit measure modal ─────────────────────────────────────────────────
 
 type EditTarget = { table: string; name: string; expression: string };
@@ -359,11 +183,13 @@ const AddMeasureModal: Component<{
           />
 
           <label class={styles.modalLabel}>Expression</label>
-          <ExprEditor
+          <DuxEditor
+            class={styles.exprWrap}
             value={expression()}
             onChange={setExpression}
             schema={props.schema}
             placeholder="COUNT(matches[match_num])"
+            excludeMetaTables
           />
 
           <Show when={error()}>
@@ -390,8 +216,8 @@ const AddMeasureModal: Component<{
 const RelationshipsSection: Component<{
   schema: Schema;
   onAdd: () => void;
-  onEdit: (r: RelTarget) => void;
-  onDelete: (r: RelTarget) => void;
+  onEdit: (r: Relationship) => void;
+  onDelete: (r: Relationship) => void;
 }> = (props) => {
   const [open, setOpen] = createSignal(false);
   const rels = () => props.schema.Relationships ?? [];
@@ -533,17 +359,11 @@ const SchemaTree: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
   const [schema, { refetch }] = createResource(() => client.fetchSchema());
 
   // Re-fetch when the parent bumps the signal (e.g. after POST /refresh).
-  if (props.refetchSignal !== undefined) {
-    let initial = true;
-    createEffect(() => {
-      props.refetchSignal!();
-      if (initial) { initial = false; return; }
-      refetch();
-    });
-  }
+  createEffect(on(() => props.refetchSignal?.(), () => refetch(), { defer: true }));
+
   const [modal, setModal] = createSignal<ModalMode | null>(null);
   const [editTarget, setEditTarget] = createSignal<EditTarget | undefined>(undefined);
-  const [relEditTarget, setRelEditTarget] = createSignal<RelTarget | undefined>(undefined);
+  const [relEditTarget, setRelEditTarget] = createSignal<Relationship | undefined>(undefined);
 
   const tableNames = () =>
     Object.keys(schema()?.Tables ?? {}).filter((n) => !isMetaTable(n)).sort();
@@ -577,7 +397,7 @@ const SchemaTree: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
   function openMeasureEdit(table: string, name: string, expression: string) {
     setEditTarget({ table, name, expression }); setModal("measure-edit");
   }
-  function openRelEdit(r: RelTarget) { setRelEditTarget(r); setModal("relationship-edit"); }
+  function openRelEdit(r: Relationship) { setRelEditTarget(r); setModal("relationship-edit"); }
   function closeModal() { setModal(null); }
   function saved() { closeModal(); refetch(); }
 

@@ -1,13 +1,11 @@
 import { Show } from "solid-js";
 import type { Component } from "solid-js";
 import type { DropField, FilterField, Aggregate } from "dux-client";
+import { isNumeric } from "dux-client";
 import TypeIcon from "./TypeIcon";
 import styles from "./FieldPill.module.css";
 
 const AGGREGATES: Aggregate[] = ["SUM", "COUNT", "AVERAGE", "MIN", "MAX", "DISTINCTCOUNT", "VALUES"];
-
-const isNumeric = (dt: string) =>
-  /^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|DOUBLE|FLOAT|REAL|DECIMAL|NUMERIC)/i.test(dt);
 
 interface FieldPillProps {
   field: DropField | FilterField;

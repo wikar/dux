@@ -2,24 +2,9 @@
 package parser
 
 import (
-	"fmt"
-
 	"github.com/alecthomas/participle/v2"
 	duxlexer "github.com/danielwikar/dux/lexer"
 )
-
-// ParseError is a structured parse failure with an optional source position.
-type ParseError struct {
-	Pos     string // human-readable "file:line:col", may be empty
-	Message string
-}
-
-func (e *ParseError) Error() string {
-	if e.Pos != "" {
-		return fmt.Sprintf("%s: %s", e.Pos, e.Message)
-	}
-	return e.Message
-}
 
 // duxParser is the compiled participle parser. Built once at init time.
 var duxParser = participle.MustBuild[Query](
@@ -35,13 +20,8 @@ var duxParser = participle.MustBuild[Query](
 )
 
 // Parse parses a DUX query string and returns the root AST node.
-// Syntax errors are returned as *ParseError.
 func Parse(input string) (*Query, error) {
-	q, err := duxParser.ParseString("", input)
-	if err != nil {
-		return nil, &ParseError{Message: err.Error()}
-	}
-	return q, nil
+	return duxParser.ParseString("", input)
 }
 
 // ParseMeasures parses a standalone measures file that contains only a DEFINE

@@ -4,25 +4,16 @@ import type { DropField, FilterField, DragPayload } from "dux-client";
 import FieldPill from "./FieldPill";
 import styles from "./DropZone.module.css";
 
-type DropZoneProps =
-  | {
-      label: string;
-      id: "fields";
-      items: DropField[];
-      onDrop: (payload: DragPayload) => void;
-      onRemove: (idx: number) => void;
-      onAggChange: (idx: number, agg: DropField["aggregate"]) => void;
-      onReorder: (from: number, to: number) => void;
-    }
-  | {
-      label: string;
-      id: "filters";
-      items: FilterField[];
-      onDrop: (payload: DragPayload) => void;
-      onRemove: (idx: number) => void;
-      onValueChange: (idx: number, value: string) => void;
-      onReorder: (from: number, to: number) => void;
-    };
+interface DropZoneProps {
+  label: string;
+  id: "fields" | "filters";
+  items: (DropField | FilterField)[];
+  onDrop: (payload: DragPayload) => void;
+  onRemove: (idx: number) => void;
+  onAggChange?: (idx: number, agg: DropField["aggregate"]) => void;
+  onValueChange?: (idx: number, value: string) => void;
+  onReorder: (from: number, to: number) => void;
+}
 
 const DropZone: Component<DropZoneProps> = (props) => {
   const [over, setOver] = createSignal(false);
@@ -61,10 +52,10 @@ const DropZone: Component<DropZoneProps> = (props) => {
       <div class={styles.label}>{props.label}</div>
       <div class={styles.pillList}>
         <Show
-          when={(props.items as unknown[]).length > 0}
+          when={props.items.length > 0}
           fallback={<div class={styles.empty}>Drag fields here</div>}
         >
-          <For each={props.items as Array<DropField | FilterField>}>
+          <For each={props.items}>
             {(item, idx) => (
               <FieldPill
                 field={item}
@@ -72,24 +63,8 @@ const DropZone: Component<DropZoneProps> = (props) => {
                 index={idx()}
                 onRemove={() => props.onRemove(idx())}
                 onReorder={(to) => props.onReorder(idx(), to)}
-                onAggChange={
-                  props.id === "fields"
-                    ? (agg) =>
-                        (props as Extract<DropZoneProps, { id: "fields" }>).onAggChange(
-                          idx(),
-                          agg
-                        )
-                    : undefined
-                }
-                onValueChange={
-                  props.id === "filters"
-                    ? (val) =>
-                        (props as Extract<DropZoneProps, { id: "filters" }>).onValueChange(
-                          idx(),
-                          val
-                        )
-                    : undefined
-                }
+                onAggChange={(agg) => props.onAggChange?.(idx(), agg)}
+                onValueChange={(val) => props.onValueChange?.(idx(), val)}
               />
             )}
           </For>

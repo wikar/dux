@@ -20,6 +20,7 @@ export interface Relationship {
   FromColumn: string;
   ToTable: string;
   ToColumn: string;
+  Bidirectional?: boolean;
 }
 
 export interface Schema {

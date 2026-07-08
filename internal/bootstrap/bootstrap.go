@@ -52,6 +52,13 @@ func Bootstrap(dbDir, metaPath, tomlPath string) (*semantic.MetadataDB, *sql.DB,
 		log.Printf("warning: loading dux.toml: %v", err)
 	}
 
+	// Validate bidirectional relationships — ambiguous filter graphs are
+	// rejected at startup rather than producing unpredictable SQL at runtime.
+	if err := semantic.ValidateBidiPaths(schema); err != nil {
+		metaDB.Close()
+		return nil, nil, nil, fmt.Errorf("schema validation: %w", err)
+	}
+
 	return metaDB, db, schema, nil
 }
 

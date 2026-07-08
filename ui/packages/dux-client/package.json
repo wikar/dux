@@ -7,16 +7,11 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "scripts": {
-    "build": "vite build",
-    "dev": "vite build --watch"
-  },
   "peerDependencies": {
     "highlight.js": "^11"
   },
   "devDependencies": {
     "highlight.js": "^11.11.1",
-    "typescript": "^5.7.3",
-    "vite": "^6.3.2"
+    "typescript": "^5.7.3"
   }
 }

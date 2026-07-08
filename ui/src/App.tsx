@@ -3,24 +3,15 @@ import { createStore, produce } from "solid-js/store";
 import type { Component } from "solid-js";
 import { DuxClient } from "dux-client";
 import type { DropField, FilterField, DragPayload, Aggregate } from "dux-client";
-import { generateQuery } from "dux-client";
+import { generateQuery, isNumeric } from "dux-client";
 import { DuxClientContext } from "./clientContext";
 import SchemaTree from "./components/SchemaTree";
 import DropZone from "./components/DropZone";
 import QueryPreview from "./components/QueryPreview";
 import ResultTable from "./components/ResultTable";
 import TopBar from "./components/TopBar";
-import type { Tab } from "./components/TopBar";
 import Explorer from "./components/Explorer";
 import styles from "./App.module.css";
-
-const isNumeric = (dt: string) =>
-  /^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|DOUBLE|FLOAT|REAL|DECIMAL|NUMERIC)/i.test(dt);
-
-const TABS: Tab[] = [
-  { id: "home", label: "Home" },
-  { id: "explorer", label: "Explorer" },
-];
 
 const App: Component = () => {
   const client = new DuxClient();
@@ -196,7 +187,6 @@ const App: Component = () => {
     <DuxClientContext.Provider value={client}>
       <div class={styles.appShell}>
       <TopBar
-        tabs={TABS}
         activeTab={activeTab()}
         onTabChange={setActiveTab}
         actions={activeTab() === "home" ? homeActions() : activeTab() === "explorer" ? explorerActions() : undefined}

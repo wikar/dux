@@ -13,10 +13,3 @@ export const resolveTable = (name: string, tableKeys: string[]): string => {
   const match = tableKeys.find((k) => k.endsWith("." + name));
   return match ?? name;
 };
-
-export type RelTarget = {
-  FromTable: string;
-  FromColumn: string;
-  ToTable: string;
-  ToColumn: string;
-};

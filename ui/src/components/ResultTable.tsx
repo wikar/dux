@@ -24,15 +24,6 @@ function cmpCells(a: string | number | null, b: string | number | null): number 
   return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
 }
 
-/** Return the index of the first column where all non-null values are numeric (number or numeric string). */
-function firstNumericCol(data: QueryResponse): number {
-  for (let ci = 0; ci < data.columns.length; ci++) {
-    const vals = data.rows.map((r) => r[ci]).filter((v) => v !== null);
-    if (vals.length > 0 && vals.every(isNumeric)) return ci;
-  }
-  return -1;
-}
-
 const ResultTable: Component<{ query: string }> = (props) => {
   const client = useDuxClient();
   const [data, setData] = createSignal<QueryResponse | null>(null);
@@ -40,6 +31,18 @@ const ResultTable: Component<{ query: string }> = (props) => {
   const [error, setError] = createSignal<string | null>(null);
   const [sortCol, setSortCol] = createSignal<number>(-1);
   const [sortDir, setSortDir] = createSignal<SortDir>("desc");
+
+  /** Set of column indices where every non-null value is numeric (ascending order). */
+  const numericCols = createMemo(() => {
+    const d = data();
+    if (!d) return new Set<number>();
+    const s = new Set<number>();
+    for (let ci = 0; ci < d.columns.length; ci++) {
+      const vals = d.rows.map((r) => r[ci]).filter((v) => v !== null);
+      if (vals.length > 0 && vals.every(isNumeric)) s.add(ci);
+    }
+    return s;
+  });
 
   let debounceTimer: ReturnType<typeof setTimeout>;
 
@@ -56,11 +59,11 @@ const ResultTable: Component<{ query: string }> = (props) => {
       setError(null);
       try {
         const json = await client.executeQuery(q);
-        // Default: sort DESC by first numeric column
-        const firstNum = firstNumericCol(json);
-        setSortCol(firstNum);
-        setSortDir("desc");
         setData(json);
+        // Default: sort DESC by first numeric column
+        const first = numericCols().values().next();
+        setSortCol(first.done ? -1 : first.value);
+        setSortDir("desc");
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
         setData(null);
@@ -78,18 +81,6 @@ const ResultTable: Component<{ query: string }> = (props) => {
       setSortDir("desc");
     }
   }
-
-  /** Set of column indices where every non-null value is numeric. */
-  const numericCols = createMemo(() => {
-    const d = data();
-    if (!d) return new Set<number>();
-    const s = new Set<number>();
-    for (let ci = 0; ci < d.columns.length; ci++) {
-      const vals = d.rows.map((r) => r[ci]).filter((v) => v !== null);
-      if (vals.length > 0 && vals.every(isNumeric)) s.add(ci);
-    }
-    return s;
-  });
 
   const sortedRows = createMemo(() => {
     const d = data();

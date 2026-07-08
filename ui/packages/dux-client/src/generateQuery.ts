@@ -1,6 +1,7 @@
 import type { DropField, FilterField } from "./types";
 
-const isNumeric = (dt: string) =>
+/** True when the DuckDB column type is numeric. */
+export const isNumeric = (dt: string) =>
   /^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|DOUBLE|FLOAT|REAL|DECIMAL|NUMERIC)/i.test(dt);
 
 /**

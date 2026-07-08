@@ -1,19 +1,16 @@
 import { createSignal, Show, onMount, onCleanup } from "solid-js";
 import type { Component } from "solid-js";
-import type { Schema } from "dux-client";
+import type { Schema, Relationship } from "dux-client";
 import { isMetaTable, resolveTable } from "dux-client";
-import type { RelTarget } from "dux-client";
 import styles from "./SchemaTree.module.css";
 import { useDuxClient } from "../clientContext";
-
-export type { RelTarget };
 
 const AddRelationshipModal: Component<{
   schema: Schema;
   /** Existing relationship being edited — enables the delete-old flow. */
-  initial?: RelTarget;
+  initial?: Relationship;
   /** Pre-fill values for a new relationship (e.g. from drag-to-relate). */
-  prefill?: Partial<RelTarget>;
+  prefill?: Partial<Relationship>;
   onClose: () => void;
   onSaved: () => void;
 }> = (props) => {
@@ -41,6 +38,9 @@ const AddRelationshipModal: Component<{
   const [toTable, setToTable] = createSignal(initTo);
   const [toCol, setToCol] = createSignal(
     props.prefill?.ToColumn ?? props.initial?.ToColumn ?? ""
+  );
+  const [bidi, setBidi] = createSignal(
+    props.initial?.Bidirectional ?? false
   );
   const [error, setError] = createSignal("");
   const [saving, setSaving] = createSignal(false);
@@ -94,6 +94,7 @@ const AddRelationshipModal: Component<{
       await client.addRelationship({
         from_table: fromTable(), from_column: fromCol(),
         to_table: toTable(), to_column: toCol(),
+        bidirectional: bidi(),
       });
       // Only delete the old relationship after the new one is saved.
       if (changed) {
@@ -188,9 +189,18 @@ const AddRelationshipModal: Component<{
           </Show>
         </div>
         <div class={styles.modalFooter}>
-          <button class={styles.modalBtn} onClick={reverse} disabled={saving()} style="margin-right:auto">
+          <button class={styles.modalBtn} onClick={reverse} disabled={saving()} style="margin-right:8px">
             ⇄ Reverse
           </button>
+          <label style="display:flex;align-items:center;gap:6px;margin-right:auto;cursor:pointer;font-size:0.875rem">
+            <input
+              type="checkbox"
+              checked={bidi()}
+              onChange={(e) => setBidi((e.currentTarget as HTMLInputElement).checked)}
+              disabled={saving()}
+            />
+            Bidirectional
+          </label>
           <button class={styles.modalBtn} onClick={props.onClose} disabled={saving()}>
             Cancel
           </button>

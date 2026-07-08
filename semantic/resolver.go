@@ -7,10 +7,8 @@ import (
 	"github.com/danielwikar/dux/parser"
 )
 
-// SemanticError is a structured semantic-analysis failure that carries the
-// offending AST node for richer error messages.
+// SemanticError is a structured semantic-analysis failure.
 type SemanticError struct {
-	Node    any
 	Message string
 }
 
@@ -22,9 +20,7 @@ func (e *SemanticError) Error() string {
 // and measure references, validates function argument counts, and annotates
 // expressions with row/filter context for the emitter.
 type Resolver struct {
-	Schema    *Schema
-	FilterCtx FilterContext
-	RowCtx    RowContext
+	Schema *Schema
 	// localMeasures is the per-query measure overlay populated from DEFINE blocks.
 	// It is initialised as a clone of Schema.Measures so that global measures are
 	// visible, and per-query definitions are written here — never into Schema.
@@ -94,12 +90,9 @@ func FindMeasureByName(name string, measures map[string]map[string]*parser.Measu
 // into target. target is the Resolver's per-query localMeasures overlay (which
 // starts as a clone of Schema.Measures), so the shared Schema is never mutated.
 //
-// Step 1 registers every measure name into target so that forward references
-// are visible. Step 2 walks each measure's expression to resolve its
-// column/measure references. Circular references are detected via a visited
-// set and returned as a SemanticError.
+// Every measure name is registered into target so that forward references
+// are visible.
 func PreResolveMeasures(defines []*parser.MeasureDefinition, target map[string]map[string]*parser.MeasureDefinition) error {
-	// Step 1: register all names without resolving expressions.
 	// Measure names must be unique across all tables within the store; a name
 	// that already exists in a different table is rejected to preserve the
 	// guarantee that bare [MeasureName] references are unambiguous.
@@ -113,7 +106,6 @@ func PreResolveMeasures(defines []*parser.MeasureDefinition, target map[string]m
 			}
 			if _, conflicts := defs[name]; conflicts {
 				return &SemanticError{
-					Node:    def,
 					Message: fmt.Sprintf("measure name %q already defined in table %q; measure names must be unique", name, existingTable),
 				}
 			}
@@ -123,27 +115,6 @@ func PreResolveMeasures(defines []*parser.MeasureDefinition, target map[string]m
 		}
 		target[table][name] = def
 	}
-
-	// Step 2: resolve expressions with cycle detection.
-	visited := make(map[string]bool)
-	for _, def := range defines {
-		if err := resolveMeasureExpr(def, visited); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func resolveMeasureExpr(def *parser.MeasureDefinition, visited map[string]bool) error {
-	key := def.Table + "[" + StripBrackets(def.Column) + "]"
-	if visited[key] {
-		return &SemanticError{
-			Node:    def,
-			Message: fmt.Sprintf("circular measure reference detected: %s", key),
-		}
-	}
-	visited[key] = true
-	// TODO: walk def.Expr through a full resolver pass
 	return nil
 }
 
@@ -186,7 +157,6 @@ func (r *Resolver) resolveTableExpr(t *parser.TableExpr) error {
 	// Verify the table exists in the schema (bare or qualified key).
 	if !r.tableExists(tableName) {
 		return &SemanticError{
-			Node:    t,
 			Message: fmt.Sprintf("unknown table %q", tableName),
 		}
 	}
@@ -244,8 +214,6 @@ func (r *Resolver) resolveTerm(t *parser.Term) error {
 }
 
 // resolveFuncCall validates a function name and resolves its arguments.
-// Iterator functions (SUMX, ADDCOLUMNS, etc.) push a RowBinding before
-// resolving their expression arguments.
 func (r *Resolver) resolveFuncCall(fc *parser.FuncCall) error {
 	name := strings.ToUpper(fc.Name)
 
@@ -266,27 +234,13 @@ func (r *Resolver) resolveFuncCall(fc *parser.FuncCall) error {
 	return nil
 }
 
-// resolveIterFunc resolves the source table and inner expression of an
-// iterator function, pushing a RowBinding for the duration.
+// resolveIterFunc resolves the source table and inner expressions of an
+// iterator function.
 func (r *Resolver) resolveIterFunc(fc *parser.FuncCall) error {
 	if len(fc.Args) < 1 {
-		return &SemanticError{Node: fc, Message: fmt.Sprintf("%s requires at least 1 argument", fc.Name)}
+		return &SemanticError{Message: fmt.Sprintf("%s requires at least 1 argument", fc.Name)}
 	}
-
-	// First argument must be a table expression (bare Ident or TableExpr FuncCall).
-	// For resolution purposes, just walk the expression.
-	if err := r.resolveExpr(fc.Args[0]); err != nil {
-		return err
-	}
-
-	// Push a row binding for the source table so inner ColRefs resolve to
-	// the lateral alias rather than the outer aggregate scope.
-	tableName := extractTableName(fc.Args[0])
-	alias := "__row_" + strings.ToLower(tableName)
-	r.RowCtx.Push(RowBinding{Table: tableName, Alias: alias})
-	defer r.RowCtx.Pop()
-
-	for _, arg := range fc.Args[1:] {
+	for _, arg := range fc.Args {
 		if err := r.resolveExpr(arg); err != nil {
 			return err
 		}
@@ -297,9 +251,8 @@ func (r *Resolver) resolveIterFunc(fc *parser.FuncCall) error {
 // resolveCalculate resolves the inner expression and filter arguments of CALCULATE.
 func (r *Resolver) resolveCalculate(fc *parser.FuncCall) error {
 	if len(fc.Args) == 0 {
-		return &SemanticError{Node: fc, Message: "CALCULATE requires at least 1 argument"}
+		return &SemanticError{Message: "CALCULATE requires at least 1 argument"}
 	}
-	// TODO: parse filter arguments and push a FilterSet onto FilterCtx
 	for _, arg := range fc.Args {
 		if err := r.resolveExpr(arg); err != nil {
 			return err
@@ -324,7 +277,7 @@ func (r *Resolver) resolveColRef(cr *parser.ColRef) error {
 		// without a table qualifier is resolved at runtime against the active scope.
 		return nil
 	}
-	tableName := tableKey(cr.Table)
+	tableName := StripSingleQuotes(cr.Table)
 	// VAR-declared names are not in the schema but are valid at execution time.
 	if r.varNames[strings.ToLower(tableName)] {
 		return nil
@@ -342,24 +295,15 @@ func (r *Resolver) resolveColRef(cr *parser.ColRef) error {
 	t, ok := r.Schema.Tables[tableName]
 	if !ok {
 		return &SemanticError{
-			Node:    cr,
 			Message: fmt.Sprintf("unknown table %q", tableName),
 		}
 	}
 	if _, ok := t.Columns[col]; !ok {
 		return &SemanticError{
-			Node:    cr,
 			Message: fmt.Sprintf("unknown column %q in table %q", col, tableName),
 		}
 	}
 	return nil
-}
-
-// tableKey normalises a raw table token to the schema lookup key.
-// Single-quoted table names are stripped; qualified names (db.table) are
-// returned as-is since that is how IntrospectDuckDB keys them.
-func tableKey(raw string) string {
-	return StripSingleQuotes(raw)
 }
 
 // tableExists reports whether tableName is present in the schema. It checks
@@ -400,32 +344,4 @@ func StripSingleQuotes(s string) string {
 		return s[1 : len(s)-1]
 	}
 	return s
-}
-
-// extractTableName attempts to determine the table name from the first
-// argument to an iterator function. Returns an empty string if the table
-// cannot be statically determined. The returned name is always stripped of
-// surrounding single quotes.
-func extractTableName(e *parser.Expr) string {
-	if e == nil || e.Left == nil {
-		return ""
-	}
-	t := e.Left
-	if t.QuotedIdent != "" {
-		return StripSingleQuotes(t.QuotedIdent)
-	}
-	if t.QualifiedIdent != "" {
-		return t.QualifiedIdent // return as-is; caller uses it as a schema key
-	}
-	if t.Ident != "" {
-		return t.Ident
-	}
-	if t.ColRef != nil && t.ColRef.Table != "" {
-		return t.ColRef.Table
-	}
-	if t.FuncCall != nil {
-		// e.g. FILTER(Sales, ...) — table is determined at runtime
-		return ""
-	}
-	return ""
 }

@@ -5,6 +5,7 @@ export interface RelInput {
   from_column: string;
   to_table: string;
   to_column: string;
+  bidirectional?: boolean;
 }
 
 /**

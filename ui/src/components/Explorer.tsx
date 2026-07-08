@@ -2,15 +2,15 @@ import {
   createSignal,
   createResource,
   createEffect,
+  on,
   For,
   Show,
   onMount,
   onCleanup,
 } from "solid-js";
 import type { Accessor, Component } from "solid-js";
-import type { Schema } from "dux-client";
+import type { Schema, Relationship } from "dux-client";
 import { isMetaTable, resolveTable } from "dux-client";
-import type { RelTarget } from "dux-client";
 import dagre from "dagre";
 import TableCard from "./TableCard";
 import AddRelationshipModal from "./AddRelationshipModal";
@@ -67,21 +67,14 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
   const [schema, { refetch }] = createResource(() => client.fetchSchema());
 
   // Re-fetch when the parent bumps the signal (e.g. after POST /refresh).
-  if (props.refetchSignal !== undefined) {
-    let initial = true;
-    createEffect(() => {
-      props.refetchSignal!();
-      if (initial) { initial = false; return; }
-      refetch();
-    });
-  }
+  createEffect(on(() => props.refetchSignal?.(), () => refetch(), { defer: true }));
 
   // Absolute positions for each table card on the canvas
   const [positions, setPositions] = createSignal<Record<string, Pos>>({});
 
   // Modal state
-  const [relPrefill, setRelPrefill] = createSignal<Partial<RelTarget> | null>(null);
-  const [relEdit, setRelEdit] = createSignal<RelTarget | null>(null);
+  const [relPrefill, setRelPrefill] = createSignal<Partial<Relationship> | null>(null);
+  const [relEdit, setRelEdit] = createSignal<Relationship | null>(null);
   const [previewTable, setPreviewTable] = createSignal<string | null>(null);
 
   // In-progress relationship drag (renders as a dashed SVG line)
@@ -206,7 +199,7 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
   // are guaranteed to be painted before we call getBoundingClientRect.
   // For columns inside a max-height scrollable card, dots that are scrolled out
   // of view are clamped to the card's visible bounds.
-  const [lineData, setLineData] = createSignal<{ key: string; d: string; x1: number; y1: number; x2: number; y2: number }[]>([]);
+  const [lineData, setLineData] = createSignal<{ key: string; d: string; x1: number; y1: number; x2: number; y2: number; bidirectional: boolean }[]>([]);
   const [hoveredRel, setHoveredRel] = createSignal<string | null>(null);
   let lineRaf = 0;
 
@@ -263,6 +256,7 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
         key,
         d: `M${p1.x},${p1.y} C${p1.x + dir * cxOff},${p1.y} ${p2.x - dir * cxOff},${p2.y} ${p2.x},${p2.y}`,
         x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y,
+        bidirectional: rel.Bidirectional ?? false,
       }];
     });
 
@@ -323,8 +317,19 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
                     x1={line.x1} y1={line.y1}
                     x2={line.x2} y2={line.y2}
                   >
-                    <stop offset="0%" stop-color="#fab387" />
-                    <stop offset="30%" stop-color="#89b4fa" />
+                    {!line.bidirectional && (
+                      <>
+                        <stop offset="0%"   stop-color="#fab387" />
+                        <stop offset="50%"  stop-color="#89b4fa" />
+                      </>
+                    )}
+                    {line.bidirectional && (
+                      <>
+                        <stop offset="0%"   stop-color="#a6e3a1" />
+                        <stop offset="50%"  stop-color="#89b4fa" />
+                        <stop offset="100%" stop-color="#a6e3a1" />
+                      </>
+                    )}
                   </linearGradient>
                 )}
               </For>
@@ -340,7 +345,7 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
                   onMouseLeave={() => setHoveredRel((h) => h === line.key ? null : h)}
                   onDblClick={() => {
                     const [ft, fc, tt, tc] = line.key.split("\0");
-                    setRelEdit({ FromTable: ft, FromColumn: fc, ToTable: tt, ToColumn: tc });
+                    setRelEdit({ FromTable: ft, FromColumn: fc, ToTable: tt, ToColumn: tc, Bidirectional: line.bidirectional });
                   }}
                 />
               )}

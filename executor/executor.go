@@ -44,17 +44,8 @@ func Execute(db *sql.DB, schema *semantic.Schema, input string) ([]string, []map
 
 	em := &emitter.Emitter{Schema: schema, Measures: r.EffectiveMeasures()}
 
-	// Fast path: no VAR bindings — single query, no connection pinning needed.
-	if len(q.Evaluate.Vars) == 0 {
-		sqlStr, err := em.Emit(q)
-		if err != nil {
-			return nil, nil, fmt.Errorf("emit: %w", err)
-		}
-		return runQuery(db, sqlStr)
-	}
-
-	// VAR path: pin a single connection so that session temp tables are visible
-	// across all statements.
+	// Pin a single connection so that session temp tables created for VAR
+	// bindings are visible across all statements.
 	ctx, cancel := context.WithTimeout(context.Background(), QueryTimeout)
 	defer cancel()
 	conn, err := db.Conn(ctx)
@@ -109,19 +100,6 @@ func Execute(db *sql.DB, schema *semantic.Schema, input string) ([]string, []map
 	}
 
 	rows, err := conn.QueryContext(ctx, sqlStr)
-	if err != nil {
-		return nil, nil, fmt.Errorf("execute query: %w", err)
-	}
-	defer rows.Close()
-	return scanRows(rows)
-}
-
-// runQuery executes a raw SQL string against db and returns the ordered column
-// names and all rows as []map[string]any.
-func runQuery(db *sql.DB, query string) ([]string, []map[string]any, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), QueryTimeout)
-	defer cancel()
-	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, nil, fmt.Errorf("execute query: %w", err)
 	}

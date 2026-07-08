@@ -49,6 +49,7 @@ func (m *MetadataDB) initSchema() error {
 		from_column TEXT NOT NULL,
 		to_table    TEXT NOT NULL,
 		to_column   TEXT NOT NULL,
+		bidirectional BOOLEAN NOT NULL DEFAULT FALSE,
 		UNIQUE (from_table, from_column, to_table, to_column)
 	);
 
@@ -83,7 +84,7 @@ func (m *MetadataDB) LoadIntoSchema(schema *Schema) error {
 
 func (m *MetadataDB) loadRelationships(schema *Schema) error {
 	rows, err := m.db.Query(`
-		SELECT from_table, from_column, to_table, to_column
+		SELECT from_table, from_column, to_table, to_column, bidirectional
 		FROM dux_relationships
 		ORDER BY id
 	`)
@@ -94,14 +95,16 @@ func (m *MetadataDB) loadRelationships(schema *Schema) error {
 
 	for rows.Next() {
 		var fromTable, fromColumn, toTable, toColumn string
-		if err := rows.Scan(&fromTable, &fromColumn, &toTable, &toColumn); err != nil {
+		var bidirectional sql.NullBool
+		if err := rows.Scan(&fromTable, &fromColumn, &toTable, &toColumn, &bidirectional); err != nil {
 			return fmt.Errorf("scan relationship: %w", err)
 		}
 		schema.Relationships = append(schema.Relationships, &Relationship{
-			FromTable:  fromTable,
-			FromColumn: fromColumn,
-			ToTable:    toTable,
-			ToColumn:   toColumn,
+			FromTable:     fromTable,
+			FromColumn:    fromColumn,
+			ToTable:       toTable,
+			ToColumn:      toColumn,
+			Bidirectional: bidirectional.Bool,
 		})
 	}
 	return rows.Err()
@@ -145,12 +148,12 @@ func (m *MetadataDB) loadMeasures(schema *Schema) error {
 // ─── Save ─────────────────────────────────────────────────────────────────────
 
 // SaveRelationship inserts or replaces a relationship in the metadata DB.
-func (m *MetadataDB) SaveRelationship(fromTable, fromColumn, toTable, toColumn string) error {
+func (m *MetadataDB) SaveRelationship(fromTable, fromColumn, toTable, toColumn string, bidirectional bool) error {
 	_, err := m.db.Exec(`
-		INSERT INTO dux_relationships (id, from_table, from_column, to_table, to_column)
-		VALUES (nextval('dux_relationships_id_seq'), ?, ?, ?, ?)
-		ON CONFLICT (from_table, from_column, to_table, to_column) DO NOTHING
-	`, fromTable, fromColumn, toTable, toColumn)
+		INSERT INTO dux_relationships (id, from_table, from_column, to_table, to_column, bidirectional)
+		VALUES (nextval('dux_relationships_id_seq'), ?, ?, ?, ?, ?)
+		ON CONFLICT (from_table, from_column, to_table, to_column) DO UPDATE SET bidirectional = excluded.bidirectional
+	`, fromTable, fromColumn, toTable, toColumn, bidirectional)
 	if err != nil {
 		return fmt.Errorf("save relationship: %w", err)
 	}
@@ -206,20 +209,19 @@ func (m *MetadataDB) ReplaceAllFromSchema(schema *Schema) error {
 
 	for _, r := range schema.Relationships {
 		if _, err := tx.Exec(`
-			INSERT INTO dux_relationships (id, from_table, from_column, to_table, to_column)
-			VALUES (nextval('dux_relationships_id_seq'), ?, ?, ?, ?)
-		`, r.FromTable, r.FromColumn, r.ToTable, r.ToColumn); err != nil {
+			INSERT INTO dux_relationships (id, from_table, from_column, to_table, to_column, bidirectional)
+			VALUES (nextval('dux_relationships_id_seq'), ?, ?, ?, ?, ?)
+		`, r.FromTable, r.FromColumn, r.ToTable, r.ToColumn, r.Bidirectional); err != nil {
 			return fmt.Errorf("insert relationship: %w", err)
 		}
 	}
 
 	for tableName, defs := range schema.Measures {
 		for measureName, def := range defs {
-			expr := measureExprString(def)
 			if _, err := tx.Exec(`
 				INSERT INTO dux_measures (id, table_name, name, expression)
 				VALUES (nextval('dux_measures_id_seq'), ?, ?, ?)
-			`, tableName, measureName, expr); err != nil {
+			`, tableName, measureName, def.Expression); err != nil {
 				return fmt.Errorf("insert measure %q: %w", measureName, err)
 			}
 		}

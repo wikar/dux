@@ -7,7 +7,7 @@
 //	GET  /export  — exports measures and relationships as TOML
 //	POST /import  — imports a dux.toml body, updates the metadata DB
 //	POST /refresh — re-introspects attached databases and reloads metadata
-//	GET  /docs/*  — Scalar API reference UI
+//	GET  /docs    — Scalar API reference UI
 //	GET  /        — query builder UI
 //
 // Usage:
@@ -18,20 +18,19 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
-	"net/url"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/gofiber/fiber/v3"
-	"github.com/gofiber/fiber/v3/middleware/static"
-	"github.com/yokeTH/gofiber-scalar/scalar/v3"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 
@@ -45,7 +44,7 @@ import (
 // version is overridden at build time via -ldflags="-X main.version=..."
 var version = "dev"
 
-// openAPISpec is a minimal OpenAPI 3.1 document describing the Fiber API.
+// openAPISpec is a minimal OpenAPI 3.1 document describing the HTTP API.
 const openAPISpec = `{
   "openapi": "3.1.0",
   "info": {
@@ -214,10 +213,11 @@ const openAPISpec = `{
                   "items": {
                     "type": "object",
                     "properties": {
-                      "from_table":  { "type": "string" },
-                      "from_column": { "type": "string" },
-                      "to_table":    { "type": "string" },
-                      "to_column":   { "type": "string" }
+                      "from_table":     { "type": "string" },
+                      "from_column":    { "type": "string" },
+                      "to_table":       { "type": "string" },
+                      "to_column":      { "type": "string" },
+                      "bidirectional":  { "type": "boolean", "default": false }
                     }
                   }
                 }
@@ -237,10 +237,11 @@ const openAPISpec = `{
                 "type": "object",
                 "required": ["from_table", "from_column", "to_table", "to_column"],
                 "properties": {
-                  "from_table":  { "type": "string", "example": "atp.matches" },
-                  "from_column": { "type": "string", "example": "winner_id" },
-                  "to_table":    { "type": "string", "example": "atp.players" },
-                  "to_column":   { "type": "string", "example": "player_id" }
+                  "from_table":    { "type": "string", "example": "atp.matches" },
+                  "from_column":   { "type": "string", "example": "winner_id" },
+                  "to_table":      { "type": "string", "example": "atp.players" },
+                  "to_column":     { "type": "string", "example": "player_id" },
+                  "bidirectional": { "type": "boolean", "default": false, "description": "When true, filter context propagates bidirectionally through this edge. Rejected at schema load if it creates an ambiguous filter graph." }
                 }
               }
             }
@@ -290,6 +291,9 @@ const openAPISpec = `{
   }
 }`
 
+// docsHTML is a minimal Scalar API reference page served at GET /docs.
+const docsHTML = `<!doctype html><title>DUX Query API</title><div id="app"></div><script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script><script>Scalar.createApiReference('#app', {url: '/openapi.json'})</script>`
+
 const usage = `duxd — DUX long-running query server
 
 Usage:
@@ -302,12 +306,12 @@ Endpoints served on :80:
   POST /import         Import a dux.toml body into the metadata database
   GET  /measures       List all measures
   POST /measures       Add a measure
-  DELETE /measures/:table/:name  Delete a measure
+  DELETE /measures/{table}/{name}  Delete a measure
   GET  /relationships  List all relationships
   POST /relationships  Add a relationship
   DELETE /relationships  Delete a relationship
   POST /refresh        Refresh schema from attached databases
-  GET  /docs/*         Scalar interactive API reference
+  GET  /docs           Scalar interactive API reference
   GET  /               Query builder UI
 
 Flags:
@@ -364,46 +368,41 @@ func main() {
 	// Schema is shared between HTTP handlers; protect mutations with a mutex.
 	var schemaMu sync.RWMutex
 
-	// Fiber app on :80 — primary API with Scalar docs.
-	app := fiber.New(fiber.Config{})
+	mux := http.NewServeMux()
 
-	app.Post("/query", fiberQueryHandler(db, schema, &schemaMu))
-	app.Get("/schema", fiberSchemaHandler(schema, &schemaMu))
-	app.Get("/export", fiberExportHandler(schema, &schemaMu))
-	app.Post("/import", fiberImportHandler(metaDB, schema, &schemaMu))
-	app.Get("/measures", fiberListMeasuresHandler(schema, &schemaMu))
-	app.Post("/measures", fiberAddMeasureHandler(metaDB, schema, &schemaMu))
-	app.Delete("/measures/:table/:name", fiberDeleteMeasureHandler(metaDB, schema, &schemaMu))
-	app.Get("/relationships", fiberListRelationshipsHandler(schema, &schemaMu))
-	app.Post("/relationships", fiberAddRelationshipHandler(metaDB, schema, &schemaMu))
-	app.Delete("/relationships", fiberDeleteRelationshipHandler(metaDB, schema, &schemaMu))
-	app.Post("/refresh", fiberRefreshHandler(metaDB, db, schema, &schemaMu, *tomlPath))
+	mux.HandleFunc("POST /query", queryHandler(db, schema, &schemaMu))
+	mux.HandleFunc("GET /schema", schemaHandler(schema, &schemaMu))
+	mux.HandleFunc("GET /export", exportHandler(schema, &schemaMu))
+	mux.HandleFunc("POST /import", importHandler(metaDB, schema, &schemaMu))
+	mux.HandleFunc("GET /measures", listMeasuresHandler(schema, &schemaMu))
+	mux.HandleFunc("POST /measures", addMeasureHandler(metaDB, schema, &schemaMu))
+	mux.HandleFunc("DELETE /measures/{table}/{name}", deleteMeasureHandler(metaDB, schema, &schemaMu))
+	mux.HandleFunc("GET /relationships", listRelationshipsHandler(schema, &schemaMu))
+	mux.HandleFunc("POST /relationships", addRelationshipHandler(metaDB, schema, &schemaMu))
+	mux.HandleFunc("DELETE /relationships", deleteRelationshipHandler(metaDB, schema, &schemaMu))
+	mux.HandleFunc("POST /refresh", refreshHandler(metaDB, db, schema, &schemaMu, *tomlPath))
 
-	app.Get("/docs/*", scalar.New(scalar.Config{
-		Title:             "DUX Query API",
-		FileContentString: openAPISpec,
-		Path:              "/docs",
-	}))
+	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, openAPISpec)
+	})
+	mux.HandleFunc("GET /docs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, docsHTML)
+	})
 
 	// Serve the query builder UI embedded at build time.
 	distFS, err := fs.Sub(ui.Dist, "dist")
 	if err != nil {
 		log.Fatalf("ui embed: %v", err)
 	}
-	app.Use("/", static.New("", static.Config{FS: distFS}))
+	mux.Handle("/", http.FileServerFS(distFS))
 
 	// Watch db-dir for new database files and auto-attach them.
 	go watchDBDir(*dbDir, metaPath, metaDB, schema, &schemaMu)
 
 	log.Printf("duxd %s listening on :8080  (metadata: %s)", version, metaPath)
-	log.Fatal(app.Listen(":8080"))
-}
-
-// attachDataDBs attaches every *.duckdb and *.db file in dir (except the
-// metadata DB itself) to db as a read-only named attachment.
-// The attachment alias is the filename stem (e.g. "atp.duckdb" → alias "atp").
-func attachDataDBs(db *sql.DB, dir, metaPath string) error {
-	return bootstrap.AttachDataDBs(db, dir, metaPath)
+	log.Fatal(http.ListenAndServe(":8080", mux))
 }
 
 // watchDBDir monitors dir for new *.duckdb and *.db files, attaching them
@@ -472,9 +471,7 @@ func watchDBDir(dir, metaPath string, metaDB *semantic.MetadataDB, schema *seman
 					schema.Tables[k] = t
 				}
 			}
-			for _, r := range fresh.Relationships {
-				schema.Relationships = append(schema.Relationships, r)
-			}
+			schema.Relationships = append(schema.Relationships, fresh.Relationships...)
 			mu.Unlock()
 			log.Printf("schema refreshed — %d tables, %d relationships total", len(schema.Tables), len(schema.Relationships))
 
@@ -507,67 +504,89 @@ func pivotResults(cols []string, rowMaps []map[string]any) queryResponse {
 	return queryResponse{Columns: cols, Rows: rows}
 }
 
-// fiberQueryHandler handles POST /query on the Fiber app.
-func fiberQueryHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) fiber.Handler {
-	return func(c fiber.Ctx) error {
-		body := c.Body()
+// writeJSON encodes v as JSON to w with the appropriate Content-Type.
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("warning: encode response: %v", err)
+	}
+}
+
+// queryHandler handles POST /query.
+func queryHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		if len(body) == 0 {
-			return c.Status(fiber.StatusBadRequest).SendString("empty query body")
+			http.Error(w, "empty query body", http.StatusBadRequest)
+			return
 		}
 
 		mu.RLock()
 		cols, rowMaps, err := executor.Execute(db, schema, string(body))
 		mu.RUnlock()
 		if err != nil {
-			return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 
-		return c.JSON(pivotResults(cols, rowMaps))
+		writeJSON(w, pivotResults(cols, rowMaps))
 	}
 }
 
-// fiberSchemaHandler serves GET /schema on the Fiber app.
-func fiberSchemaHandler(schema *semantic.Schema, mu *sync.RWMutex) fiber.Handler {
-	return func(c fiber.Ctx) error {
+// schemaHandler serves GET /schema.
+func schemaHandler(schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		mu.RLock()
 		defer mu.RUnlock()
-		return c.JSON(schema)
+		writeJSON(w, schema)
 	}
 }
 
-// fiberExportHandler serves GET /export — returns the current schema as dux.toml.
-func fiberExportHandler(schema *semantic.Schema, mu *sync.RWMutex) fiber.Handler {
-	return func(c fiber.Ctx) error {
+// exportHandler serves GET /export — returns the current schema as dux.toml.
+func exportHandler(schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		mu.RLock()
 		data, err := semantic.ExportDuxTOML(schema)
 		mu.RUnlock()
 		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		c.Set("Content-Type", "text/plain; charset=utf-8")
-		c.Set("Content-Disposition", `attachment; filename="dux.toml"`)
-		return c.Send(data)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="dux.toml"`)
+		_, _ = w.Write(data)
 	}
 }
 
-// fiberImportHandler serves POST /import — accepts a dux.toml body, persists
+// importHandler serves POST /import — accepts a dux.toml body, persists
 // it to the metadata DB, and reloads the in-memory schema.
-func fiberImportHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) fiber.Handler {
-	return func(c fiber.Ctx) error {
-		body := c.Body()
+func importHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		if len(body) == 0 {
-			return c.Status(fiber.StatusBadRequest).SendString("empty body")
+			http.Error(w, "empty body", http.StatusBadRequest)
+			return
 		}
 
 		// Parse the uploaded TOML into a fresh schema overlay.
 		importSchema := semantic.NewSchema()
 		if err := semantic.LoadDuxTOMLBytes(body, importSchema); err != nil {
-			return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 
 		// Persist to the metadata DB.
 		if err := metaDB.ReplaceAllFromSchema(importSchema); err != nil {
-			return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 
 		// Reload the live schema from DB (under write lock).
@@ -576,11 +595,12 @@ func fiberImportHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu
 		schema.Measures = make(map[string]map[string]*parser.MeasureDefinition)
 		if err := metaDB.LoadIntoSchema(schema); err != nil {
 			mu.Unlock()
-			return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 		mu.Unlock()
 
-		return c.SendString("imported successfully")
+		_, _ = io.WriteString(w, "imported successfully")
 	}
 }
 
@@ -592,10 +612,10 @@ type measureRequest struct {
 	Expression string `json:"expression"`
 }
 
-// fiberListMeasuresHandler serves GET /measures.
+// listMeasuresHandler serves GET /measures.
 // Returns all measures as a flat JSON array.
-func fiberListMeasuresHandler(schema *semantic.Schema, mu *sync.RWMutex) fiber.Handler {
-	return func(c fiber.Ctx) error {
+func listMeasuresHandler(schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		type item struct {
 			Table      string `json:"table"`
 			Name       string `json:"name"`
@@ -612,20 +632,22 @@ func fiberListMeasuresHandler(schema *semantic.Schema, mu *sync.RWMutex) fiber.H
 		if out == nil {
 			out = []item{}
 		}
-		return c.JSON(out)
+		writeJSON(w, out)
 	}
 }
 
-// fiberAddMeasureHandler serves POST /measures.
+// addMeasureHandler serves POST /measures.
 // Body: {"table":"...","name":"...","expression":"..."}
-func fiberAddMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) fiber.Handler {
-	return func(c fiber.Ctx) error {
+func addMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		var req measureRequest
-		if err := c.Bind().JSON(&req); err != nil {
-			return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 		if req.Table == "" || req.Name == "" || req.Expression == "" {
-			return c.Status(fiber.StatusBadRequest).SendString("table, name, and expression are required")
+			http.Error(w, "table, name, and expression are required", http.StatusBadRequest)
+			return
 		}
 
 		// Parse the expression through the DUX parser to produce an AST node.
@@ -633,14 +655,16 @@ func fiberAddMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema
 			fmt.Sprintf("DEFINE\n    MEASURE %s[%s] = %s", req.Table, req.Name, req.Expression),
 		)
 		if err != nil || len(defines) == 0 {
-			return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("invalid expression: %v", err))
+			http.Error(w, fmt.Sprintf("invalid expression: %v", err), http.StatusBadRequest)
+			return
 		}
 		def := defines[0]
 		def.Expression = req.Expression
 
 		// Persist to the metadata DB.
 		if err := metaDB.SaveMeasure(req.Table, req.Name, req.Expression); err != nil {
-			return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 
 		// Update the in-memory schema.
@@ -651,21 +675,23 @@ func fiberAddMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema
 		schema.Measures[req.Table][req.Name] = def
 		mu.Unlock()
 
-		return c.SendStatus(fiber.StatusCreated)
+		w.WriteHeader(http.StatusCreated)
 	}
 }
 
-// fiberDeleteMeasureHandler serves DELETE /measures/:table/:name.
-func fiberDeleteMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) fiber.Handler {
-	return func(c fiber.Ctx) error {
-		table, _ := url.PathUnescape(c.Params("table"))
-		name, _ := url.PathUnescape(c.Params("name"))
+// deleteMeasureHandler serves DELETE /measures/{table}/{name}.
+func deleteMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		table := r.PathValue("table")
+		name := r.PathValue("name")
 		if table == "" || name == "" {
-			return c.Status(fiber.StatusBadRequest).SendString("table and name are required")
+			http.Error(w, "table and name are required", http.StatusBadRequest)
+			return
 		}
 
 		if err := metaDB.DeleteMeasure(table, name); err != nil {
-			return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 
 		mu.Lock()
@@ -677,113 +703,161 @@ func fiberDeleteMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Sch
 		}
 		mu.Unlock()
 
-		return c.SendStatus(fiber.StatusNoContent)
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
 // ─── Relationships ────────────────────────────────────────────────────────────
 
 type relationshipRequest struct {
-	FromTable  string `json:"from_table"`
-	FromColumn string `json:"from_column"`
-	ToTable    string `json:"to_table"`
-	ToColumn   string `json:"to_column"`
+	FromTable     string `json:"from_table"`
+	FromColumn    string `json:"from_column"`
+	ToTable       string `json:"to_table"`
+	ToColumn      string `json:"to_column"`
+	Bidirectional bool   `json:"bidirectional"`
 }
 
-// fiberListRelationshipsHandler serves GET /relationships.
+// listRelationshipsHandler serves GET /relationships.
 // Returns all relationships as a JSON array.
-func fiberListRelationshipsHandler(schema *semantic.Schema, mu *sync.RWMutex) fiber.Handler {
-	return func(c fiber.Ctx) error {
+func listRelationshipsHandler(schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		mu.RLock()
 		rels := schema.Relationships
 		mu.RUnlock()
 		if rels == nil {
 			rels = []*semantic.Relationship{}
 		}
-		return c.JSON(rels)
+		writeJSON(w, rels)
 	}
 }
 
-// fiberAddRelationshipHandler serves POST /relationships.
+// addRelationshipHandler serves POST /relationships.
 // Body: {"from_table":"...","from_column":"...","to_table":"...","to_column":"..."}
-func fiberAddRelationshipHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) fiber.Handler {
-	return func(c fiber.Ctx) error {
+func addRelationshipHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		var req relationshipRequest
-		if err := c.Bind().JSON(&req); err != nil {
-			return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 		if req.FromTable == "" || req.FromColumn == "" || req.ToTable == "" || req.ToColumn == "" {
-			return c.Status(fiber.StatusBadRequest).SendString("from_table, from_column, to_table, and to_column are required")
+			http.Error(w, "from_table, from_column, to_table, and to_column are required", http.StatusBadRequest)
+			return
 		}
 
-		if err := metaDB.SaveRelationship(req.FromTable, req.FromColumn, req.ToTable, req.ToColumn); err != nil {
-			return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+		if err := metaDB.SaveRelationship(req.FromTable, req.FromColumn, req.ToTable, req.ToColumn, req.Bidirectional); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 
 		mu.Lock()
-		schema.Relationships = append(schema.Relationships, &semantic.Relationship{
-			FromTable:  req.FromTable,
-			FromColumn: req.FromColumn,
-			ToTable:    req.ToTable,
-			ToColumn:   req.ToColumn,
-		})
+		// Find and update an existing entry (upsert) rather than always appending,
+		// so that updating bidirectional on an existing relationship does not create
+		// a duplicate entry in the in-memory schema.
+		var existing *semantic.Relationship
+		for _, rel := range schema.Relationships {
+			if rel.FromTable == req.FromTable && rel.FromColumn == req.FromColumn &&
+				rel.ToTable == req.ToTable && rel.ToColumn == req.ToColumn {
+				existing = rel
+				break
+			}
+		}
+		prevBidi := false
+		if existing != nil {
+			prevBidi = existing.Bidirectional
+			existing.Bidirectional = req.Bidirectional
+		} else {
+			schema.Relationships = append(schema.Relationships, &semantic.Relationship{
+				FromTable:     req.FromTable,
+				FromColumn:    req.FromColumn,
+				ToTable:       req.ToTable,
+				ToColumn:      req.ToColumn,
+				Bidirectional: req.Bidirectional,
+			})
+		}
+		if err := semantic.ValidateBidiPaths(schema); err != nil {
+			// Ambiguous schema — roll back the change.
+			if existing != nil {
+				existing.Bidirectional = prevBidi
+			} else {
+				rels := schema.Relationships[:0]
+				for _, rel := range schema.Relationships {
+					if rel.FromTable == req.FromTable && rel.FromColumn == req.FromColumn &&
+						rel.ToTable == req.ToTable && rel.ToColumn == req.ToColumn {
+						continue
+					}
+					rels = append(rels, rel)
+				}
+				schema.Relationships = rels
+			}
+			mu.Unlock()
+			_ = metaDB.DeleteRelationship(req.FromTable, req.FromColumn, req.ToTable, req.ToColumn)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		mu.Unlock()
 
-		return c.SendStatus(fiber.StatusCreated)
+		w.WriteHeader(http.StatusCreated)
 	}
 }
 
-// fiberDeleteRelationshipHandler serves DELETE /relationships.
+// deleteRelationshipHandler serves DELETE /relationships.
 // Body: {"from_table":"...","from_column":"...","to_table":"...","to_column":"..."}
-func fiberDeleteRelationshipHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) fiber.Handler {
-	return func(c fiber.Ctx) error {
+func deleteRelationshipHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		var req relationshipRequest
-		if err := c.Bind().JSON(&req); err != nil {
-			return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 		if req.FromTable == "" || req.FromColumn == "" || req.ToTable == "" || req.ToColumn == "" {
-			return c.Status(fiber.StatusBadRequest).SendString("from_table, from_column, to_table, and to_column are required")
+			http.Error(w, "from_table, from_column, to_table, and to_column are required", http.StatusBadRequest)
+			return
 		}
 
 		if err := metaDB.DeleteRelationship(req.FromTable, req.FromColumn, req.ToTable, req.ToColumn); err != nil {
-			return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 
 		mu.Lock()
 		rels := schema.Relationships[:0]
-		for _, r := range schema.Relationships {
-			if r.FromTable == req.FromTable && r.FromColumn == req.FromColumn &&
-				r.ToTable == req.ToTable && r.ToColumn == req.ToColumn {
+		for _, rel := range schema.Relationships {
+			if rel.FromTable == req.FromTable && rel.FromColumn == req.FromColumn &&
+				rel.ToTable == req.ToTable && rel.ToColumn == req.ToColumn {
 				continue
 			}
-			rels = append(rels, r)
+			rels = append(rels, rel)
 		}
 		schema.Relationships = rels
 		mu.Unlock()
 
-		return c.SendStatus(fiber.StatusNoContent)
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
-// fiberRefreshHandler serves POST /refresh — re-introspects all attached
+// refreshHandler serves POST /refresh — re-introspects all attached
 // databases and reloads persisted metadata and TOML configuration.
-func fiberRefreshHandler(metaDB *semantic.MetadataDB, db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex, tomlPath string) fiber.Handler {
-	return func(c fiber.Ctx) error {
+func refreshHandler(metaDB *semantic.MetadataDB, db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex, tomlPath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		// Re-introspect the database to pick up schema changes.
 		fresh, err := semantic.IntrospectDuckDB(db)
 		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("introspect: %v", err))
+			http.Error(w, fmt.Sprintf("introspect: %v", err), http.StatusInternalServerError)
+			return
 		}
 
 		// Reload persisted metadata (relationships + measures) from the metadata DB.
 		if err := metaDB.LoadIntoSchema(fresh); err != nil {
-			return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("load metadata: %v", err))
+			http.Error(w, fmt.Sprintf("load metadata: %v", err), http.StatusInternalServerError)
+			return
 		}
 
 		// Re-apply TOML overlay if the file exists.
 		if _, statErr := os.Stat(tomlPath); statErr == nil {
 			if err := semantic.LoadDuxTOML(tomlPath, fresh); err != nil {
-				return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("load toml: %v", err))
+				http.Error(w, fmt.Sprintf("load toml: %v", err), http.StatusInternalServerError)
+				return
 			}
 		}
 
@@ -795,6 +869,6 @@ func fiberRefreshHandler(metaDB *semantic.MetadataDB, db *sql.DB, schema *semant
 		mu.Unlock()
 
 		log.Printf("schema refreshed — %d tables, %d relationships", len(fresh.Tables), len(fresh.Relationships))
-		return c.SendString("schema refreshed")
+		_, _ = io.WriteString(w, "schema refreshed")
 	}
 }
