@@ -916,14 +916,24 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 			allTables = append(allTables, t)
 		}
 	}
+	// projected tracks tables the outer SELECT list references (group columns
+	// and measure expressions). TREATAS tables are filter-only — they are the
+	// only tables a bidirectional CTE may absorb out of the main FROM clause.
+	projected := map[string]bool{}
 	for _, arg := range groupArgs {
+		isTreatas := arg.Left != nil && arg.Left.FuncCall != nil &&
+			strings.ToUpper(arg.Left.FuncCall.Name) == "TREATAS" && len(arg.Right) == 0
 		for _, t := range collectTables(arg) {
 			addTbl(t)
+			if !isTreatas {
+				projected[strings.ToLower(t)] = true
+			}
 		}
 	}
 	for i := 1; i < len(pairArgs); i += 2 {
 		for _, t := range collectTables(pairArgs[i]) {
 			addTbl(t)
+			projected[strings.ToLower(t)] = true
 		}
 	}
 
@@ -949,16 +959,24 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 				return "", jpErr
 			}
 			// Check for bidirectional steps — use CTE codegen when present.
+			// The CTE gates fan-out by absorbing the filter-source chain, so it
+			// only applies when that chain is filter-only; if the outer SELECT
+			// needs one of those tables (bidiOK=false), fall back to plain joins.
 			hasBidi := slices.ContainsFunc(jp.Steps, func(s semantic.JoinStep) bool { return s.Bidirectional })
+			bidiOK := false
 			if hasBidi {
-				wc, fc, op, bErr := e.buildBidiSQL(allTables, jp, wherePreds)
+				wc, fc, op, ok, bErr := e.buildBidiSQL(allTables, jp, wherePreds, projected)
 				if bErr != nil {
 					return "", bErr
 				}
-				withClause = wc
-				fromClause = fc
-				outerPreds = op
-			} else {
+				if ok {
+					withClause = wc
+					fromClause = fc
+					outerPreds = op
+					bidiOK = true
+				}
+			}
+			if !bidiOK {
 				var fbuf strings.Builder
 				fbuf.WriteString(sqlIdent(allTables[0]))
 				for _, step := range jp.Steps {
@@ -1023,11 +1041,17 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 //
 // preds is a slice of (table string, sql string) pairs produced by
 // emitSummarizeColumns when processing TREATAS group arguments.
+//
+// projected is the set of lower-cased tables the outer SELECT list references.
+// Absorbing a projected table would leave the outer query referencing a table
+// missing from its FROM clause, so ok=false is returned and the caller emits
+// plain LEFT JOINs instead.
 func (e *Emitter) buildBidiSQL(
 	allTables []string,
 	jp *semantic.JoinPath,
 	preds []taggedPred,
-) (withClause, fromClause string, outerPreds []string, err error) {
+	projected map[string]bool,
+) (withClause, fromClause string, outerPreds []string, ok bool, err error) {
 	// Find the first bidi step.
 	bidiIdx := -1
 	for i, step := range jp.Steps {
@@ -1037,10 +1061,7 @@ func (e *Emitter) buildBidiSQL(
 		}
 	}
 	if bidiIdx == -1 {
-		for _, p := range preds {
-			outerPreds = append(outerPreds, p.sql)
-		}
-		return "", "", outerPreds, nil
+		return "", "", nil, false, nil
 	}
 
 	step := jp.Steps[bidiIdx]
@@ -1061,7 +1082,9 @@ func (e *Emitter) buildBidiSQL(
 		cteKeyCol = step.OnToCol
 		cteJoinCol = step.OnFromCol
 	}
-	cteName := "_bd_" + target
+	// CTE names are plain identifiers: strip db qualifiers and spaces from the
+	// target table name (e.g. "atp.players" → "_bd_atp_players").
+	cteName := "_bd_" + strings.NewReplacer(".", "_", " ", "_").Replace(target)
 
 	// absorbed: set of lower-cased table names pulled into the CTE body.
 	// The bridge is always absorbed; the tables leading to or from the bridge
@@ -1080,6 +1103,15 @@ func (e *Emitter) buildBidiSQL(
 			if absorbed[strings.ToLower(s.FromTable)] {
 				absorbed[strings.ToLower(s.Table)] = true
 			}
+		}
+	}
+
+	// The CTE pattern only works when every absorbed table is filter-only.
+	// If the outer SELECT projects one of them (e.g. the bidi bridge is the
+	// group-by table), the CTE cannot gate the join — report not-applicable.
+	for t := range absorbed {
+		if projected[t] {
+			return "", "", nil, false, nil
 		}
 	}
 
@@ -1138,7 +1170,7 @@ func (e *Emitter) buildBidiSQL(
 		}
 	}
 	if mainPrimary == "" {
-		return "", "", nil, fmt.Errorf(
+		return "", "", nil, false, fmt.Errorf(
 			"bidirectional CTE %q absorbed all query tables; no primary table for FROM clause",
 			cteName,
 		)
@@ -1197,7 +1229,7 @@ func (e *Emitter) buildBidiSQL(
 	}
 
 	fromClause = fromBuf.String()
-	return withClause, fromClause, outerPreds, nil
+	return withClause, fromClause, outerPreds, true, nil
 }
 
 // emitProjectColumns emits ADDCOLUMNS / SELECTCOLUMNS:

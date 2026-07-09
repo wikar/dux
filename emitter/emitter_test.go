@@ -954,6 +954,88 @@ func TestBidirectionalCTE(t *testing.T) {
 		assertContains(t, sql, "WITH", "_bd_dimb", "SELECT DISTINCT")
 	})
 
+	// Db-qualified table names must not leak dots into the CTE name
+	// (a CTE name is a plain identifier: "_bd_atp_dimb", not "_bd_atp.dimb").
+	t.Run("QualifiedTableName", func(t *testing.T) {
+		s := bidiSchema()
+		qualified := semantic.NewSchema()
+		for name, tbl := range s.Tables {
+			qualified.Tables["atp."+name] = &semantic.Table{Name: "atp." + tbl.Name, Columns: tbl.Columns}
+		}
+		for _, r := range s.Relationships {
+			qualified.Relationships = append(qualified.Relationships, &semantic.Relationship{
+				FromTable: "atp." + r.FromTable, FromColumn: r.FromColumn,
+				ToTable: "atp." + r.ToTable, ToColumn: r.ToColumn,
+				Bidirectional: r.Bidirectional,
+			})
+		}
+		q := mustParse(t,
+			`EVALUATE SUMMARIZECOLUMNS(
+				TREATAS({"X"}, atp.DimA[Category]),
+				"Total", SUM(atp.FactMeasures[Amount])
+			)`)
+		em := &emitter.Emitter{Schema: qualified}
+		sql, err := em.Emit(q)
+		if err != nil {
+			t.Fatalf("emit (qualified bidi): %v", err)
+		}
+		assertContains(t, sql, "WITH _bd_atp_dimb AS", "JOIN _bd_atp_dimb")
+		assertNotContains(t, sql, "_bd_atp.dimb")
+	})
+
+	// When the outer SELECT projects a table the CTE would absorb (here the
+	// bidi bridge bev.Date is the group-by table, and bev.Sales feeds a
+	// measure), CTE codegen is not applicable: fall back to plain LEFT JOINs.
+	// Regression: this used to emit "FROM bev.date JOIN bev.date" (duplicate
+	// alias) with bev.Sales absorbed out of the outer FROM entirely.
+	t.Run("ProjectedBridgeFallsBackToJoins", func(t *testing.T) {
+		s := semantic.NewSchema()
+		s.Tables["bev.Date"] = &semantic.Table{Name: "bev.Date", Columns: map[string]*semantic.Column{
+			"DateKey":  {Name: "DateKey", DataType: "INTEGER"},
+			"FullDate": {Name: "FullDate", DataType: "DATE"},
+			"Year":     {Name: "Year", DataType: "INTEGER"},
+		}}
+		s.Tables["bev.Sales"] = &semantic.Table{Name: "bev.Sales", Columns: map[string]*semantic.Column{
+			"DateKey":  {Name: "DateKey", DataType: "INTEGER"},
+			"Quantity": {Name: "Quantity", DataType: "INTEGER"},
+		}}
+		s.Tables["atp.players"] = &semantic.Table{Name: "atp.players", Columns: map[string]*semantic.Column{
+			"player_id": {Name: "player_id", DataType: "INTEGER"},
+			"dob":       {Name: "dob", DataType: "DATE"},
+		}}
+		s.Tables["atp.matches"] = &semantic.Table{Name: "atp.matches", Columns: map[string]*semantic.Column{
+			"winner_id":  {Name: "winner_id", DataType: "INTEGER"},
+			"winner_age": {Name: "winner_age", DataType: "DOUBLE"},
+		}}
+		s.Relationships = append(s.Relationships,
+			&semantic.Relationship{FromTable: "bev.Sales", FromColumn: "DateKey", ToTable: "bev.Date", ToColumn: "DateKey"},
+			&semantic.Relationship{FromTable: "bev.Date", FromColumn: "FullDate", ToTable: "atp.players", ToColumn: "dob", Bidirectional: true},
+			&semantic.Relationship{FromTable: "atp.matches", FromColumn: "winner_id", ToTable: "atp.players", ToColumn: "player_id"},
+		)
+		q := mustParse(t,
+			`EVALUATE SUMMARIZECOLUMNS(
+				bev.Date[Year],
+				"Quantity", SUM(bev.Sales[Quantity]),
+				"winner_age", SUM(atp.matches[winner_age])
+			)`)
+		em := &emitter.Emitter{Schema: s}
+		sql, err := em.Emit(q)
+		if err != nil {
+			t.Fatalf("emit (projected bridge): %v", err)
+		}
+		assertNotContains(t, sql, "_bd_", "WITH")
+		assertContains(t, sql,
+			"FROM bev.date",
+			"LEFT JOIN bev.sales",
+			"LEFT JOIN atp.players",
+			"LEFT JOIN atp.matches",
+		)
+		// Each table must be joined exactly once — no duplicate aliases.
+		if n := strings.Count(strings.ToLower(sql), "join bev.date"); n != 0 {
+			t.Errorf("bev.date must only appear in FROM, found %d JOINs:\n%s", n, sql)
+		}
+	})
+
 	// Unidirectional relationships must still emit LEFT JOIN, never a CTE.
 	t.Run("UniDirNotAffected", func(t *testing.T) {
 		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
