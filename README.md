@@ -356,8 +356,26 @@ These evaluate an expression row-by-row over a table.
 
 | Function | Description |
 |----------|-------------|
-| `CALCULATE(expr, filters...)` | Evaluate `expr` with additional filter predicates |
+| `CALCULATE(expr, filters...)` | Evaluate `expr` under a modified filter context |
 | `TREATAS(source, T[C])` | Apply a set of values as a filter on `T[C]` |
+| `ALL(T)` / `ALL(T[C]...)` | Remove filters from a table or specific columns; as a table expression, the unfiltered table / distinct column values |
+| `ALLEXCEPT(T, T[C]...)` | Remove all filters on `T` except those on the listed columns |
+| `REMOVEFILTERS(...)` | Alias of `ALL(...)` inside CALCULATE |
+| `KEEPFILTERS(pred)` | Intersect `pred` with the existing filter context instead of overriding it |
+
+Inside `CALCULATE`, a plain predicate on a column **replaces** any existing filter on that column (DAX shorthand semantics) — use `KEEPFILTERS` to intersect instead. The canonical percent-of-total pattern works as expected:
+
+```dux
+EVALUATE
+    SUMMARIZECOLUMNS(
+        atp.matches[surface],
+        "Matches", COUNT(atp.matches[match_num]),
+        "Share",   DIVIDE(
+            COUNT(atp.matches[match_num]),
+            CALCULATE(COUNT(atp.matches[match_num]), ALL(atp.matches))
+        )
+    )
+```
 
 ### Scalar / logical
 

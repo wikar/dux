@@ -304,9 +304,152 @@ func TestFilterContext(t *testing.T) {
 		assertContains(t, sql, "SELECT DISTINCT", "FROM sales")
 	})
 
+	t.Run("ALL_table", func(t *testing.T) {
+		sql := emit(t, `EVALUATE ALL(sales)`)
+		assertContains(t, sql, "SELECT * FROM sales")
+	})
+
+	t.Run("ALL_column", func(t *testing.T) {
+		sql := emit(t, `EVALUATE ALL(sales[region])`)
+		assertContains(t, sql, "SELECT DISTINCT region FROM sales")
+	})
+
+	t.Run("ALL_multi_column", func(t *testing.T) {
+		sql := emit(t, `EVALUATE ALL(sales[region], sales[product])`)
+		assertContains(t, sql, "SELECT DISTINCT region, product FROM sales")
+	})
+
+	t.Run("FILTER_over_ALL_table", func(t *testing.T) {
+		sql := emit(t, `EVALUATE FILTER(ALL(sales), sales[amount] > 100)`)
+		assertContains(t, sql, "SELECT * FROM sales WHERE", "> 100")
+	})
+
 	t.Run("DISTINCT", func(t *testing.T) {
 		sql := emit(t, `EVALUATE DISTINCT(sales[region])`)
 		assertContains(t, sql, "SELECT DISTINCT", "FROM sales")
+	})
+}
+
+// ─── Filter-context modifiers (ALL / ALLEXCEPT / REMOVEFILTERS / KEEPFILTERS) ──
+
+func TestFilterContextModifiers(t *testing.T) {
+	t.Run("ALL_table_grand_total", func(t *testing.T) {
+		// ALL(sales) removes the region group filter → uncorrelated subquery.
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			sales[region],
+			"Total", SUM(sales[amount]),
+			"Grand", CALCULATE(SUM(sales[amount]), ALL(sales))
+		)`)
+		assertContains(t, sql, "(SELECT SUM(amount) FROM sales AS __cal_sales)", "GROUP BY region")
+		assertNotContains(t, sql, "__cal_sales.region = sales.region")
+	})
+
+	t.Run("ALL_inside_DIVIDE_pct_of_total", func(t *testing.T) {
+		// The group context must reach CALCULATE nested inside DIVIDE.
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			sales[region],
+			"Pct", DIVIDE(SUM(sales[amount]), CALCULATE(SUM(sales[amount]), ALL(sales)))
+		)`)
+		assertContains(t, sql, "(SELECT SUM(amount) FROM sales AS __cal_sales)", "CASE WHEN")
+	})
+
+	t.Run("ALL_column_keeps_other_keys", func(t *testing.T) {
+		// ALL(sales[product]) clears only the product key; region stays correlated.
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			sales[region],
+			sales[product],
+			"RegionTotal", CALCULATE(SUM(sales[amount]), ALL(sales[product]))
+		)`)
+		assertContains(t, sql, "__cal_sales.region = sales.region")
+		assertNotContains(t, sql, "__cal_sales.product = sales.product")
+	})
+
+	t.Run("ALLEXCEPT_keeps_listed_column", func(t *testing.T) {
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			sales[region],
+			sales[product],
+			"RegionTotal", CALCULATE(SUM(sales[amount]), ALLEXCEPT(sales, sales[region]))
+		)`)
+		assertContains(t, sql, "__cal_sales.region = sales.region")
+		assertNotContains(t, sql, "__cal_sales.product = sales.product")
+	})
+
+	t.Run("REMOVEFILTERS_is_ALL", func(t *testing.T) {
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			sales[region],
+			"Grand", CALCULATE(SUM(sales[amount]), REMOVEFILTERS(sales))
+		)`)
+		assertContains(t, sql, "(SELECT SUM(amount) FROM sales AS __cal_sales)")
+	})
+
+	t.Run("KEEPFILTERS_stays_additive", func(t *testing.T) {
+		// KEEPFILTERS never removes group filters → fast path FILTER (WHERE ...).
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			sales[region],
+			"North", CALCULATE(SUM(sales[amount]), KEEPFILTERS(sales[region] = "North"))
+		)`)
+		assertContains(t, sql, "FILTER (WHERE", "'North'")
+		assertNotContains(t, sql, "__cal_sales")
+	})
+
+	t.Run("predicate_overrides_group_key", func(t *testing.T) {
+		// DAX shorthand: a plain predicate on a grouped column replaces that
+		// group filter — every region row shows the North value.
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			sales[region],
+			"NorthTotal", CALCULATE(SUM(sales[amount]), sales[region] = "North")
+		)`)
+		assertContains(t, sql, "__cal_sales", "region = 'North'")
+		assertNotContains(t, sql, "__cal_sales.region = sales.region")
+	})
+
+	t.Run("predicate_on_nongrouped_column_stays_fast_path", func(t *testing.T) {
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			sales[region],
+			"BigQty", CALCULATE(SUM(sales[amount]), sales[qty] > 2)
+		)`)
+		assertContains(t, sql, "FILTER (WHERE")
+		assertNotContains(t, sql, "__cal_sales")
+	})
+
+	t.Run("FILTER_ALL_pattern", func(t *testing.T) {
+		// CALCULATE(x, FILTER(ALL(T), pred)) — canonical DAX replacement filter.
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			sales[region],
+			"NorthTotal", CALCULATE(SUM(sales[amount]), FILTER(ALL(sales), sales[region] = "North"))
+		)`)
+		assertContains(t, sql, "__cal_sales", "region = 'North'")
+		assertNotContains(t, sql, "__cal_sales.region = sales.region")
+	})
+
+	t.Run("ALL_with_joined_dimension_key_kept", func(t *testing.T) {
+		// Group by products[category]; ALL(sales) keeps the category filter,
+		// which must be re-joined and correlated inside the subquery.
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			products[category],
+			"AllSales", CALCULATE(SUM(sales[amount]), ALL(sales))
+		)`)
+		assertContains(t, sql,
+			"LEFT JOIN products AS __cal_products",
+			"__cal_products.category = products.category")
+	})
+
+	t.Run("ALL_removes_TREATAS_filter_on_same_table", func(t *testing.T) {
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			sales[region],
+			TREATAS({"North"}, sales[region]),
+			"Grand", CALCULATE(SUM(sales[amount]), ALL(sales))
+		)`)
+		assertContains(t, sql, "(SELECT SUM(amount) FROM sales AS __cal_sales)")
+		// The outer query keeps its TREATAS filter.
+		assertContains(t, sql, "WHERE region IN ('North')")
+	})
+
+	t.Run("standalone_CALCULATE_with_ALL", func(t *testing.T) {
+		// Outside SUMMARIZECOLUMNS there is no ambient context — ALL just
+		// yields the unfiltered aggregate as a complete SELECT.
+		sql := emit(t, `EVALUATE CALCULATE(SUM(sales[amount]), ALL(sales))`)
+		assertContains(t, sql, "(SELECT SUM(amount) FROM sales)")
 	})
 }
 
@@ -429,9 +572,14 @@ func TestEmitErrors(t *testing.T) {
 		wantErr string
 	}{
 		{
-			"ALL_not_implemented",
-			`EVALUATE ALL(sales[region])`,
-			"not yet implemented",
+			"REMOVEFILTERS_outside_CALCULATE",
+			`EVALUATE REMOVEFILTERS(sales)`,
+			"only valid as a CALCULATE filter argument",
+		},
+		{
+			"ALL_no_args_outside_CALCULATE",
+			`EVALUATE ALL()`,
+			"only valid inside CALCULATE",
 		},
 		{
 			"TREATAS_wrong_arg_count",

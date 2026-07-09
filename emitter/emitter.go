@@ -24,14 +24,20 @@ type Emitter struct {
 	Measures   map[string]map[string]*parser.MeasureDefinition
 	ScalarVars map[string]any
 	rowCtx     semantic.RowContext
+	// groupCtx is set while emitting SUMMARIZECOLUMNS measure expressions so
+	// nested CALCULATE calls can resolve filter-context modifiers (ALL etc.)
+	// against the enclosing group-by keys. See filterctx.go.
+	groupCtx *groupContext
 }
 
 // taggedPred pairs an emitted SQL WHERE predicate with the lower-cased
-// canonical name of the table it logically filters (e.g. from a TREATAS call).
-// The bidi CTE builder uses this to route predicates into CTE bodies when
-// their source table is absorbed by the CTE.
+// canonical name of the table (and, when known, the resolved column) it
+// logically filters (e.g. from a TREATAS call). The bidi CTE builder uses the
+// table to route predicates into CTE bodies; CALCULATE filter-context
+// modifiers use table+col to decide whether ALL(...) clears the predicate.
 type taggedPred struct {
 	table string // lower-cased canonical table name; "" if unknown
+	col   string // lower-cased resolved column name; "" if unknown
 	sql   string
 }
 
@@ -271,8 +277,12 @@ func (e *Emitter) emitFuncCall(fc *parser.FuncCall) (string, error) {
 		return e.emitTreatas(fc)
 	case "FILTER":
 		return e.emitFilter(fc)
-	case "ALL":
+	case "ALL", "ALLEXCEPT":
 		return e.emitAll(fc)
+	case "REMOVEFILTERS", "KEEPFILTERS":
+		// Intercepted by classifyCalcArgs when used inside CALCULATE; reaching
+		// here means the call appeared somewhere it has no meaning.
+		return "", fmt.Errorf("%s is only valid as a CALCULATE filter argument", strings.ToUpper(fc.Name))
 	case "VALUES":
 		return e.emitValuesOrDistinct("VALUES", fc)
 	case "DISTINCT":
@@ -435,20 +445,32 @@ func (e *Emitter) emitConcatenateX(fc *parser.FuncCall) (string, error) {
 // When there are no filter arguments the inner expression is returned as-is.
 // At the top level this is a complete SQL statement; when used as a scalar
 // expression inside ADDCOLUMNS column lists, the caller wraps it in parens.
+//
+// Inside a SUMMARIZECOLUMNS group context, emission is delegated to
+// emitCalculateGrouped (filterctx.go), which understands filter-context
+// modifiers (ALL, ALLEXCEPT, REMOVEFILTERS, KEEPFILTERS).
 func (e *Emitter) emitCalculate(fc *parser.FuncCall) (string, error) {
 	if len(fc.Args) == 0 {
 		return "", fmt.Errorf("CALCULATE requires at least 1 argument")
 	}
 
+	if e.groupCtx != nil {
+		return e.emitCalculateGrouped(fc)
+	}
+
+	// Standalone context: there are no ambient filters, so ALL-family
+	// modifiers have nothing to remove — classify to strip them and unwrap
+	// KEEPFILTERS / FILTER(ALL(T), pred) into plain predicates.
+	cm, err := e.classifyCalcArgs(fc.Args[1:])
+	if err != nil {
+		return "", err
+	}
+	preds := append(append([]*parser.Expr{}, cm.preds...), cm.keepPreds...)
+
 	// Emit the inner expression (aggregate or measure reference).
 	inner, err := e.emitExpr(fc.Args[0])
 	if err != nil {
 		return "", err
-	}
-
-	// If no filters, just return the expression.
-	if len(fc.Args) == 1 {
-		return inner, nil
 	}
 
 	// Collect all tables: inner expression establishes the primary table,
@@ -465,15 +487,28 @@ func (e *Emitter) emitCalculate(fc *parser.FuncCall) (string, error) {
 	for _, t := range collectTables(fc.Args[0]) {
 		addTbl(t)
 	}
-	for _, arg := range fc.Args[1:] {
+	for _, arg := range preds {
 		for _, t := range collectTables(arg) {
 			addTbl(t)
 		}
 	}
 
+	// If no predicates remain (none given, or only ALL-family modifiers),
+	// emit a plain aggregate over the unfiltered tables.
+	if len(preds) == 0 {
+		if cm.hasRemovals() && len(allTables) > 0 {
+			fromClause, fErr := e.calcFromClause(allTables)
+			if fErr != nil {
+				return "", fErr
+			}
+			return fmt.Sprintf("(SELECT %s FROM %s)", inner, fromClause), nil
+		}
+		return inner, nil
+	}
+
 	// Emit filter predicates.
 	var filters []string
-	for _, arg := range fc.Args[1:] {
+	for _, arg := range preds {
 		f, err := e.emitExpr(arg)
 		if err != nil {
 			return "", err
@@ -483,75 +518,43 @@ func (e *Emitter) emitCalculate(fc *parser.FuncCall) (string, error) {
 	whereClause := strings.Join(filters, " AND ")
 
 	// Build FROM clause, joining additional tables when needed.
-	var fromClause string
-	switch len(allTables) {
-	case 0:
-		// no tables
-	case 1:
-		fromClause = sqlIdent(allTables[0])
-	default:
-		if e.Schema != nil {
-			jp, jpErr := semantic.InferJoinPath(e.Schema, allTables)
-			if jpErr != nil {
-				return "", jpErr
-			}
-			var fbuf strings.Builder
-			fbuf.WriteString(sqlIdent(allTables[0]))
-			for _, step := range jp.Steps {
-				fmt.Fprintf(&fbuf, "\nLEFT JOIN %s ON %s.%s = %s.%s",
-					sqlIdent(step.Table),
-					sqlIdent(step.FromTable), step.OnFromCol,
-					sqlIdent(step.Table), step.OnToCol,
-				)
-			}
-			fromClause = fbuf.String()
-		} else {
-			parts := make([]string, len(allTables))
-			for i, t := range allTables {
-				parts[i] = sqlIdent(t)
-			}
-			fromClause = strings.Join(parts, ", ")
-		}
-	}
-
-	if fromClause == "" {
+	if len(allTables) == 0 {
 		return fmt.Sprintf("(SELECT %s WHERE %s)", inner, whereClause), nil
+	}
+	fromClause, err := e.calcFromClause(allTables)
+	if err != nil {
+		return "", err
 	}
 	return fmt.Sprintf("(SELECT %s FROM %s WHERE %s)", inner, fromClause, whereClause), nil
 }
 
-// emitCalculateAsFilter emits a CALCULATE call using the SQL aggregate FILTER
-// syntax:  AGG(col) FILTER (WHERE pred1 AND pred2).
-// This is used when CALCULATE appears as a measure expression inside
-// SUMMARIZECOLUMNS so the filter respects the outer GROUP BY context instead
-// of producing a non-correlated scalar subquery.
-func (e *Emitter) emitCalculateAsFilter(fc *parser.FuncCall) (string, error) {
-	if len(fc.Args) == 0 {
-		return "", fmt.Errorf("CALCULATE requires at least 1 argument")
+// calcFromClause builds a FROM clause over allTables, inferring join steps
+// through the schema when more than one table is involved.
+func (e *Emitter) calcFromClause(allTables []string) (string, error) {
+	if len(allTables) == 1 {
+		return sqlIdent(allTables[0]), nil
 	}
-
-	// Emit the inner expression (aggregate).
-	inner, err := e.emitExpr(fc.Args[0])
+	if e.Schema == nil {
+		parts := make([]string, len(allTables))
+		for i, t := range allTables {
+			parts[i] = sqlIdent(t)
+		}
+		return strings.Join(parts, ", "), nil
+	}
+	jp, err := semantic.InferJoinPath(e.Schema, allTables)
 	if err != nil {
 		return "", err
 	}
-
-	// No filters → just return the aggregate as-is.
-	if len(fc.Args) == 1 {
-		return inner, nil
+	var fbuf strings.Builder
+	fbuf.WriteString(sqlIdent(allTables[0]))
+	for _, step := range jp.Steps {
+		fmt.Fprintf(&fbuf, "\nLEFT JOIN %s ON %s.%s = %s.%s",
+			sqlIdent(step.Table),
+			sqlIdent(step.FromTable), step.OnFromCol,
+			sqlIdent(step.Table), step.OnToCol,
+		)
 	}
-
-	// Emit filter predicates.
-	var filters []string
-	for _, arg := range fc.Args[1:] {
-		f, err := e.emitExpr(arg)
-		if err != nil {
-			return "", err
-		}
-		filters = append(filters, f)
-	}
-
-	return fmt.Sprintf("%s FILTER (WHERE %s)", inner, strings.Join(filters, " AND ")), nil
+	return fbuf.String(), nil
 }
 
 // emitTreatas emits TREATAS(source, t[col]) as a SQL IN predicate for use
@@ -626,11 +629,49 @@ func (e *Emitter) emitFilter(fc *parser.FuncCall) (string, error) {
 	return fmt.Sprintf("(SELECT * FROM %s WHERE %s)", sqlIdent(table), pred), nil
 }
 
-// emitAll stubs ALL filter-clearing. Full semantics require filter-context integration.
-func (e *Emitter) emitAll(_ *parser.FuncCall) (string, error) {
-	// ALL() requires filter-context propagation which is not yet implemented.
-	// Returning an error is safer than silently emitting a no-op SQL comment.
-	return "", fmt.Errorf("ALL() requires filter-context support which is not yet implemented")
+// emitAll emits ALL / ALLEXCEPT as a table expression. When used as a
+// CALCULATE filter argument, these calls are intercepted by classifyCalcArgs
+// (filterctx.go) and never reach this function.
+//
+//	ALL(T)             → SELECT * FROM t              (T without filters)
+//	ALL(T[C], T[D]...) → SELECT DISTINCT c, d FROM t  (distinct combinations)
+//	ALLEXCEPT(T, ...)  → SELECT * FROM t              (no ambient filters to keep)
+func (e *Emitter) emitAll(fc *parser.FuncCall) (string, error) {
+	name := strings.ToUpper(fc.Name)
+	if len(fc.Args) == 0 {
+		return "", fmt.Errorf("%s() with no arguments is only valid inside CALCULATE", name)
+	}
+
+	// Bare table form (first argument is not a column reference).
+	if t := fc.Args[0].Left; t != nil && t.ColRef == nil {
+		table, err := e.tableNameFromExpr(fc.Args[0])
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", name, err)
+		}
+		return fmt.Sprintf("SELECT * FROM %s", sqlIdent(table)), nil
+	}
+
+	// Column form: one or more column references from the same table.
+	var table string
+	var cols []string
+	for _, a := range fc.Args {
+		t := a.Left
+		if t == nil || t.ColRef == nil || len(a.Right) > 0 {
+			return "", fmt.Errorf("%s: arguments must all be column references", name)
+		}
+		tbl := semantic.StripSingleQuotes(t.ColRef.Table)
+		if tbl == "" {
+			return "", fmt.Errorf("%s: column reference requires a table qualifier", name)
+		}
+		switch {
+		case table == "":
+			table = tbl
+		case !strings.EqualFold(tbl, table):
+			return "", fmt.Errorf("%s: all column references must belong to the same table", name)
+		}
+		cols = append(cols, e.resolveColName(tbl, semantic.StripBrackets(t.ColRef.Column)))
+	}
+	return fmt.Sprintf("(SELECT DISTINCT %s FROM %s)", strings.Join(cols, ", "), sqlIdent(table)), nil
 }
 
 func (e *Emitter) emitValuesOrDistinct(name string, fc *parser.FuncCall) (string, error) {
@@ -688,60 +729,78 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	// treated as unnamed aggregate outputs (SELECT only) rather than grouping
 	// keys — placing an aggregate in GROUP BY is invalid SQL.
 	// TREATAS calls are separated into WHERE predicates, paired with their
-	// target table for bidi CTE routing.
-	var groupCols []string      // emitted SQL for true group-by keys
-	var inlineMeasures []string // emitted SQL for measure refs in the group position
-	var wherePreds []taggedPred // TREATAS filter predicates with their source tables
+	// target table/column for bidi CTE routing and CALCULATE modifier checks.
+	var groupCols []string         // emitted SQL for true group-by keys
+	var groupKeys []groupKey       // table+column of plain ColRef group keys
+	var measureArgs []*parser.Expr // measure refs in the group position (emitted later)
+	var wherePreds []taggedPred    // TREATAS filter predicates with their source tables
 	for _, arg := range groupArgs {
 		// Check for a TREATAS call — emit as a WHERE predicate, not a group column.
 		if arg.Left != nil && arg.Left.FuncCall != nil &&
 			strings.ToUpper(arg.Left.FuncCall.Name) == "TREATAS" && len(arg.Right) == 0 {
 			treatasFC := arg.Left.FuncCall
-			// Extract the target table name for bidi CTE routing.
-			var predTable string
+			// Extract the target table and column for routing.
+			var predTable, predCol string
 			if len(treatasFC.Args) == 2 && treatasFC.Args[1].Left != nil && treatasFC.Args[1].Left.ColRef != nil {
-				predTable = strings.ToLower(semantic.StripSingleQuotes(treatasFC.Args[1].Left.ColRef.Table))
+				cr := treatasFC.Args[1].Left.ColRef
+				tbl := semantic.StripSingleQuotes(cr.Table)
+				predTable = strings.ToLower(tbl)
+				predCol = strings.ToLower(e.resolveColName(tbl, semantic.StripBrackets(cr.Column)))
 			}
 			pred, err := e.emitTreatas(treatasFC)
 			if err != nil {
 				return "", err
 			}
-			wherePreds = append(wherePreds, taggedPred{table: predTable, sql: pred})
+			wherePreds = append(wherePreds, taggedPred{table: predTable, col: predCol, sql: pred})
 			continue
 		}
 		if e.isMeasureColRef(arg) {
-			sql, err := e.emitExpr(arg)
-			if err != nil {
-				return "", err
-			}
-			inlineMeasures = append(inlineMeasures, sql)
+			measureArgs = append(measureArgs, arg)
 		} else {
 			gc, err := e.emitExpr(arg)
 			if err != nil {
 				return "", err
 			}
 			groupCols = append(groupCols, gc)
+			// Plain column refs become group keys that CALCULATE modifiers
+			// can remove; computed group expressions are not removable.
+			if arg.Left != nil && arg.Left.ColRef != nil && arg.Left.ColRef.Table != "" && len(arg.Right) == 0 {
+				tbl := semantic.StripSingleQuotes(arg.Left.ColRef.Table)
+				groupKeys = append(groupKeys, groupKey{
+					table: tbl,
+					col:   e.resolveColName(tbl, semantic.StripBrackets(arg.Left.ColRef.Column)),
+				})
+			}
 		}
 	}
 
-	// Emit name/expr measure pairs.
-	// When the value expression is a CALCULATE call, emit it using the SQL
-	// aggregate FILTER syntax so that the filter respects the outer GROUP BY.
+	// Establish the group context so CALCULATE calls inside measure
+	// expressions (direct, nested, or via measure expansion) can resolve
+	// filter-context modifiers against the group-by keys.
+	prevCtx := e.groupCtx
+	e.groupCtx = &groupContext{keys: groupKeys, preds: wherePreds}
+	defer func() { e.groupCtx = prevCtx }()
+
+	// Emit measure refs that appeared in the group position.
+	var inlineMeasures []string
+	for _, arg := range measureArgs {
+		sql, err := e.emitExpr(arg)
+		if err != nil {
+			return "", err
+		}
+		inlineMeasures = append(inlineMeasures, sql)
+	}
+
+	// Emit name/expr measure pairs. CALCULATE emission is group-context aware:
+	// plain predicates use the SQL aggregate FILTER syntax so they respect the
+	// outer GROUP BY; filter-context modifiers produce correlated subqueries.
 	var measures []string
 	for i := 0; i < len(pairArgs); i += 2 {
 		nameSQL, err := e.emitExpr(pairArgs[i])
 		if err != nil {
 			return "", err
 		}
-		valExpr := pairArgs[i+1]
-		var valSQL string
-		if valExpr.Left != nil && valExpr.Left.FuncCall != nil &&
-			strings.ToUpper(valExpr.Left.FuncCall.Name) == "CALCULATE" &&
-			len(valExpr.Right) == 0 {
-			valSQL, err = e.emitCalculateAsFilter(valExpr.Left.FuncCall)
-		} else {
-			valSQL, err = e.emitExpr(valExpr)
-		}
+		valSQL, err := e.emitExpr(pairArgs[i+1])
 		if err != nil {
 			return "", err
 		}
@@ -1371,6 +1430,15 @@ func (e *Emitter) tableNameFromExpr(expr *parser.Expr) (string, error) {
 	case t.ColRef != nil && t.ColRef.Table != "":
 		return t.ColRef.Table, nil
 	case t.FuncCall != nil:
+		// ALL(T) / ALLEXCEPT(T, ...) over a bare table is just the unfiltered
+		// table — unwrap to the table name (there is no ambient filter context
+		// at the table-expression level).
+		name := strings.ToUpper(t.FuncCall.Name)
+		if (name == "ALL" || name == "ALLEXCEPT") && len(t.FuncCall.Args) >= 1 {
+			if inner := t.FuncCall.Args[0].Left; inner != nil && inner.ColRef == nil {
+				return e.tableNameFromExpr(t.FuncCall.Args[0])
+			}
+		}
 		// Nested table function (e.g. FILTER inside ADDCOLUMNS): emit and alias.
 		// TODO: generate a unique alias for nested table expressions.
 		return "", fmt.Errorf("nested table expressions not yet supported")
@@ -1473,7 +1541,7 @@ func (e *Emitter) IsTableExpr(expr *parser.Expr) (bool, error) {
 		// Known table-returning functions.
 		case "FILTER", "SUMMARIZECOLUMNS", "ADDCOLUMNS", "SELECTCOLUMNS",
 			"UNION", "INTERSECT", "EXCEPT", "TOPN", "DISTINCT", "VALUES",
-			"CROSSJOIN", "GENERATE", "GENERATEALL":
+			"ALL", "ALLEXCEPT", "CROSSJOIN", "GENERATE", "GENERATEALL":
 			return true, nil
 		// Known scalar / aggregation functions.
 		case "SUM", "AVERAGE", "COUNT", "COUNTA", "COUNTBLANK", "COUNTROWS",
