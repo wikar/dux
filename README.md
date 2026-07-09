@@ -351,6 +351,8 @@ These evaluate an expression row-by-row over a table.
 | Function | Description |
 |----------|-------------|
 | `SUMMARIZECOLUMNS(cols..., "Name", expr...)` | Group-by aggregation |
+| `ROLLUPADDISSUBTOTAL(col, "IsSubtotal", ...)` | Group argument adding subtotal rows; the named boolean column is TRUE on subtotal rows (compiles to `GROUPING SETS`) |
+| `ROLLUPGROUP(c1, c2, ...)` | Roll several columns up as one unit inside `ROLLUPADDISSUBTOTAL` |
 | `FILTER(T, predicate)` | Rows of `T` matching a predicate |
 | `ADDCOLUMNS(T, "Name", expr...)` | Add computed columns to a table |
 | `SELECTCOLUMNS(T, "Name", expr...)` | Project to named computed columns |

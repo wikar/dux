@@ -519,6 +519,45 @@ func TestComposableTables(t *testing.T) {
 	})
 }
 
+// ─── ROLLUPADDISSUBTOTAL / ROLLUPGROUP ────────────────────────────────────────
+
+func TestRollup(t *testing.T) {
+	t.Run("grouping_sets_and_indicator", func(t *testing.T) {
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			products[category],
+			ROLLUPADDISSUBTOTAL(sales[region], "RegionTotal"),
+			"Total", SUM(sales[amount])
+		)`)
+		assertContains(t, sql,
+			"(GROUPING(region) = 1) AS 'RegionTotal'",
+			"GROUP BY GROUPING SETS ((category, region), (category))")
+	})
+
+	t.Run("hierarchical_sets", func(t *testing.T) {
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			ROLLUPADDISSUBTOTAL(sales[region], "RT", sales[product], "PT"),
+			"Total", SUM(sales[amount])
+		)`)
+		assertContains(t, sql, "GROUPING SETS ((region, product), (region), ())")
+	})
+
+	t.Run("ROLLUPGROUP_composite_unit", func(t *testing.T) {
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			ROLLUPADDISSUBTOTAL(ROLLUPGROUP(sales[region], sales[product]), "IsTotal"),
+			"Total", SUM(sales[amount])
+		)`)
+		assertContains(t, sql, "GROUPING SETS ((region, product), ())")
+	})
+
+	t.Run("bare_ROLLUPGROUP_errors", func(t *testing.T) {
+		q := mustParse(t, `EVALUATE SUMMARIZECOLUMNS(ROLLUPGROUP(sales[region]), "T", SUM(sales[amount]))`)
+		em := &emitter.Emitter{Schema: minSchema()}
+		if _, err := em.Emit(q); err == nil || !strings.Contains(err.Error(), "ROLLUPADDISSUBTOTAL") {
+			t.Errorf("expected bare-ROLLUPGROUP error, got %v", err)
+		}
+	})
+}
+
 // ─── Time intelligence ────────────────────────────────────────────────────────
 
 // timeSchema builds a schema with a dates dimension and an orders fact.

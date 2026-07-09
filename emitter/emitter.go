@@ -811,11 +811,27 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	// keys — placing an aggregate in GROUP BY is invalid SQL.
 	// TREATAS calls are separated into WHERE predicates, paired with their
 	// target table/column for bidi CTE routing and CALCULATE modifier checks.
-	var groupCols []string         // emitted SQL for true group-by keys
-	var groupKeys []groupKey       // table+column of plain ColRef group keys
-	var measureArgs []*parser.Expr // measure refs in the group position (emitted later)
-	var wherePreds []taggedPred    // TREATAS filter predicates with their source tables
+	var groupCols []string          // emitted SQL for true group-by keys
+	var groupKeys []groupKey        // table+column of plain ColRef group keys
+	var rollupElems []rollupElement // ROLLUPADDISSUBTOTAL units (see rollup.go)
+	var measureArgs []*parser.Expr  // measure refs in the group position (emitted later)
+	var wherePreds []taggedPred     // TREATAS filter predicates with their source tables
 	for _, arg := range groupArgs {
+		// ROLLUPADDISSUBTOTAL adds subtotal grouping sets; a bare ROLLUPGROUP
+		// outside it has no meaning.
+		if arg.Left != nil && arg.Left.FuncCall != nil && len(arg.Right) == 0 {
+			switch strings.ToUpper(arg.Left.FuncCall.Name) {
+			case "ROLLUPADDISSUBTOTAL":
+				elems, err := e.parseRollup(arg.Left.FuncCall, &groupKeys)
+				if err != nil {
+					return "", err
+				}
+				rollupElems = append(rollupElems, elems...)
+				continue
+			case "ROLLUPGROUP":
+				return "", fmt.Errorf("ROLLUPGROUP is only valid inside ROLLUPADDISSUBTOTAL")
+			}
+		}
 		// Check for a TREATAS call — emit as a WHERE predicate, not a group column.
 		if arg.Left != nil && arg.Left.FuncCall != nil &&
 			strings.ToUpper(arg.Left.FuncCall.Name) == "TREATAS" && len(arg.Right) == 0 {
@@ -973,6 +989,7 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	// Build SELECT list.
 	var selects []string
 	selects = append(selects, groupCols...)
+	selects = append(selects, rollupSelectItems(rollupElems)...)
 	selects = append(selects, inlineMeasures...)
 	selects = append(selects, measures...)
 
@@ -987,7 +1004,9 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	if len(outerPreds) > 0 {
 		fmt.Fprintf(&sb, "\nWHERE %s", strings.Join(outerPreds, " AND "))
 	}
-	if len(groupCols) > 0 {
+	if len(rollupElems) > 0 {
+		fmt.Fprintf(&sb, "\nGROUP BY %s", rollupGroupingSets(groupCols, rollupElems))
+	} else if len(groupCols) > 0 {
 		fmt.Fprintf(&sb, "\nGROUP BY %s", strings.Join(groupCols, ", "))
 	}
 	return sb.String(), nil
