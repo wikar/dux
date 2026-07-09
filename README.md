@@ -265,7 +265,16 @@ curl -X POST http://localhost/import --data-binary @dux.toml
 
 ## Query syntax
 
-Every query starts with `EVALUATE`. An optional `DEFINE` block declares reusable measures.
+Every query starts with `EVALUATE`. An optional `DEFINE` block declares reusable measures. The result can be sorted with `ORDER BY` (with optional `START AT`, ascending keys only):
+
+```dux
+EVALUATE
+    SUMMARIZECOLUMNS(
+        atp.matches[surface],
+        "Matches", COUNT(atp.matches[match_num])
+    )
+    ORDER BY [Matches] DESC, atp.matches[surface]
+```
 
 **Aggregate by a column:**
 
@@ -351,6 +360,20 @@ These evaluate an expression row-by-row over a table.
 | `EXCEPT(T1, T2)` | Rows in `T1` not in `T2` |
 | `VALUES(T[C])` | Distinct values of a column as a table |
 | `DISTINCT(T[C])` | Alias for `VALUES` |
+| `CROSSJOIN(T1, T2, ...)` | Cartesian product of two or more tables |
+| `GENERATE(T1, T2)` | Evaluate `T2` for each row of `T1` (lateral join); `T1`'s columns are in scope inside `T2` |
+| `GENERATEALL(T1, T2)` | Like `GENERATE`, but keeps `T1` rows with no matches |
+
+Table arguments compose: any table function accepts a nested table expression where a table name is expected.
+
+```dux
+EVALUATE
+    TOPN(
+        5,
+        SUMMARIZECOLUMNS(atp.matches[winner_name], "Titles", COUNT(atp.matches[match_num])),
+        [Titles]
+    )
+```
 
 ### Filter context
 

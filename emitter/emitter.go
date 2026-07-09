@@ -28,6 +28,8 @@ type Emitter struct {
 	// nested CALCULATE calls can resolve filter-context modifiers (ALL etc.)
 	// against the enclosing group-by keys. See filterctx.go.
 	groupCtx *groupContext
+	// aliasSeq numbers generated subquery aliases (see nextAlias in tables.go).
+	aliasSeq int
 }
 
 // taggedPred pairs an emitted SQL WHERE predicate with the lower-cased
@@ -45,7 +47,11 @@ type taggedPred struct {
 // If the query has VAR bindings the caller is responsible for materialising
 // them via EmitVarCreate before running this SQL; see executor.Execute.
 func (e *Emitter) Emit(q *parser.Query) (string, error) {
-	return e.emitTableExpr(q.Evaluate.Table)
+	sql, err := e.emitTableExpr(q.Evaluate.Table)
+	if err != nil {
+		return "", err
+	}
+	return e.applyOrderBy(sql, q.Evaluate)
 }
 
 // EmitVarCreate returns the SQL that creates a session-scoped temp table named
@@ -332,6 +338,12 @@ func (e *Emitter) emitFuncCall(fc *parser.FuncCall) (string, error) {
 		return e.emitSetOp("EXCEPT", fc)
 	case "TOPN":
 		return e.emitTopN(fc)
+	case "CROSSJOIN":
+		return e.emitCrossJoin(fc)
+	case "GENERATE":
+		return e.emitGenerate(fc, false)
+	case "GENERATEALL":
+		return e.emitGenerate(fc, true)
 
 	// Scalar / logical
 	case "DIVIDE":
@@ -370,9 +382,17 @@ func (e *Emitter) emitSimpleAgg(duckName string, fc *parser.FuncCall) (string, e
 	return fmt.Sprintf("%s(%s)", duckName, arg), nil
 }
 
-func (e *Emitter) emitCountRows(_ *parser.FuncCall) (string, error) {
-	// COUNTROWS(Table) → COUNT(*)
-	// The table argument is used in the FROM clause, not inside COUNT.
+func (e *Emitter) emitCountRows(fc *parser.FuncCall) (string, error) {
+	// COUNTROWS(<table function>) → count the computed table in a subquery.
+	if len(fc.Args) == 1 && fc.Args[0].Left != nil && fc.Args[0].Left.FuncCall != nil {
+		sub, err := e.emitExprAsTable(fc.Args[0])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("(SELECT COUNT(*) FROM (%s) AS %s)", sub, e.nextAlias("__cnt")), nil
+	}
+	// COUNTROWS(Table) → COUNT(*); the table argument is used in the FROM
+	// clause of the enclosing query, not inside COUNT.
 	return "COUNT(*)", nil
 }
 
@@ -413,14 +433,11 @@ func (e *Emitter) emitIterAgg(agg string, fc *parser.FuncCall) (string, error) {
 		return "", fmt.Errorf("%s requires exactly 2 arguments", fc.Name)
 	}
 
-	tableName, err := e.tableNameFromExpr(fc.Args[0])
+	src, alias, pop, err := e.iterSource(fc.Args[0])
 	if err != nil {
-		return "", fmt.Errorf("%s: first argument must be a table reference: %w", fc.Name, err)
+		return "", fmt.Errorf("%s: first argument must be a table expression: %w", fc.Name, err)
 	}
-
-	alias := "__row_" + strings.ToLower(strings.ReplaceAll(tableName, " ", "_"))
-	e.rowCtx.Push(semantic.RowBinding{Table: tableName, Alias: alias})
-	defer e.rowCtx.Pop()
+	defer pop()
 
 	inner, err := e.emitExpr(fc.Args[1])
 	if err != nil {
@@ -429,8 +446,25 @@ func (e *Emitter) emitIterAgg(agg string, fc *parser.FuncCall) (string, error) {
 
 	return fmt.Sprintf(
 		"(SELECT %s(%s) FROM %s AS %s)",
-		agg, inner, sqlIdent(tableName), alias,
+		agg, inner, src.sql, alias,
 	), nil
+}
+
+// iterSource resolves an iterator function's table argument, binding row
+// context for the underlying table (when there is one) so column references
+// inside the iterated expression resolve to the row alias. The returned pop
+// function must be deferred by the caller.
+func (e *Emitter) iterSource(arg *parser.Expr) (*tableSource, string, func(), error) {
+	src, err := e.tableSourceFromExpr(arg)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if src.name != "" {
+		alias := "__row_" + sanitizeAliasSuffix(src.name)
+		e.rowCtx.Push(semantic.RowBinding{Table: src.name, Alias: alias})
+		return src, alias, func() { e.rowCtx.Pop() }, nil
+	}
+	return src, e.nextAlias("__row"), func() {}, nil
 }
 
 // emitConcatenateX emits CONCATENATEX as string_agg.
@@ -439,14 +473,11 @@ func (e *Emitter) emitConcatenateX(fc *parser.FuncCall) (string, error) {
 		return "", fmt.Errorf("CONCATENATEX requires 2 or 3 arguments")
 	}
 
-	tableName, err := e.tableNameFromExpr(fc.Args[0])
+	src, alias, pop, err := e.iterSource(fc.Args[0])
 	if err != nil {
-		return "", fmt.Errorf("CONCATENATEX: first argument must be a table reference: %w", err)
+		return "", fmt.Errorf("CONCATENATEX: first argument must be a table expression: %w", err)
 	}
-
-	alias := "__row_" + strings.ToLower(strings.ReplaceAll(tableName, " ", "_"))
-	e.rowCtx.Push(semantic.RowBinding{Table: tableName, Alias: alias})
-	defer e.rowCtx.Pop()
+	defer pop()
 
 	inner, err := e.emitExpr(fc.Args[1])
 	if err != nil {
@@ -464,7 +495,7 @@ func (e *Emitter) emitConcatenateX(fc *parser.FuncCall) (string, error) {
 
 	return fmt.Sprintf(
 		"(SELECT string_agg(%s, %s) FROM %s AS %s)",
-		inner, delim, sqlIdent(tableName), alias,
+		inner, delim, src.sql, alias,
 	), nil
 }
 
@@ -652,20 +683,21 @@ func (e *Emitter) emitTreatas(fc *parser.FuncCall) (string, error) {
 	}
 }
 
-// emitFilter emits FILTER(Table, predicate) as a CTE subquery.
+// emitFilter emits FILTER(Table, predicate) as a subquery. The table argument
+// may itself be a table expression (e.g. FILTER(SUMMARIZECOLUMNS(...), ...)).
 func (e *Emitter) emitFilter(fc *parser.FuncCall) (string, error) {
 	if len(fc.Args) != 2 {
 		return "", fmt.Errorf("FILTER requires exactly 2 arguments")
 	}
-	table, err := e.tableNameFromExpr(fc.Args[0])
+	src, err := e.tableSourceFromExpr(fc.Args[0])
 	if err != nil {
-		return "", fmt.Errorf("FILTER: first argument must be a table reference: %w", err)
+		return "", fmt.Errorf("FILTER: first argument must be a table expression: %w", err)
 	}
 	pred, err := e.emitExpr(fc.Args[1])
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("(SELECT * FROM %s WHERE %s)", sqlIdent(table), pred), nil
+	return fmt.Sprintf("(SELECT * FROM %s WHERE %s)", e.fromClauseSQL(src), pred), nil
 }
 
 // emitAll emits ALL / ALLEXCEPT as a table expression. When used as a
@@ -1151,9 +1183,9 @@ func (e *Emitter) emitProjectColumns(fc *parser.FuncCall, selectPrefix string) (
 	if len(fc.Args) < 3 || (len(fc.Args)-1)%2 != 0 {
 		return "", fmt.Errorf("%s requires a table then name/expr pairs", name)
 	}
-	table, err := e.tableNameFromExpr(fc.Args[0])
+	src, err := e.tableSourceFromExpr(fc.Args[0])
 	if err != nil {
-		return "", fmt.Errorf("%s: first argument must be a table reference: %w", name, err)
+		return "", fmt.Errorf("%s: first argument must be a table expression: %w", name, err)
 	}
 
 	var cols []string
@@ -1169,7 +1201,7 @@ func (e *Emitter) emitProjectColumns(fc *parser.FuncCall, selectPrefix string) (
 		cols = append(cols, fmt.Sprintf("(%s) AS %s", valExpr, nameExpr))
 	}
 
-	return fmt.Sprintf("%s%s FROM %s", selectPrefix, strings.Join(cols, ", "), sqlIdent(table)), nil
+	return fmt.Sprintf("%s%s FROM %s", selectPrefix, strings.Join(cols, ", "), e.fromClauseSQL(src)), nil
 }
 
 func (e *Emitter) emitSetOp(op string, fc *parser.FuncCall) (string, error) {
@@ -1187,7 +1219,8 @@ func (e *Emitter) emitSetOp(op string, fc *parser.FuncCall) (string, error) {
 	return fmt.Sprintf("(%s)\n%s\n(%s)", left, op, right), nil
 }
 
-// emitTopN emits TOPN as ORDER BY … DESC LIMIT n.
+// emitTopN emits TOPN as ORDER BY … DESC LIMIT n. The table argument may be a
+// nested table expression (e.g. TOPN(5, SUMMARIZECOLUMNS(...), [Total])).
 func (e *Emitter) emitTopN(fc *parser.FuncCall) (string, error) {
 	if len(fc.Args) < 3 {
 		return "", fmt.Errorf("TOPN requires at least 3 arguments (n, table, expr)")
@@ -1196,16 +1229,23 @@ func (e *Emitter) emitTopN(fc *parser.FuncCall) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	table, err := e.tableNameFromExpr(fc.Args[1])
+	src, err := e.tableSourceFromExpr(fc.Args[1])
 	if err != nil {
-		return "", fmt.Errorf("TOPN: second argument must be a table reference: %w", err)
+		return "", fmt.Errorf("TOPN: second argument must be a table expression: %w", err)
 	}
-	orderExpr, err := e.emitExpr(fc.Args[2])
+	// Over a computed table the order expression names an output column, so it
+	// must not be re-expanded as a measure — reference it like an ORDER BY key.
+	var orderExpr string
+	if src.nested {
+		orderExpr, err = e.emitOrderKey(fc.Args[2])
+	} else {
+		orderExpr, err = e.emitExpr(fc.Args[2])
+	}
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("SELECT * FROM %s ORDER BY %s DESC LIMIT %s",
-		sqlIdent(table), orderExpr, n), nil
+		e.fromClauseSQL(src), orderExpr, n), nil
 }
 
 // ─── Scalar / logical functions ──────────────────────────────────────────────
@@ -1478,9 +1518,9 @@ func (e *Emitter) tableNameFromExpr(expr *parser.Expr) (string, error) {
 				return e.tableNameFromExpr(t.FuncCall.Args[0])
 			}
 		}
-		// Nested table function (e.g. FILTER inside ADDCOLUMNS): emit and alias.
-		// TODO: generate a unique alias for nested table expressions.
-		return "", fmt.Errorf("nested table expressions not yet supported")
+		// A nested table function has no single name — callers that can accept
+		// a subquery use tableSourceFromExpr (tables.go) instead.
+		return "", fmt.Errorf("expected a table name, got a table expression")
 	}
 	return "", fmt.Errorf("cannot determine table name from expression")
 }

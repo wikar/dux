@@ -14,7 +14,7 @@ var Definition = participelexer.MustStateful(participelexer.Rules{
 		{Name: "Whitespace", Pattern: `[\s\t\n\r]+`},
 		// Keywords must be tried before Ident so that e.g. "SUM" is a Keyword,
 		// not an Ident. The (?i) flag makes the pattern case-insensitive.
-		{Name: "Keyword", Pattern: `(?i)\b(DEFINE|EVALUATE|MEASURE|CALCULATE|FILTER|SUMMARIZECOLUMNS|ADDCOLUMNS|SELECTCOLUMNS|SUMX|AVERAGEX|COUNTX|MINX|MAXX|CONCATENATEX|SUM|AVERAGE|COUNTA|COUNT|COUNTROWS|COUNTBLANK|DISTINCTCOUNT|MIN|MAX|MEDIAN|DIVIDE|ISBLANK|BLANK|IF|SWITCH|NOT|AND|OR|ALL|VALUES|DISTINCT|UNION|INTERSECT|EXCEPT|TOPN|VAR|RETURN|TRUE|FALSE|TREATAS)\b`},
+		{Name: "Keyword", Pattern: `(?i)\b(DEFINE|EVALUATE|MEASURE|CALCULATE|FILTER|SUMMARIZECOLUMNS|ADDCOLUMNS|SELECTCOLUMNS|SUMX|AVERAGEX|COUNTX|MINX|MAXX|CONCATENATEX|SUM|AVERAGE|COUNTA|COUNT|COUNTROWS|COUNTBLANK|DISTINCTCOUNT|MIN|MAX|MEDIAN|DIVIDE|ISBLANK|BLANK|IF|SWITCH|NOT|AND|OR|ALL|VALUES|DISTINCT|UNION|INTERSECT|EXCEPT|TOPN|VAR|RETURN|TRUE|FALSE|TREATAS|ORDER|BY|START|AT|ASC|DESC)\b`},
 		// QualifiedIdent matches a db-qualified table name (e.g. atp.matches).
 		// Must appear before Ident so that the dot is consumed here and not
 		// treated as an unknown Punct token.

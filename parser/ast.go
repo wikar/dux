@@ -128,13 +128,24 @@ type Literal struct {
 
 // EvaluateClause is the body following the EVALUATE keyword.
 // It optionally contains zero or more VAR bindings followed by either a bare
-// table expression or a RETURN keyword preceding the final table expression.
+// table expression or a RETURN keyword preceding the final table expression,
+// optionally followed by ORDER BY (and START AT) clauses.
 //
 //	EVALUATE SUMMARIZECOLUMNS(...)          — no VARs, no RETURN
 //	EVALUATE VAR x = FILTER(...) RETURN x   — one VAR, RETURN required
+//	EVALUATE t ORDER BY t[a] DESC, t[b] START AT 100
 type EvaluateClause struct {
-	Vars  []*VarBinding `parser:"@@*"`
-	Table *TableExpr    `parser:"( 'RETURN' @@ | @@ )"`
+	Vars    []*VarBinding  `parser:"@@*"`
+	Table   *TableExpr     `parser:"( 'RETURN' @@ | @@ )"`
+	OrderBy []*OrderByExpr `parser:"( 'ORDER' 'BY' @@ ( ',' @@ )* )?"`
+	StartAt []*Expr        `parser:"( 'START' 'AT' @@ ( ',' @@ )* )?"`
+}
+
+// OrderByExpr is one sort key of an EVALUATE ... ORDER BY clause. Dir is the
+// raw ASC/DESC keyword as typed (empty means ascending, as in DAX).
+type OrderByExpr struct {
+	Expr *Expr  `parser:"@@"`
+	Dir  string `parser:"@( 'ASC' | 'DESC' )?"`
 }
 
 // VarBinding is a single VAR declaration inside an EVALUATE clause.

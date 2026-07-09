@@ -453,6 +453,72 @@ func TestFilterContextModifiers(t *testing.T) {
 	})
 }
 
+// ─── Composable tables / ORDER BY / combinators ───────────────────────────────
+
+func TestComposableTables(t *testing.T) {
+	t.Run("FILTER_over_SUMMARIZECOLUMNS", func(t *testing.T) {
+		sql := emit(t, `EVALUATE FILTER(
+			SUMMARIZECOLUMNS(sales[region], "Total", SUM(sales[amount])),
+			[Total] > 400
+		)`)
+		assertContains(t, sql, "SELECT * FROM (", ") AS __src", "WHERE")
+	})
+
+	t.Run("TOPN_over_computed_table_uses_output_column", func(t *testing.T) {
+		sql := emit(t, `EVALUATE TOPN(
+			2,
+			SUMMARIZECOLUMNS(sales[product], "Total", SUM(sales[amount])),
+			[Total]
+		)`)
+		// The order key must reference the output column, not re-aggregate.
+		assertContains(t, sql, `ORDER BY "Total" DESC LIMIT 2`)
+	})
+
+	t.Run("SUMX_over_FILTER_keeps_row_binding", func(t *testing.T) {
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			"X", SUMX(FILTER(sales, sales[qty] > 1), sales[amount])
+		)`)
+		assertContains(t, sql, "__row_sales.amount", "FROM (SELECT * FROM sales WHERE")
+	})
+
+	t.Run("ORDER_BY_wraps_query", func(t *testing.T) {
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(sales[region], "Total", SUM(sales[amount]))
+			ORDER BY [Total] DESC, sales[region]`)
+		assertContains(t, sql, ") AS __q", `ORDER BY "Total" DESC, "region"`)
+	})
+
+	t.Run("START_AT_tuple_filter", func(t *testing.T) {
+		sql := emit(t, `EVALUATE sales ORDER BY sales[region] START AT "North"`)
+		assertContains(t, sql, `WHERE ("region") >= ('North')`, `ORDER BY "region"`)
+	})
+
+	t.Run("START_AT_with_DESC_errors", func(t *testing.T) {
+		q := mustParse(t, `EVALUATE sales ORDER BY sales[region] DESC START AT "North"`)
+		em := &emitter.Emitter{Schema: minSchema()}
+		if _, err := em.Emit(q); err == nil || !strings.Contains(err.Error(), "ascending") {
+			t.Errorf("expected ascending-only START AT error, got %v", err)
+		}
+	})
+
+	t.Run("CROSSJOIN", func(t *testing.T) {
+		sql := emit(t, `EVALUATE CROSSJOIN(VALUES(sales[region]), VALUES(products[category]))`)
+		assertContains(t, sql, "CROSS JOIN")
+	})
+
+	t.Run("GENERATE_lateral_with_row_context", func(t *testing.T) {
+		sql := emit(t, `EVALUATE GENERATE(products, FILTER(sales, sales[product] = products[product]))`)
+		assertContains(t, sql,
+			"products AS __gen_products",
+			"CROSS JOIN LATERAL",
+			"= __gen_products.product")
+	})
+
+	t.Run("GENERATEALL_left_lateral", func(t *testing.T) {
+		sql := emit(t, `EVALUATE GENERATEALL(products, FILTER(sales, sales[product] = products[product]))`)
+		assertContains(t, sql, "LEFT JOIN LATERAL", "ON TRUE")
+	})
+}
+
 // ─── Time intelligence ────────────────────────────────────────────────────────
 
 // timeSchema builds a schema with a dates dimension and an orders fact.
