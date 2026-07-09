@@ -323,6 +323,12 @@ func (e *Emitter) emitFuncCall(fc *parser.FuncCall) (string, error) {
 	case "DATE":
 		return e.emitDateCtor(fc)
 
+	// Relationship traversal (see related.go)
+	case "RELATED":
+		return e.emitRelated(fc)
+	case "RELATEDTABLE":
+		return e.emitRelatedTable(fc)
+
 	// Table constructors / operations
 	case "SUMMARIZECOLUMNS":
 		return e.emitSummarizeColumns(fc)
@@ -364,6 +370,10 @@ func (e *Emitter) emitFuncCall(fc *parser.FuncCall) (string, error) {
 		return e.emitAndOr("OR", fc)
 
 	default:
+		// Declaratively mapped scalar functions (see scalarfuncs.go).
+		if fn, ok := scalarFuncs[strings.ToUpper(fc.Name)]; ok {
+			return e.emitScalarMapped(strings.ToUpper(fc.Name), fn, fc)
+		}
 		// Unknown / passthrough function: emit as-is and let DuckDB validate.
 		return e.emitPassthrough(fc)
 	}
@@ -1624,7 +1634,8 @@ func (e *Emitter) IsTableExpr(expr *parser.Expr) (bool, error) {
 			"DATESYTD", "DATESQTD", "DATESMTD", "SAMEPERIODLASTYEAR", "DATEADD",
 			"PREVIOUSYEAR", "PREVIOUSQUARTER", "PREVIOUSMONTH", "PREVIOUSDAY",
 			"NEXTYEAR", "NEXTQUARTER", "NEXTMONTH", "NEXTDAY",
-			"DATESBETWEEN", "DATESINPERIOD", "CALENDAR", "CALENDARAUTO":
+			"DATESBETWEEN", "DATESINPERIOD", "CALENDAR", "CALENDARAUTO",
+			"RELATEDTABLE":
 			return true, nil
 		// Known scalar / aggregation functions.
 		case "SUM", "AVERAGE", "COUNT", "COUNTA", "COUNTBLANK", "COUNTROWS",

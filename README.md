@@ -455,6 +455,24 @@ On a designated date table, time-intelligence functions clear **all** filters on
 | `NOT(expr)` | Logical negation |
 | `ISBLANK(expr)` | TRUE when `expr` is NULL |
 | `BLANK()` | NULL constant |
+| `TRUE()` / `FALSE()` | Boolean constants |
+
+### Relationship traversal
+
+| Function | Description |
+|----------|-------------|
+| `RELATED(Dim[col])` | Fetch a column from the one-side of a relationship for the current row (in `FILTER`, `ADDCOLUMNS`, iterators) |
+| `RELATEDTABLE(Fact)` | The fact rows related to the current dimension row (e.g. `COUNTROWS(RELATEDTABLE(Sales))`) |
+
+### Scalar function library
+
+DAX scalar functions are translated to DuckDB built-ins — either passed through directly when the spelling matches (`ABS`, `ROUND`, `SQRT`, `UPPER`, `LOWER`, `TRIM`, `LEFT`, `RIGHT`, `COALESCE`, …) or mapped when the semantics differ:
+
+- **Date/time** — `YEAR`, `MONTH`, `DAY`, `HOUR`, `MINUTE`, `SECOND`, `QUARTER`, `WEEKDAY` (types 1–3), `WEEKNUM`, `EOMONTH`, `EDATE`, `TODAY`, `NOW`, `DATE`, `TIME`, `DATEVALUE`, `DATEDIFF`
+- **Math** — `INT`, `MOD` (Excel sign semantics), `POWER`, `ROUNDUP`, `ROUNDDOWN`, `TRUNC`, `CEILING`/`FLOOR` (significance form), `LOG` (default base 10)
+- **Text** — `LEN`, `MID`, `SUBSTITUTE`, `REPLACE`, `CONCATENATE`, `SEARCH` (case-insensitive), `FIND`, `REPT`, `UNICHAR`, `EXACT`, `VALUE`, `FORMAT`
+
+`FORMAT` supports named formats (`"Percent"`, `"Fixed"`, `"Standard"`, `"Scientific"`, `"General Number"`), date patterns (`"yyyy-MM-dd"`, `"MMM d"`, …), and numeric masks (`"0.00"`, `"#,##0.00"`); the format string must be a literal.
 
 ## Bidirectional relationships
 
