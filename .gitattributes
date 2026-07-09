@@ -1,0 +1,3 @@
+# gofmt requires LF line endings; keep Go files LF on every platform,
+# overriding core.autocrlf so the repo stays gofmt-clean on Windows.
+*.go text eol=lf

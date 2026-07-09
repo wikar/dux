@@ -181,6 +181,61 @@ func tableNamesMatch(a, b string) bool {
 	return false
 }
 
+// FilterReaches reports whether a filter applied to table src propagates to
+// any of the target tables under DAX propagation rules: filters flow from the
+// one side of a relationship (ToTable) to the many side (FromTable), and in
+// both directions across bidirectional relationships. Reachability through an
+// unrelated fact does NOT propagate (a filter on DimA never reaches FactB via
+// DimA ← FactA → ... chains, because FactA → its dimensions is against the
+// filter direction).
+func FilterReaches(schema *Schema, src string, targets []string) bool {
+	targetSet := map[string]bool{}
+	for _, t := range targets {
+		targetSet[strings.ToLower(resolveSchemaTable(schema, t))] = true
+	}
+	src = resolveSchemaTable(schema, src)
+	if targetSet[strings.ToLower(src)] {
+		return true
+	}
+
+	visited := map[string]bool{strings.ToLower(src): true}
+	queue := []string{src}
+	for len(queue) > 0 {
+		curr := queue[0]
+		queue = queue[1:]
+		for _, rel := range schema.Relationships {
+			var next string
+			switch {
+			case tableNamesMatch(rel.ToTable, curr):
+				next = rel.FromTable // one side → many side: always propagates
+			case rel.Bidirectional && tableNamesMatch(rel.FromTable, curr):
+				next = rel.ToTable // many side → one side: only when bidirectional
+			default:
+				continue
+			}
+			next = resolveSchemaTable(schema, next)
+			nl := strings.ToLower(next)
+			if visited[nl] {
+				continue
+			}
+			visited[nl] = true
+			if targetSet[nl] {
+				return true
+			}
+			queue = append(queue, next)
+		}
+	}
+	return false
+}
+
+// ResolveTable returns the canonical schema key for a table name (exact
+// case-insensitive match first, then bare-name suffix match for unqualified
+// names). It is the exported form of resolveSchemaTable for callers outside
+// this package (e.g. the emitter's measure clustering).
+func ResolveTable(schema *Schema, name string) string {
+	return resolveSchemaTable(schema, name)
+}
+
 // resolveSchemaTable returns the canonical schema key for name: exact
 // case-insensitive match first, then bare-name suffix match for unqualified
 // names. Returns name unchanged if no schema entry is found.

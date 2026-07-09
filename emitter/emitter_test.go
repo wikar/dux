@@ -871,8 +871,11 @@ func emitBidi(t *testing.T, dux string) string {
 }
 
 func TestBidirectionalCTE(t *testing.T) {
+	// Bidirectional queries route through stitched codegen: the filter chain
+	// beyond the bidi edge (bridge → DimA) is carved into a correlated EXISTS
+	// semi-join, gating rows without many-to-many fan-out.
+
 	// TC-01: Measure only, filtered by DimA via TREATAS.
-	// The CTE should gate FactMeasures; DimB must not appear in main FROM.
 	t.Run("TC01_MeasureOnly", func(t *testing.T) {
 		sql := emitBidi(t,
 			`EVALUATE SUMMARIZECOLUMNS(
@@ -880,22 +883,18 @@ func TestBidirectionalCTE(t *testing.T) {
 				"Total", SUM(FactMeasures[Amount])
 			)`)
 		assertContains(t, sql,
-			"WITH",
-			"_bd_dimb",
-			"SELECT DISTINCT",
-			"bridge",
-			"DimAKey",
+			"WITH _mc0 AS",
 			"FROM factmeasures",
-			"JOIN",
+			"EXISTS (SELECT 1 FROM bridge",
+			"JOIN dima",
+			"Category IN ('X')",
 		)
-		// DimB must NOT appear as a standalone table in the main FROM
-		assertNotContains(t, sql, "FROM dimb")
-		// DimA must be inside the CTE, not in the outer FROM
-		assertNotContains(t, sql, "FROM dima")
+		// DimA is filter-only: gated inside the EXISTS, never joined flat.
+		assertNotContains(t, sql, "_bd_", "LEFT JOIN dima")
 	})
 
 	// TC-02: DimB attributes only, filtered by DimA.
-	// DimB is in main FROM; FactMeasures must not appear.
+	// DimB carries the group key; FactMeasures must not appear.
 	t.Run("TC02_DimBOnly", func(t *testing.T) {
 		sql := emitBidi(t,
 			`EVALUATE SUMMARIZECOLUMNS(
@@ -903,14 +902,12 @@ func TestBidirectionalCTE(t *testing.T) {
 				TREATAS({"X"}, DimA[Category])
 			)`)
 		assertContains(t, sql,
-			"WITH",
-			"_bd_dimb",
-			"SELECT DISTINCT",
-			"bridge",
+			"WITH _mc0 AS",
 			"FROM dimb",
+			"EXISTS (SELECT 1 FROM bridge",
+			"JOIN dima",
 		)
-		assertNotContains(t, sql, "FROM dima")
-		assertNotContains(t, sql, "factmeasures")
+		assertNotContains(t, sql, "_bd_", "LEFT JOIN dima", "factmeasures")
 	})
 
 	// TC-03: DimB attributes + measure, filtered by DimA (full chain).
@@ -922,26 +919,24 @@ func TestBidirectionalCTE(t *testing.T) {
 				"Total", SUM(FactMeasures[Amount])
 			)`)
 		assertContains(t, sql,
-			"WITH",
-			"_bd_dimb",
-			"SELECT DISTINCT",
-			"bridge",
+			"WITH _mc0 AS",
 			"FROM dimb",
-			"JOIN _bd_dimb",
-			"JOIN factmeasures",
+			"LEFT JOIN factmeasures",
+			"EXISTS (SELECT 1 FROM bridge",
 			"GROUP BY",
 		)
-		assertNotContains(t, sql, "FROM dima")
+		assertNotContains(t, sql, "_bd_", "LEFT JOIN dima")
 	})
 
-	// TC-04: Multiple DimA values — DISTINCT guard must be present.
-	t.Run("TC04_DistinctGuard", func(t *testing.T) {
+	// TC-04: Multiple DimA values — the semi-join gates without duplicating
+	// DimB rows that match more than one bridge row.
+	t.Run("TC04_SemiJoinGuard", func(t *testing.T) {
 		sql := emitBidi(t,
 			`EVALUATE SUMMARIZECOLUMNS(
 				DimB[Name],
 				TREATAS({"X","Y"}, DimA[Category])
 			)`)
-		assertContains(t, sql, "SELECT DISTINCT", "_bd_dimb")
+		assertContains(t, sql, "EXISTS (SELECT 1 FROM bridge", "Category IN ('X', 'Y')")
 	})
 
 	// TC-05: Empty filter context — same SQL shape as TC-01; no special-casing.
@@ -951,11 +946,11 @@ func TestBidirectionalCTE(t *testing.T) {
 				TREATAS({"NONEXISTENT"}, DimA[Category]),
 				"Total", SUM(FactMeasures[Amount])
 			)`)
-		assertContains(t, sql, "WITH", "_bd_dimb", "SELECT DISTINCT")
+		assertContains(t, sql, "WITH _mc0 AS", "EXISTS (SELECT 1 FROM bridge")
 	})
 
-	// Db-qualified table names must not leak dots into the CTE name
-	// (a CTE name is a plain identifier: "_bd_atp_dimb", not "_bd_atp.dimb").
+	// Db-qualified table names emit as-is inside the EXISTS chain; no
+	// generated identifier may contain a dot.
 	t.Run("QualifiedTableName", func(t *testing.T) {
 		s := bidiSchema()
 		qualified := semantic.NewSchema()
@@ -979,16 +974,21 @@ func TestBidirectionalCTE(t *testing.T) {
 		if err != nil {
 			t.Fatalf("emit (qualified bidi): %v", err)
 		}
-		assertContains(t, sql, "WITH _bd_atp_dimb AS", "JOIN _bd_atp_dimb")
-		assertNotContains(t, sql, "_bd_atp.dimb")
+		assertContains(t, sql,
+			"WITH _mc0 AS",
+			"FROM atp.factmeasures",
+			"EXISTS (SELECT 1 FROM atp.bridge",
+			"JOIN atp.dima",
+		)
+		assertNotContains(t, sql, "_bd_")
 	})
 
-	// When the outer SELECT projects a table the CTE would absorb (here the
-	// bidi bridge bev.Date is the group-by table, and bev.Sales feeds a
-	// measure), CTE codegen is not applicable: fall back to plain LEFT JOINs.
-	// Regression: this used to emit "FROM bev.date JOIN bev.date" (duplicate
-	// alias) with bev.Sales absorbed out of the outer FROM entirely.
-	t.Run("ProjectedBridgeFallsBackToJoins", func(t *testing.T) {
+	// The bidi bridge (bev.Date) is the group-by table with measures over two
+	// different facts — a multi-table query. Stitched codegen must evaluate
+	// each measure in its own cluster CTE; a flat join would fan the facts
+	// out against each other (and the old bidi CTE emitted "FROM bev.date
+	// JOIN bev.date" — a duplicate alias).
+	t.Run("ProjectedBridgeGoesStitched", func(t *testing.T) {
 		s := semantic.NewSchema()
 		s.Tables["bev.Date"] = &semantic.Table{Name: "bev.Date", Columns: map[string]*semantic.Column{
 			"DateKey":  {Name: "DateKey", DataType: "INTEGER"},
@@ -1023,16 +1023,26 @@ func TestBidirectionalCTE(t *testing.T) {
 		if err != nil {
 			t.Fatalf("emit (projected bridge): %v", err)
 		}
-		assertNotContains(t, sql, "_bd_", "WITH")
+		assertNotContains(t, sql, "_bd_")
 		assertContains(t, sql,
-			"FROM bev.date",
+			"WITH _mc0 AS",
+			"_mc1 AS",
+			"FULL OUTER JOIN _mc1",
+			"IS NOT DISTINCT FROM",
 			"LEFT JOIN bev.sales",
 			"LEFT JOIN atp.players",
 			"LEFT JOIN atp.matches",
 		)
-		// Each table must be joined exactly once — no duplicate aliases.
+		// The two facts must never share one join tree: the sales fact and the
+		// atp fact belong to different CTEs.
+		if i := strings.Index(sql, "bev.sales"); i >= 0 {
+			cte := sql[:strings.Index(sql, "_mc1")]
+			if strings.Contains(cte, "atp.matches") {
+				t.Errorf("bev.sales and atp.matches share a join tree:\n%s", sql)
+			}
+		}
 		if n := strings.Count(strings.ToLower(sql), "join bev.date"); n != 0 {
-			t.Errorf("bev.date must only appear in FROM, found %d JOINs:\n%s", n, sql)
+			t.Errorf("bev.date must only appear in FROM clauses, found %d JOINs:\n%s", n, sql)
 		}
 	})
 

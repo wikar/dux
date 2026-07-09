@@ -478,6 +478,34 @@ DAX scalar functions are translated to DuckDB built-ins — either passed throug
 
 `FORMAT` supports named formats (`"Percent"`, `"Fixed"`, `"Standard"`, `"Scientific"`, `"General Number"`), date patterns (`"yyyy-MM-dd"`, `"MMM d"`, …), and numeric masks (`"0.00"`, `"#,##0.00"`); the format string must be a literal.
 
+## Multi-table measures (stitched codegen)
+
+A DAX measure is evaluated in its own filter context. When the measures of a SUMMARIZECOLUMNS call reach more than one table (e.g. `SUM(Sales[Qty])` next to `SUM(Returns[Qty])` grouped by `Date[Year]`), a single flat join tree would pair every sales row with every returns row on the same date and inflate both sums. DUX instead evaluates each **table cluster** in its own grouped CTE and stitches the results on the group keys:
+
+```sql
+WITH _mc0 AS (
+    SELECT year AS k0, (SUM(qty)) AS a0
+    FROM dates LEFT JOIN fact_sales ON dates.datekey = fact_sales.datekey
+    GROUP BY year
+), _mc1 AS (
+    SELECT year AS k0, (SUM(rqty)) AS a1
+    FROM dates LEFT JOIN fact_returns ON dates.datekey = fact_returns.datekey
+    GROUP BY year
+)
+SELECT COALESCE(_mc0.k0, _mc1.k0) AS "year", _mc0.a0 AS 'Sold', _mc1.a1 AS 'Returned'
+FROM _mc0
+FULL OUTER JOIN _mc1 ON _mc0.k0 IS NOT DISTINCT FROM _mc1.k0
+```
+
+Properties of stitched queries:
+
+- **Clustering** is by the table set each aggregate references (stored measures are expanded first). Measures over the same table share one CTE; a single expression spanning two tables — `DIVIDE(SUM(Sales[Qty]), COUNT(matches[id]))` — has each aggregate lifted into its own cluster and the arithmetic evaluated over the stitched columns.
+- **Filters propagate like DAX**: a TREATAS filter is routed into every cluster whose tables it can reach following relationship direction (one side → many side, both ways across bidirectional edges). A filter on a dimension related only to table A leaves table B's measures untouched; a filter unrelated to *every* measure is an error.
+- **Row semantics**: the FULL OUTER JOIN returns the union of key combinations produced by any cluster — a group that only exists for one measure shows the other measures as NULL (matching DAX, and unlike a flat join which would drop the row).
+- CALCULATE, time intelligence, and ROLLUPADDISSUBTOTAL all evaluate inside their cluster's context; rollup grouping levels stitch on the keys *and* the `GROUPING()` flags so subtotal rows pair only with matching subtotal rows.
+
+Single-table queries keep the plain flat-join emission — stitched codegen activates only for multi-table queries and for join graphs that cross a bidirectional relationship (next section).
+
 ## Bidirectional relationships
 
 By default, a relationship is unidirectional: filter context flows from the `from` table toward the `to` table and the emitter produces a `LEFT JOIN`. Setting `bidirectional = true` on a relationship allows filter context to propagate in both directions through a bridge (junction) table.
@@ -511,18 +539,19 @@ to_column   = "DimBKey"
 
 ### What the codegen emits
 
-For every `bidirectional = true` edge, DUX emits a `_bd_{ToTable}` CTE instead of a raw `LEFT JOIN`. The CTE `SELECT DISTINCT`s the bridge key after joining the filter source, ensuring no fan-out from many-to-many bridge rows:
+Queries whose join graph crosses a `bidirectional = true` edge are emitted through **stitched codegen** (see *Multi-table measures* above). Within each measure's cluster CTE, the filter chain beyond the bidi edge is carved into a correlated `EXISTS` semi-join: rows are gated by the bridge without ever being joined to it, so many-to-many bridge rows cannot fan the measure's rows out:
 
 ```sql
-WITH _bd_DimB AS (
-    SELECT DISTINCT bridge.DimBKey
-    FROM bridge
-    JOIN dima ON dima.DimAKey = bridge.DimAKey
-    WHERE Category IN ('X')
+WITH _mc0 AS (
+    SELECT (SUM(Amount)) AS a0
+    FROM factmeasures
+    LEFT JOIN dimb ON factmeasures.DimBKey = dimb.DimBKey
+    WHERE EXISTS (SELECT 1 FROM bridge
+                  JOIN dima ON bridge.DimAKey = dima.DimAKey
+                  WHERE bridge.DimBKey = dimb.DimBKey AND Category IN ('X'))
 )
-SELECT SUM(Amount) AS 'Total'
-FROM factmeasures
-JOIN _bd_dimb ON _bd_dimb.DimBKey = factmeasures.DimBKey
+SELECT _mc0.a0 AS 'Total'
+FROM _mc0
 ```
 
 ### Ambiguity detection

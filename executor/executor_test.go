@@ -2,6 +2,7 @@ package executor_test
 
 import (
 	"database/sql"
+	"math/big"
 	"testing"
 
 	_ "github.com/duckdb/duckdb-go/v2"
@@ -100,6 +101,10 @@ func toFloat(v any) float64 {
 		return float64(n)
 	case int:
 		return float64(n)
+	case *big.Int:
+		// DuckDB returns HUGEINT (e.g. SUM over INTEGER) as *big.Int.
+		f, _ := new(big.Float).SetInt(n).Float64()
+		return f
 	}
 	return 0
 }

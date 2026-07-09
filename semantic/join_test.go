@@ -1,0 +1,48 @@
+package semantic
+
+import "testing"
+
+// star schema: two facts on one dimension, plus a product dim on fact_sales
+// and a bidirectional bridge edge for the bidi case.
+func filterSchema() *Schema {
+	s := NewSchema()
+	for _, name := range []string{"dates", "fact_sales", "fact_returns", "products", "bridge"} {
+		s.Tables[name] = &Table{Name: name, Columns: map[string]*Column{}}
+	}
+	s.Relationships = append(s.Relationships,
+		&Relationship{FromTable: "fact_sales", FromColumn: "datekey", ToTable: "dates", ToColumn: "datekey"},
+		&Relationship{FromTable: "fact_returns", FromColumn: "datekey", ToTable: "dates", ToColumn: "datekey"},
+		&Relationship{FromTable: "fact_sales", FromColumn: "pkey", ToTable: "products", ToColumn: "pkey"},
+		&Relationship{FromTable: "bridge", FromColumn: "pkey", ToTable: "products", ToColumn: "pkey", Bidirectional: true},
+	)
+	return s
+}
+
+func TestFilterReaches(t *testing.T) {
+	s := filterSchema()
+	cases := []struct {
+		src     string
+		targets []string
+		want    bool
+	}{
+		// dimension → its fact: propagates
+		{"dates", []string{"fact_sales"}, true},
+		{"dates", []string{"fact_returns"}, true},
+		{"products", []string{"fact_sales"}, true},
+		// dimension → unrelated fact THROUGH another fact: must NOT propagate
+		{"products", []string{"fact_returns"}, false},
+		{"products", []string{"dates"}, false},
+		// fact → its dimension: against filter direction, no propagation
+		{"fact_sales", []string{"dates"}, false},
+		// bidirectional edge propagates many → one
+		{"bridge", []string{"products"}, true},
+		{"bridge", []string{"fact_sales"}, true}, // bridge ↔ products → fact_sales
+		// target set containing the source itself
+		{"products", []string{"products"}, true},
+	}
+	for _, c := range cases {
+		if got := FilterReaches(s, c.src, c.targets); got != c.want {
+			t.Errorf("FilterReaches(%s → %v) = %v, want %v", c.src, c.targets, got, c.want)
+		}
+	}
+}
