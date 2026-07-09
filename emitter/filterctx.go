@@ -32,16 +32,18 @@ type groupContext struct {
 
 // calcModifiers is the classified view of CALCULATE's filter arguments.
 type calcModifiers struct {
-	removeAll    bool            // ALL() with no arguments
-	removeTables map[string]bool // lower(table): ALL(T) / REMOVEFILTERS(T) / ALLEXCEPT(T, …)
-	removeCols   map[string]bool // colKey(table, col): ALL(T[C]) / REMOVEFILTERS(T[C])
-	exceptCols   map[string]bool // colKey(table, col): columns kept by ALLEXCEPT
-	preds        []*parser.Expr  // plain predicates — override filters on their columns
-	keepPreds    []*parser.Expr  // KEEPFILTERS predicates — additive, never override
+	removeAll    bool               // ALL() with no arguments
+	removeTables map[string]bool    // lower(table): ALL(T) / REMOVEFILTERS(T) / ALLEXCEPT(T, …)
+	removeCols   map[string]bool    // colKey(table, col): ALL(T[C]) / REMOVEFILTERS(T[C])
+	exceptCols   map[string]bool    // colKey(table, col): columns kept by ALLEXCEPT
+	preds        []*parser.Expr     // plain predicates — override filters on their columns
+	keepPreds    []*parser.Expr     // KEEPFILTERS predicates — additive, never override
+	timeFilters  []*timeIntelFilter // DATESYTD, DATEADD, … (see timeintel.go)
 }
 
 func (cm *calcModifiers) hasRemovals() bool {
-	return cm.removeAll || len(cm.removeTables) > 0 || len(cm.removeCols) > 0
+	return cm.removeAll || len(cm.removeTables) > 0 || len(cm.removeCols) > 0 ||
+		len(cm.timeFilters) > 0
 }
 
 // removed reports whether the filter on table.col (a resolved SQL column name;
@@ -109,6 +111,22 @@ func (e *Emitter) classifyCalcArg(arg *parser.Expr, cm *calcModifiers) error {
 			}
 			// FILTER(T, pred) keeps the current context — additive predicate.
 			cm.keepPreds = append(cm.keepPreds, fc.Args[1])
+			return nil
+		}
+		if name := strings.ToUpper(fc.Name); isTimeIntelRangeFunc(name) {
+			tf, err := e.parseTimeIntel(fc)
+			if err != nil {
+				return err
+			}
+			// A designated date table gets full "mark as date table" semantics:
+			// all its filters are cleared. Otherwise only the date column's
+			// filter is replaced.
+			if e.isDesignatedDateTable(tf.table) {
+				cm.removeTables[strings.ToLower(tf.table)] = true
+			} else {
+				cm.removeCols[strings.ToLower(tf.table)+"\x00"+strings.ToLower(tf.col)] = true
+			}
+			cm.timeFilters = append(cm.timeFilters, tf)
 			return nil
 		}
 	}
@@ -293,6 +311,9 @@ func (e *Emitter) emitCalculateGrouped(fc *parser.FuncCall) (string, error) {
 			add(p.table)
 		}
 	}
+	for _, tf := range cm.timeFilters {
+		add(tf.table)
+	}
 	if len(tables) == 0 {
 		return "", fmt.Errorf("CALCULATE: cannot determine a source table for the cleared filter context")
 	}
@@ -343,6 +364,13 @@ func (e *Emitter) emitCalculateGrouped(fc *parser.FuncCall) (string, error) {
 		}
 		conds = append(conds, s)
 	}
+	for _, tf := range cm.timeFilters {
+		pred, err := e.emitTimeIntelPred(tf, calcAlias(tf.table)+"."+tf.col)
+		if err != nil {
+			return "", err
+		}
+		conds = append(conds, pred)
+	}
 
 	inner, err := e.emitExpr(fc.Args[0])
 	if err != nil {
@@ -382,8 +410,13 @@ func (e *Emitter) emitCalculateFastPath(innerExpr *parser.Expr, cm *calcModifier
 // calcAlias returns the subquery alias for a table inside a cleared-context
 // CALCULATE subquery (e.g. "atp.matches" → "__cal_atp_matches").
 func calcAlias(name string) string {
+	return "__cal_" + sanitizeAliasSuffix(name)
+}
+
+// sanitizeAliasSuffix lowers name and replaces every non-alphanumeric rune
+// with '_' so it can be embedded in a SQL alias.
+func sanitizeAliasSuffix(name string) string {
 	var sb strings.Builder
-	sb.WriteString("__cal_")
 	for _, r := range strings.ToLower(name) {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 			sb.WriteRune(r)

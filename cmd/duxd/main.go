@@ -593,6 +593,7 @@ func importHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *syn
 		mu.Lock()
 		schema.Relationships = nil
 		schema.Measures = make(map[string]map[string]*parser.MeasureDefinition)
+		schema.DateTables = make(map[string]string)
 		if err := metaDB.LoadIntoSchema(schema); err != nil {
 			mu.Unlock()
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -866,6 +867,7 @@ func refreshHandler(metaDB *semantic.MetadataDB, db *sql.DB, schema *semantic.Sc
 		schema.Tables = fresh.Tables
 		schema.Relationships = fresh.Relationships
 		schema.Measures = fresh.Measures
+		schema.DateTables = fresh.DateTables
 		mu.Unlock()
 
 		log.Printf("schema refreshed — %d tables, %d relationships", len(fresh.Tables), len(fresh.Relationships))

@@ -377,6 +377,49 @@ EVALUATE
     )
 ```
 
+### Time intelligence
+
+Time intelligence works best with a **designated date table** (see below). The date ranges are anchored to the dates visible in the current filter context — e.g. grouped by year and month, `TOTALYTD` accumulates from January 1st to the end of each month.
+
+| Function | Description |
+|----------|-------------|
+| `DATESYTD(D[c])` / `DATESQTD` / `DATESMTD` | Dates from the start of the year / quarter / month to the last date in context |
+| `TOTALYTD(expr, D[c])` / `TOTALQTD` / `TOTALMTD` | Shorthand for `CALCULATE(expr, DATESYTD(D[c]))` |
+| `SAMEPERIODLASTYEAR(D[c])` | The context's date range shifted back one year |
+| `DATEADD(D[c], n, YEAR\|QUARTER\|MONTH\|DAY)` | The context's date range shifted by `n` intervals |
+| `PREVIOUSYEAR/QUARTER/MONTH/DAY(D[c])` | The full period before the first date in context |
+| `NEXTYEAR/QUARTER/MONTH/DAY(D[c])` | The full period after the last date in context |
+| `DATESBETWEEN(D[c], start, end)` | Dates in `[start, end]`; either bound may be `BLANK()` |
+| `DATESINPERIOD(D[c], start, n, interval)` | `n` intervals of dates from `start` (negative `n` = backwards) |
+| `CALENDAR(start, end)` | Generated date table with a `Date` column |
+| `CALENDARAUTO()` | Like `CALENDAR`, spanning whole years across every date column in the model |
+| `DATE(y, m, d)` | Date constructor |
+
+`MAX(D[c])` / `MIN(D[c])` / `LASTDATE(D[c])` / `FIRSTDATE(D[c])` / `TODAY()` are understood as context-aware anchors in the `start`/`end` positions of `DATESBETWEEN` and `DATESINPERIOD`.
+
+```dux
+EVALUATE
+    SUMMARIZECOLUMNS(
+        dates[year],
+        dates[month],
+        "Sales",       SUM(orders[amount]),
+        "Sales YTD",   TOTALYTD(SUM(orders[amount]), dates[date]),
+        "Sales PY",    CALCULATE(SUM(orders[amount]), SAMEPERIODLASTYEAR(dates[date]))
+    )
+```
+
+#### Designating a date table
+
+Mark a table as the model's date table in `dux.toml`:
+
+```toml
+[[date_table]]
+table  = "dates"
+column = "date"
+```
+
+On a designated date table, time-intelligence functions clear **all** filters on the table before applying their date range (the DAX "mark as date table" behaviour) — this is what makes YTD work when grouping by the table's year/month columns. On an undesignated table only the date column's own filter is replaced.
+
 ### Scalar / logical
 
 | Function | Description |

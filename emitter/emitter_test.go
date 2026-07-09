@@ -453,6 +453,104 @@ func TestFilterContextModifiers(t *testing.T) {
 	})
 }
 
+// ─── Time intelligence ────────────────────────────────────────────────────────
+
+// timeSchema builds a schema with a dates dimension and an orders fact.
+// When designate is true, dates is marked as the model's date table.
+func timeSchema(designate bool) *semantic.Schema {
+	s := semantic.NewSchema()
+	s.Tables["dates"] = &semantic.Table{
+		Name: "dates",
+		Columns: map[string]*semantic.Column{
+			"date":  {Name: "date", DataType: "DATE"},
+			"year":  {Name: "year", DataType: "INTEGER"},
+			"month": {Name: "month", DataType: "INTEGER"},
+		},
+	}
+	s.Tables["orders"] = &semantic.Table{
+		Name: "orders",
+		Columns: map[string]*semantic.Column{
+			"order_date": {Name: "order_date", DataType: "DATE"},
+			"amount":     {Name: "amount", DataType: "DOUBLE"},
+		},
+	}
+	s.Relationships = append(s.Relationships, &semantic.Relationship{
+		FromTable:  "orders",
+		FromColumn: "order_date",
+		ToTable:    "dates",
+		ToColumn:   "date",
+	})
+	if designate {
+		s.SetDateTable("dates", "date")
+	}
+	return s
+}
+
+func emitTime(t *testing.T, designate bool, dux string) string {
+	t.Helper()
+	q := mustParse(t, dux)
+	em := &emitter.Emitter{Schema: timeSchema(designate)}
+	sql, err := em.Emit(q)
+	if err != nil {
+		t.Fatalf("emit: %v", err)
+	}
+	return sql
+}
+
+func TestTimeIntelligence(t *testing.T) {
+	t.Run("TOTALYTD_anchored_to_group_context", func(t *testing.T) {
+		sql := emitTime(t, true, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year],
+			dates[month],
+			"YTD", TOTALYTD(SUM(orders[amount]), dates[date])
+		)`)
+		// Anchor correlates on the date table's group keys...
+		assertContains(t, sql,
+			"date_trunc('year'",
+			"__ti_dates.year = dates.year",
+			"__ti_dates.month = dates.month")
+		// ...and the designated date table's own group correlations are cleared.
+		assertNotContains(t, sql, "__cal_dates.year = dates.year")
+	})
+
+	t.Run("undesignated_table_keeps_other_column_filters", func(t *testing.T) {
+		// Without the designation only the date column's filter is replaced,
+		// so the year group key stays correlated (DAX behaviour for a column
+		// that is not on a marked date table).
+		sql := emitTime(t, false, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year],
+			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date]))
+		)`)
+		assertContains(t, sql, "__cal_dates.year = dates.year")
+	})
+
+	t.Run("DATEADD_shifts_range", func(t *testing.T) {
+		sql := emitTime(t, true, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year],
+			"PY", CALCULATE(SUM(orders[amount]), DATEADD(dates[date], -1, YEAR))
+		)`)
+		assertContains(t, sql, "* INTERVAL 1 YEAR", "-(1)")
+	})
+
+	t.Run("standalone_DATESYTD_is_a_table", func(t *testing.T) {
+		sql := emitTime(t, true, `EVALUATE DATESYTD(dates[date])`)
+		assertContains(t, sql, "SELECT DISTINCT date FROM dates WHERE", "date_trunc('year'")
+	})
+
+	t.Run("CALENDAR", func(t *testing.T) {
+		sql := emitTime(t, true, `EVALUATE CALENDAR(DATE(2024, 1, 1), DATE(2024, 12, 31))`)
+		assertContains(t, sql, "generate_series", "make_date", `AS "Date"`)
+	})
+
+	t.Run("CALENDARAUTO_scans_date_columns", func(t *testing.T) {
+		sql := emitTime(t, true, `EVALUATE CALENDARAUTO()`)
+		assertContains(t, sql,
+			"SELECT MIN(date) AS mn, MAX(date) AS mx FROM dates",
+			"SELECT MIN(order_date) AS mn, MAX(order_date) AS mx FROM orders",
+			"make_date")
+	})
+}
+
 // ─── Scalar / logical ─────────────────────────────────────────────────────────
 
 func TestScalarLogical(t *testing.T) {

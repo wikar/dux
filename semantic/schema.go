@@ -5,6 +5,7 @@ package semantic
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/danielwikar/dux/parser"
 )
@@ -16,6 +17,11 @@ type Schema struct {
 	Tables        map[string]*Table
 	Measures      map[string]map[string]*parser.MeasureDefinition // table → name → def
 	Relationships []*Relationship
+	// DateTables maps a lower-cased table key to the name of its date column.
+	// A designated date table gets DAX "mark as date table" semantics: time
+	// intelligence functions over any of its columns clear ALL filters on the
+	// table (not just the date column) before applying their date range.
+	DateTables map[string]string
 }
 
 // Table represents a table in the schema.
@@ -44,9 +50,34 @@ type Relationship struct {
 // NewSchema returns an empty, initialised Schema.
 func NewSchema() *Schema {
 	return &Schema{
-		Tables:   make(map[string]*Table),
-		Measures: make(map[string]map[string]*parser.MeasureDefinition),
+		Tables:     make(map[string]*Table),
+		Measures:   make(map[string]map[string]*parser.MeasureDefinition),
+		DateTables: make(map[string]string),
 	}
+}
+
+// SetDateTable designates table (any casing) as a date table with the given
+// date column. An empty column removes the designation.
+func (s *Schema) SetDateTable(table, column string) {
+	if s.DateTables == nil {
+		s.DateTables = make(map[string]string)
+	}
+	key := strings.ToLower(table)
+	if column == "" {
+		delete(s.DateTables, key)
+		return
+	}
+	s.DateTables[key] = column
+}
+
+// DateColumn returns the designated date column for table (any casing) and
+// whether the table is a designated date table.
+func (s *Schema) DateColumn(table string) (string, bool) {
+	if s.DateTables == nil {
+		return "", false
+	}
+	col, ok := s.DateTables[strings.ToLower(table)]
+	return col, ok
 }
 
 // IntrospectDuckDB populates a Schema by querying the information_schema of

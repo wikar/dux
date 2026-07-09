@@ -16,6 +16,7 @@ import (
 type duxTOML struct {
 	Relationship []tomlRelationship `toml:"relationship"`
 	Measure      []tomlMeasure      `toml:"measure"`
+	DateTable    []tomlDateTable    `toml:"date_table"`
 }
 
 // tomlRelationship is one [[relationship]] entry.
@@ -32,6 +33,13 @@ type tomlMeasure struct {
 	Table      string `toml:"table"`
 	Name       string `toml:"name"`
 	Expression string `toml:"expression"`
+}
+
+// tomlDateTable is one [[date_table]] entry — designates a table as the model's
+// date table (DAX "mark as date table") with its date column.
+type tomlDateTable struct {
+	Table  string `toml:"table"`
+	Column string `toml:"column"`
 }
 
 // ─── Load ─────────────────────────────────────────────────────────────────────
@@ -102,6 +110,14 @@ func LoadDuxTOMLBytes(data []byte, schema *Schema) error {
 		}
 	}
 
+	// Merge date-table designations.
+	for _, dt := range doc.DateTable {
+		if dt.Table == "" || dt.Column == "" {
+			return fmt.Errorf("date_table entry missing table or column")
+		}
+		schema.SetDateTable(dt.Table, dt.Column)
+	}
+
 	return nil
 }
 
@@ -156,6 +172,14 @@ func ExportDuxTOML(schema *Schema) ([]byte, error) {
 			Expression: entry.def.Expression,
 		})
 	}
+
+	// Date tables — sorted by table name.
+	for table, column := range schema.DateTables {
+		doc.DateTable = append(doc.DateTable, tomlDateTable{Table: table, Column: column})
+	}
+	sort.Slice(doc.DateTable, func(i, j int) bool {
+		return doc.DateTable[i].Table < doc.DateTable[j].Table
+	})
 
 	var buf bytes.Buffer
 	enc := toml.NewEncoder(&buf)

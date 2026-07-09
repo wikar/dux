@@ -64,6 +64,11 @@ func (m *MetadataDB) initSchema() error {
 	);
 
 	CREATE SEQUENCE IF NOT EXISTS dux_measures_id_seq START 1;
+
+	CREATE TABLE IF NOT EXISTS dux_date_tables (
+		table_name  TEXT PRIMARY KEY,
+		column_name TEXT NOT NULL
+	);
 	`
 	if _, err := m.db.Exec(ddl); err != nil {
 		return fmt.Errorf("init metadata schema: %w", err)
@@ -79,7 +84,27 @@ func (m *MetadataDB) LoadIntoSchema(schema *Schema) error {
 	if err := m.loadRelationships(schema); err != nil {
 		return err
 	}
-	return m.loadMeasures(schema)
+	if err := m.loadMeasures(schema); err != nil {
+		return err
+	}
+	return m.loadDateTables(schema)
+}
+
+func (m *MetadataDB) loadDateTables(schema *Schema) error {
+	rows, err := m.db.Query(`SELECT table_name, column_name FROM dux_date_tables ORDER BY table_name`)
+	if err != nil {
+		return fmt.Errorf("load date tables: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var tableName, columnName string
+		if err := rows.Scan(&tableName, &columnName); err != nil {
+			return fmt.Errorf("scan date table: %w", err)
+		}
+		schema.SetDateTable(tableName, columnName)
+	}
+	return rows.Err()
 }
 
 func (m *MetadataDB) loadRelationships(schema *Schema) error {
@@ -180,6 +205,24 @@ func (m *MetadataDB) DeleteMeasure(tableName, name string) error {
 	return err
 }
 
+// SaveDateTable inserts or replaces a date-table designation in the metadata DB.
+func (m *MetadataDB) SaveDateTable(tableName, columnName string) error {
+	_, err := m.db.Exec(`
+		INSERT INTO dux_date_tables (table_name, column_name) VALUES (?, ?)
+		ON CONFLICT (table_name) DO UPDATE SET column_name = excluded.column_name
+	`, tableName, columnName)
+	if err != nil {
+		return fmt.Errorf("save date table: %w", err)
+	}
+	return nil
+}
+
+// DeleteDateTable removes a date-table designation from the metadata DB.
+func (m *MetadataDB) DeleteDateTable(tableName string) error {
+	_, err := m.db.Exec(`DELETE FROM dux_date_tables WHERE table_name = ?`, tableName)
+	return err
+}
+
 // DeleteRelationship removes a relationship from the metadata DB.
 func (m *MetadataDB) DeleteRelationship(fromTable, fromColumn, toTable, toColumn string) error {
 	_, err := m.db.Exec(`
@@ -206,6 +249,9 @@ func (m *MetadataDB) ReplaceAllFromSchema(schema *Schema) error {
 	if _, err := tx.Exec(`DELETE FROM dux_measures`); err != nil {
 		return fmt.Errorf("clear measures: %w", err)
 	}
+	if _, err := tx.Exec(`DELETE FROM dux_date_tables`); err != nil {
+		return fmt.Errorf("clear date tables: %w", err)
+	}
 
 	for _, r := range schema.Relationships {
 		if _, err := tx.Exec(`
@@ -224,6 +270,14 @@ func (m *MetadataDB) ReplaceAllFromSchema(schema *Schema) error {
 			`, tableName, measureName, def.Expression); err != nil {
 				return fmt.Errorf("insert measure %q: %w", measureName, err)
 			}
+		}
+	}
+
+	for tableName, columnName := range schema.DateTables {
+		if _, err := tx.Exec(`
+			INSERT INTO dux_date_tables (table_name, column_name) VALUES (?, ?)
+		`, tableName, columnName); err != nil {
+			return fmt.Errorf("insert date table %q: %w", tableName, err)
 		}
 	}
 

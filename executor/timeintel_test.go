@@ -1,0 +1,229 @@
+package executor_test
+
+import (
+	"database/sql"
+	"testing"
+
+	"github.com/danielwikar/dux/semantic"
+)
+
+// setupTimeDB builds a star schema with a designated date table:
+//
+//	dates  — one row per day for 2023-01-01 .. 2024-12-31, with year/month
+//	orders — a handful of orders across months
+//
+// Order amounts: 2023: Jan 10, Feb 20, Mar 30 — 2024: Jan 100, Feb 200, Mar 300.
+func setupTimeDB(t *testing.T) (*sql.DB, *semantic.Schema) {
+	t.Helper()
+
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatalf("open duckdb: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	ddl := []string{
+		`CREATE TABLE dates AS
+			SELECT CAST(generate_series AS DATE)          AS date,
+			       CAST(year(generate_series) AS INT)    AS year,
+			       CAST(month(generate_series) AS INT)   AS month
+			FROM generate_series(DATE '2023-01-01', DATE '2024-12-31', INTERVAL 1 DAY)`,
+		`CREATE TABLE orders (
+			id         INTEGER,
+			order_date DATE,
+			amount     DOUBLE
+		)`,
+		`INSERT INTO orders VALUES
+			(1, DATE '2023-01-15', 10.0),
+			(2, DATE '2023-02-10', 20.0),
+			(3, DATE '2023-03-05', 30.0),
+			(4, DATE '2024-01-20', 100.0),
+			(5, DATE '2024-02-15', 200.0),
+			(6, DATE '2024-03-10', 300.0)`,
+	}
+	for _, s := range ddl {
+		if _, err := db.Exec(s); err != nil {
+			t.Fatalf("setup: %v — %s", err, s)
+		}
+	}
+
+	schema, err := semantic.IntrospectDuckDB(db)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	schema.Relationships = append(schema.Relationships, &semantic.Relationship{
+		FromTable:  "orders",
+		FromColumn: "order_date",
+		ToTable:    "dates",
+		ToColumn:   "date",
+	})
+	schema.SetDateTable("dates", "date")
+
+	return db, schema
+}
+
+// monthRow finds the row for a given year and month.
+func monthRow(t *testing.T, rows []map[string]any, year, month float64) map[string]any {
+	t.Helper()
+	for _, row := range rows {
+		if toFloat(row["year"]) == year && toFloat(row["month"]) == month {
+			return row
+		}
+	}
+	t.Fatalf("no row for year=%v month=%v", year, month)
+	return nil
+}
+
+func TestExecute_TimeIntelligence(t *testing.T) {
+	db, schema := setupTimeDB(t)
+
+	t.Run("TOTALYTD", func(t *testing.T) {
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year],
+			dates[month],
+			"YTD", TOTALYTD(SUM(orders[amount]), dates[date])
+		)`)
+		checks := []struct{ y, m, want float64 }{
+			{2023, 1, 10}, {2023, 2, 30}, {2023, 3, 60}, {2023, 12, 60},
+			{2024, 1, 100}, {2024, 2, 300}, {2024, 3, 600},
+		}
+		for _, c := range checks {
+			if v := toFloat(cell(t, monthRow(t, rows, c.y, c.m), "YTD")); v != c.want {
+				t.Errorf("YTD %v-%v: expected %v, got %v", c.y, c.m, c.want, v)
+			}
+		}
+	})
+
+	t.Run("CALCULATE_DATESYTD_equals_TOTALYTD", func(t *testing.T) {
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year],
+			dates[month],
+			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date]))
+		)`)
+		if v := toFloat(cell(t, monthRow(t, rows, 2024, 2), "YTD")); v != 300 {
+			t.Errorf("expected 300, got %v", v)
+		}
+	})
+
+	t.Run("SAMEPERIODLASTYEAR", func(t *testing.T) {
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year],
+			dates[month],
+			"PY", CALCULATE(SUM(orders[amount]), SAMEPERIODLASTYEAR(dates[date]))
+		)`)
+		if v := toFloat(cell(t, monthRow(t, rows, 2024, 2), "PY")); v != 20 {
+			t.Errorf("2024-02 PY: expected 20, got %v", v)
+		}
+		if v := monthRow(t, rows, 2023, 2)["PY"]; v != nil {
+			t.Errorf("2023-02 PY: expected NULL (no 2022 data), got %v", v)
+		}
+	})
+
+	t.Run("DATEADD_minus_one_year", func(t *testing.T) {
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year],
+			dates[month],
+			"PY", CALCULATE(SUM(orders[amount]), DATEADD(dates[date], -1, YEAR))
+		)`)
+		if v := toFloat(cell(t, monthRow(t, rows, 2024, 3), "PY")); v != 30 {
+			t.Errorf("2024-03 PY: expected 30, got %v", v)
+		}
+	})
+
+	t.Run("PREVIOUSMONTH", func(t *testing.T) {
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year],
+			dates[month],
+			"PM", CALCULATE(SUM(orders[amount]), PREVIOUSMONTH(dates[date]))
+		)`)
+		if v := toFloat(cell(t, monthRow(t, rows, 2023, 2), "PM")); v != 10 {
+			t.Errorf("2023-02 PM: expected 10, got %v", v)
+		}
+		if v := toFloat(cell(t, monthRow(t, rows, 2024, 2), "PM")); v != 100 {
+			t.Errorf("2024-02 PM: expected 100, got %v", v)
+		}
+	})
+
+	t.Run("NEXTMONTH", func(t *testing.T) {
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year],
+			dates[month],
+			"NM", CALCULATE(SUM(orders[amount]), NEXTMONTH(dates[date]))
+		)`)
+		if v := toFloat(cell(t, monthRow(t, rows, 2024, 1), "NM")); v != 200 {
+			t.Errorf("2024-01 NM: expected 200, got %v", v)
+		}
+	})
+
+	t.Run("DATESBETWEEN_literals", func(t *testing.T) {
+		_, rows := run(t, db, schema,
+			`EVALUATE CALCULATE(SUM(orders[amount]), DATESBETWEEN(dates[date], "2023-01-01", "2023-12-31"))`)
+		if len(rows) != 1 {
+			t.Fatalf("expected 1 row, got %d", len(rows))
+		}
+		for _, v := range rows[0] {
+			if toFloat(v) != 60 {
+				t.Errorf("expected 60 (all 2023 orders), got %v", v)
+			}
+		}
+	})
+
+	t.Run("DATESBETWEEN_DATE_ctor", func(t *testing.T) {
+		_, rows := run(t, db, schema,
+			`EVALUATE CALCULATE(SUM(orders[amount]), DATESBETWEEN(dates[date], DATE(2024, 1, 1), BLANK()))`)
+		for _, v := range rows[0] {
+			if toFloat(v) != 600 {
+				t.Errorf("expected 600 (all 2024 orders), got %v", v)
+			}
+		}
+	})
+
+	t.Run("DATESINPERIOD_trailing_two_months", func(t *testing.T) {
+		// Two months back from the last date in context (2024-03-31 global max
+		// of the date table): (2024-01-31, 2024-03-31] → Feb + Mar 2024.
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year],
+			dates[month],
+			"R2M", CALCULATE(SUM(orders[amount]), DATESINPERIOD(dates[date], MAX(dates[date]), -2, MONTH))
+		)`)
+		if v := toFloat(cell(t, monthRow(t, rows, 2024, 3), "R2M")); v != 500 {
+			t.Errorf("2024-03 rolling 2 months: expected 500, got %v", v)
+		}
+	})
+
+	t.Run("standalone_DATESYTD_table", func(t *testing.T) {
+		_, rows := run(t, db, schema, `EVALUATE DATESYTD(dates[date])`)
+		// Global max is 2024-12-31 → YTD covers all of 2024 = 366 days (leap year).
+		if len(rows) != 366 {
+			t.Errorf("expected 366 rows, got %d", len(rows))
+		}
+	})
+
+	t.Run("CALENDAR", func(t *testing.T) {
+		_, rows := run(t, db, schema, `EVALUATE CALENDAR("2024-01-01", "2024-01-31")`)
+		if len(rows) != 31 {
+			t.Errorf("expected 31 rows, got %d", len(rows))
+		}
+	})
+
+	t.Run("CALENDARAUTO", func(t *testing.T) {
+		// Date extremes across the model span 2023–2024 → whole years = 731 days.
+		_, rows := run(t, db, schema, `EVALUATE CALENDARAUTO()`)
+		if len(rows) != 731 {
+			t.Errorf("expected 731 rows, got %d", len(rows))
+		}
+	})
+
+	t.Run("undesignated_date_column", func(t *testing.T) {
+		// Time intel on a raw fact date column (orders is NOT a designated
+		// date table) still works standalone.
+		_, rows := run(t, db, schema,
+			`EVALUATE CALCULATE(SUM(orders[amount]), DATESYTD(orders[order_date]))`)
+		// Global max order date is 2024-03-10 → YTD 2024 = 600.
+		for _, v := range rows[0] {
+			if toFloat(v) != 600 {
+				t.Errorf("expected 600, got %v", v)
+			}
+		}
+	})
+}

@@ -66,7 +66,9 @@ type TableConstructor struct {
 	Values []*Expr `parser:"'{' ( @@ ( ',' @@ )* )? '}'"`
 }
 
-// Term is a single expression unit. Alternatives are tried in order:
+// Term is a single expression unit, optionally preceded by a unary minus
+// (e.g. the -1 in DATEADD(Dates[Date], -1, YEAR)).
+// Alternatives are tried in order:
 // TableConstructor is tried first — '{' is unambiguous, no lookahead needed.
 // FuncCall is tried next because it and a bare column ref both begin with
 // an identifier token; UseLookahead(2) in the parser lets participle peek
@@ -76,6 +78,7 @@ type TableConstructor struct {
 // functions (e.g. FILTER('Order Lines', ...)).
 // A bare Ident (no following '(' or ColRef token) is matched last.
 type Term struct {
+	Neg              bool              `parser:"@'-'? ("`
 	TableConstructor *TableConstructor `parser:"  @@"`
 	FuncCall         *FuncCall         `parser:"| @@"`
 	ColRef           *ColRef           `parser:"| @@"`
@@ -83,7 +86,7 @@ type Term struct {
 	SubExpr          *Expr             `parser:"| '(' @@ ')'"`
 	QualifiedIdent   string            `parser:"| @QualifiedIdent"`
 	QuotedIdent      string            `parser:"| @QuotedIdent"`
-	Ident            string            `parser:"| @Ident"`
+	Ident            string            `parser:"| @Ident )"`
 }
 
 // FuncCall is a named function invocation with zero or more arguments.

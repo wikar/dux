@@ -104,6 +104,17 @@ func (e *Emitter) emitExpr(expr *parser.Expr) (string, error) {
 }
 
 func (e *Emitter) emitTerm(t *parser.Term) (string, error) {
+	s, err := e.emitTermBase(t)
+	if err != nil {
+		return "", err
+	}
+	if t.Neg {
+		return "-(" + s + ")", nil
+	}
+	return s, nil
+}
+
+func (e *Emitter) emitTermBase(t *parser.Term) (string, error) {
 	if t == nil {
 		return "", fmt.Errorf("nil term")
 	}
@@ -287,6 +298,24 @@ func (e *Emitter) emitFuncCall(fc *parser.FuncCall) (string, error) {
 		return e.emitValuesOrDistinct("VALUES", fc)
 	case "DISTINCT":
 		return e.emitValuesOrDistinct("DISTINCT", fc)
+
+	// Time intelligence (see timeintel.go). Range-family functions reached
+	// here are standalone table expressions; inside CALCULATE they are
+	// intercepted by classifyCalcArgs.
+	case "DATESYTD", "DATESQTD", "DATESMTD",
+		"SAMEPERIODLASTYEAR", "DATEADD",
+		"PREVIOUSYEAR", "PREVIOUSQUARTER", "PREVIOUSMONTH", "PREVIOUSDAY",
+		"NEXTYEAR", "NEXTQUARTER", "NEXTMONTH", "NEXTDAY",
+		"DATESBETWEEN", "DATESINPERIOD":
+		return e.emitTimeIntelTable(fc)
+	case "TOTALYTD", "TOTALQTD", "TOTALMTD":
+		return e.emitTotalPeriod(fc)
+	case "CALENDAR":
+		return e.emitCalendar(fc)
+	case "CALENDARAUTO":
+		return e.emitCalendarAuto(fc)
+	case "DATE":
+		return e.emitDateCtor(fc)
 
 	// Table constructors / operations
 	case "SUMMARIZECOLUMNS":
@@ -492,18 +521,8 @@ func (e *Emitter) emitCalculate(fc *parser.FuncCall) (string, error) {
 			addTbl(t)
 		}
 	}
-
-	// If no predicates remain (none given, or only ALL-family modifiers),
-	// emit a plain aggregate over the unfiltered tables.
-	if len(preds) == 0 {
-		if cm.hasRemovals() && len(allTables) > 0 {
-			fromClause, fErr := e.calcFromClause(allTables)
-			if fErr != nil {
-				return "", fErr
-			}
-			return fmt.Sprintf("(SELECT %s FROM %s)", inner, fromClause), nil
-		}
-		return inner, nil
+	for _, tf := range cm.timeFilters {
+		addTbl(tf.table)
 	}
 
 	// Emit filter predicates.
@@ -514,6 +533,26 @@ func (e *Emitter) emitCalculate(fc *parser.FuncCall) (string, error) {
 			return "", err
 		}
 		filters = append(filters, f)
+	}
+	for _, tf := range cm.timeFilters {
+		pred, err := e.emitTimeIntelPred(tf, sqlIdent(tf.table)+"."+tf.col)
+		if err != nil {
+			return "", err
+		}
+		filters = append(filters, pred)
+	}
+
+	// If no predicates remain (none given, or only ALL-family modifiers),
+	// emit a plain aggregate over the unfiltered tables.
+	if len(filters) == 0 {
+		if cm.hasRemovals() && len(allTables) > 0 {
+			fromClause, fErr := e.calcFromClause(allTables)
+			if fErr != nil {
+				return "", fErr
+			}
+			return fmt.Sprintf("(SELECT %s FROM %s)", inner, fromClause), nil
+		}
+		return inner, nil
 	}
 	whereClause := strings.Join(filters, " AND ")
 
@@ -1541,13 +1580,18 @@ func (e *Emitter) IsTableExpr(expr *parser.Expr) (bool, error) {
 		// Known table-returning functions.
 		case "FILTER", "SUMMARIZECOLUMNS", "ADDCOLUMNS", "SELECTCOLUMNS",
 			"UNION", "INTERSECT", "EXCEPT", "TOPN", "DISTINCT", "VALUES",
-			"ALL", "ALLEXCEPT", "CROSSJOIN", "GENERATE", "GENERATEALL":
+			"ALL", "ALLEXCEPT", "CROSSJOIN", "GENERATE", "GENERATEALL",
+			"DATESYTD", "DATESQTD", "DATESMTD", "SAMEPERIODLASTYEAR", "DATEADD",
+			"PREVIOUSYEAR", "PREVIOUSQUARTER", "PREVIOUSMONTH", "PREVIOUSDAY",
+			"NEXTYEAR", "NEXTQUARTER", "NEXTMONTH", "NEXTDAY",
+			"DATESBETWEEN", "DATESINPERIOD", "CALENDAR", "CALENDARAUTO":
 			return true, nil
 		// Known scalar / aggregation functions.
 		case "SUM", "AVERAGE", "COUNT", "COUNTA", "COUNTBLANK", "COUNTROWS",
 			"DISTINCTCOUNT", "MIN", "MAX", "MEDIAN",
 			"SUMX", "AVERAGEX", "COUNTX", "MINX", "MAXX", "CONCATENATEX",
-			"DIVIDE", "IF", "SWITCH", "NOT", "AND", "OR", "ISBLANK", "BLANK":
+			"DIVIDE", "IF", "SWITCH", "NOT", "AND", "OR", "ISBLANK", "BLANK",
+			"TOTALYTD", "TOTALQTD", "TOTALMTD", "DATE":
 			return false, nil
 		}
 		// Fallthrough: use SQL normalisation for passthrough / unknown functions.
