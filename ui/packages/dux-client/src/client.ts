@@ -77,6 +77,22 @@ export class DuxClient {
     if (!res.ok) throw new Error(await res.text());
   }
 
+  /** Designate table/column as the model's date table (replaces any previous). */
+  async setDateTable(table: string, column: string): Promise<void> {
+    const res = await fetch(this.url("/datetable"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ table, column }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+  }
+
+  /** Clear the date-table designation. */
+  async clearDateTable(): Promise<void> {
+    const res = await fetch(this.url("/datetable"), { method: "DELETE" });
+    if (!res.ok) throw new Error(await res.text());
+  }
+
   async addRelationship(rel: RelInput): Promise<void> {
     const res = await fetch(this.url("/relationships"), {
       method: "POST",

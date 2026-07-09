@@ -1,14 +1,35 @@
-import { For } from "solid-js";
+import { For, Show } from "solid-js";
 import type { Component } from "solid-js";
 import type { Table } from "dux-client";
+import { isDateType } from "dux-client";
 import TypeIcon from "./TypeIcon";
 import styles from "./TableCard.module.css";
+
+/** Outline eye icon for the row-preview button. */
+const EyeIcon: Component = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
+
+/** Outline calendar icon for date-table designation. */
+const CalendarIcon: Component<{ size?: number }> = (props) => (
+  <svg width={props.size ?? 13} height={props.size ?? 13} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <rect x="3" y="4" width="18" height="17" rx="2" />
+    <line x1="16" y1="2" x2="16" y2="6" />
+    <line x1="8" y1="2" x2="8" y2="6" />
+    <line x1="3" y1="9.5" x2="21" y2="9.5" />
+  </svg>
+);
 
 const TableCard: Component<{
   tableName: string;
   table: Table;
   x: number;
   y: number;
+  /** The designated date column when this table is the model's date table. */
+  dateColumn?: string | null;
   /** Called when the user mousedowns on the card header to drag it. */
   onHeaderMouseDown: (e: MouseEvent) => void;
   /** Called when the user mousedowns on a column dot to start a relationship drag. */
@@ -17,9 +38,16 @@ const TableCard: Component<{
   onColumnsScroll?: () => void;
   /** Called when the preview button is clicked. */
   onPreview: () => void;
+  /** Toggle this table as the model's date table (only one allowed). */
+  onToggleDateTable?: () => void;
+  /** Switch the designated date column within this (already designated) table. */
+  onSetDateColumn?: (colName: string) => void;
 }> = (props) => {
   const columns = () =>
     Object.values(props.table.Columns).sort((a, b) => a.Name.localeCompare(b.Name));
+
+  const dateColumns = () => columns().filter((c) => isDateType(c.DataType));
+  const isDateTable = () => props.dateColumn != null;
 
   return (
     <div
@@ -31,8 +59,26 @@ const TableCard: Component<{
         <span class={styles.cardTableName} title={props.tableName}>
           {props.tableName}
         </span>
+        <Show when={dateColumns().length > 0}>
+          <button
+            class={styles.iconBtn}
+            classList={{ [styles.dateBtnActive]: isDateTable() }}
+            title={
+              isDateTable()
+                ? `Date table (column: ${props.dateColumn}) — click to unmark`
+                : "Mark as date table"
+            }
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              props.onToggleDateTable?.();
+            }}
+          >
+            <CalendarIcon />
+          </button>
+        </Show>
         <button
-          class={styles.previewBtn}
+          class={styles.iconBtn}
           title="Preview top 10 rows"
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => {
@@ -40,7 +86,7 @@ const TableCard: Component<{
             props.onPreview();
           }}
         >
-          ⊡
+          <EyeIcon />
         </button>
       </div>
 
@@ -56,6 +102,26 @@ const TableCard: Component<{
               <span class={styles.colName} title={col.Name}>
                 {col.Name}
               </span>
+              {/* When the designated date table has several date columns, each
+                  shows a calendar toggle to pick which one is THE date column. */}
+              <Show when={isDateTable() && dateColumns().length > 1 && isDateType(col.DataType)}>
+                <button
+                  class={styles.colCalBtn}
+                  classList={{ [styles.colCalBtnActive]: props.dateColumn === col.Name }}
+                  title={
+                    props.dateColumn === col.Name
+                      ? "Current date column"
+                      : "Use as the date column"
+                  }
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (props.dateColumn !== col.Name) props.onSetDateColumn?.(col.Name);
+                  }}
+                >
+                  <CalendarIcon size={11} />
+                </button>
+              </Show>
               <span class={styles.colType}>
                 {col.DataType.split("(")[0].toUpperCase()}
               </span>

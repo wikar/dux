@@ -278,6 +278,38 @@ const openAPISpec = `{
         }
       }
     },
+    "/datetable": {
+      "post": {
+        "summary": "Designate the date table",
+        "description": "Marks a table as the model's date table with the given DATE/TIMESTAMP column. Only one date table is allowed — any previous designation is replaced. Time-intelligence functions clear all filters on the designated table.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["table", "column"],
+                "properties": {
+                  "table":  { "type": "string", "example": "dates" },
+                  "column": { "type": "string", "example": "date" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Designated" },
+          "400": { "description": "Column is not a DATE or TIMESTAMP" },
+          "404": { "description": "Unknown table or column" }
+        }
+      },
+      "delete": {
+        "summary": "Clear the date table designation",
+        "responses": {
+          "204": { "description": "Cleared" }
+        }
+      }
+    },
     "/refresh": {
       "post": {
         "summary": "Refresh schema metadata",
@@ -380,6 +412,8 @@ func main() {
 	mux.HandleFunc("GET /relationships", listRelationshipsHandler(schema, &schemaMu))
 	mux.HandleFunc("POST /relationships", addRelationshipHandler(metaDB, schema, &schemaMu))
 	mux.HandleFunc("DELETE /relationships", deleteRelationshipHandler(metaDB, schema, &schemaMu))
+	mux.HandleFunc("POST /datetable", setDateTableHandler(metaDB, schema, &schemaMu))
+	mux.HandleFunc("DELETE /datetable", deleteDateTableHandler(metaDB, schema, &schemaMu))
 	mux.HandleFunc("POST /refresh", refreshHandler(metaDB, db, schema, &schemaMu, *tomlPath))
 
 	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, r *http.Request) {
@@ -704,6 +738,96 @@ func deleteMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, 
 		}
 		mu.Unlock()
 
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// ─── Date table ───────────────────────────────────────────────────────────────
+
+type dateTableRequest struct {
+	Table  string `json:"table"`
+	Column string `json:"column"`
+}
+
+// isDateColumnType reports whether a column data type can hold calendar dates.
+func isDateColumnType(dataType string) bool {
+	dt := strings.ToUpper(dataType)
+	return dt == "DATE" || strings.HasPrefix(dt, "TIMESTAMP")
+}
+
+// setDateTableHandler serves POST /datetable — designates the model's date
+// table and date column. Only one date table is allowed: any previous
+// designation is replaced.
+func setDateTableHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req dateTableRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Table == "" || req.Column == "" {
+			http.Error(w, "table and column are required", http.StatusBadRequest)
+			return
+		}
+
+		mu.Lock()
+		table, ok := schema.Tables[req.Table]
+		if !ok {
+			mu.Unlock()
+			http.Error(w, fmt.Sprintf("unknown table %q", req.Table), http.StatusNotFound)
+			return
+		}
+		col, ok := table.Columns[req.Column]
+		if !ok {
+			mu.Unlock()
+			http.Error(w, fmt.Sprintf("unknown column %q in table %q", req.Column, req.Table), http.StatusNotFound)
+			return
+		}
+		if !isDateColumnType(col.DataType) {
+			mu.Unlock()
+			http.Error(w, fmt.Sprintf("column %q has type %s — a DATE or TIMESTAMP column is required", req.Column, col.DataType), http.StatusBadRequest)
+			return
+		}
+		previous := make([]string, 0, len(schema.DateTables))
+		for tbl := range schema.DateTables {
+			previous = append(previous, tbl)
+		}
+		schema.DateTables = make(map[string]string)
+		schema.SetDateTable(req.Table, col.Name)
+		mu.Unlock()
+
+		for _, tbl := range previous {
+			if err := metaDB.DeleteDateTable(tbl); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		if err := metaDB.SaveDateTable(strings.ToLower(req.Table), col.Name); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusCreated)
+	}
+}
+
+// deleteDateTableHandler serves DELETE /datetable — clears the designation.
+func deleteDateTableHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		previous := make([]string, 0, len(schema.DateTables))
+		for tbl := range schema.DateTables {
+			previous = append(previous, tbl)
+		}
+		schema.DateTables = make(map[string]string)
+		mu.Unlock()
+
+		for _, tbl := range previous {
+			if err := metaDB.DeleteDateTable(tbl); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

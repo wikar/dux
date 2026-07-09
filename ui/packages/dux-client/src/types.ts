@@ -27,6 +27,8 @@ export interface Schema {
   Tables: Record<string, Table>;
   Measures: Record<string, Record<string, MeasureDef>> | null;
   Relationships: Relationship[] | null;
+  /** Lower-cased table key → designated date column ("mark as date table"). */
+  DateTables?: Record<string, string> | null;
 }
 
 // ─── Query builder state types ───────────────────────────────────────────────

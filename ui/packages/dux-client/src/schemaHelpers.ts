@@ -13,3 +13,10 @@ export const resolveTable = (name: string, tableKeys: string[]): string => {
   const match = tableKeys.find((k) => k.endsWith("." + name));
   return match ?? name;
 };
+
+// A column data type that can hold calendar dates (eligible as a date-table
+// date column).
+export const isDateType = (dataType: string): boolean => {
+  const dt = dataType.toUpperCase();
+  return dt === "DATE" || dt.startsWith("TIMESTAMP");
+};

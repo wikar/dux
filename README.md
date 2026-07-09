@@ -443,6 +443,8 @@ table  = "dates"
 column = "date"
 ```
 
+Or use the Explorer UI: every table with a `DATE`/`TIMESTAMP` column shows a calendar icon in its header — click it to designate the table (only one table can be the date table). When the table has several date columns, per-column calendar icons let you pick which one is the date column. Programmatically: `POST /datetable {"table": "dates", "column": "date"}` / `DELETE /datetable`.
+
 On a designated date table, time-intelligence functions clear **all** filters on the table before applying their date range (the DAX "mark as date table" behaviour) — this is what makes YTD work when grouping by the table's year/month columns. On an undesignated table only the date column's own filter is replaced.
 
 ### Scalar / logical

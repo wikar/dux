@@ -10,7 +10,7 @@ import {
 } from "solid-js";
 import type { Accessor, Component } from "solid-js";
 import type { Schema, Relationship } from "dux-client";
-import { isMetaTable, resolveTable } from "dux-client";
+import { isMetaTable, resolveTable, isDateType } from "dux-client";
 import dagre from "dagre";
 import TableCard from "./TableCard";
 import AddRelationshipModal from "./AddRelationshipModal";
@@ -296,6 +296,42 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
     return Object.keys(s.Tables).filter((n) => !isMetaTable(n)).sort();
   };
 
+  // ── Date-table designation ─────────────────────────────────────────────────
+  /** The designated date column when the named table is the model's date table. */
+  const dateColumnOf = (name: string): string | null =>
+    schema()?.DateTables?.[name.toLowerCase()] ?? null;
+
+  /** Toggle a table as the date table. Designating picks the first date column
+      (the only one, when there is exactly one); a second click clears it. */
+  async function toggleDateTable(name: string) {
+    const s = schema();
+    if (!s) return;
+    try {
+      if (dateColumnOf(name)) {
+        await client.clearDateTable();
+      } else {
+        const dateCols = Object.values(s.Tables[name].Columns)
+          .filter((c) => isDateType(c.DataType))
+          .sort((a, b) => a.Name.localeCompare(b.Name));
+        if (dateCols.length === 0) return;
+        await client.setDateTable(name, dateCols[0].Name);
+      }
+      refetch();
+    } catch (err) {
+      alert((err as Error).message);
+    }
+  }
+
+  /** Switch the date column within the already-designated date table. */
+  async function setDateColumn(name: string, col: string) {
+    try {
+      await client.setDateTable(name, col);
+      refetch();
+    } catch (err) {
+      alert((err as Error).message);
+    }
+  }
+
   return (
     <div class={styles.canvas}>
       <Show when={schema.loading}>
@@ -373,10 +409,13 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
                   table={schema()!.Tables[name]}
                   x={pos().x}
                   y={pos().y}
+                  dateColumn={dateColumnOf(name)}
                   onHeaderMouseDown={(e) => onHeaderMouseDown(name, e)}
                   onColDotMouseDown={(e, col) => onColDotMouseDown(name, col, e)}
                   onColumnsScroll={computeLines}
                   onPreview={() => setPreviewTable(name)}
+                  onToggleDateTable={() => toggleDateTable(name)}
+                  onSetDateColumn={(col) => setDateColumn(name, col)}
                 />
               );
             }}

@@ -35,21 +35,30 @@
   white-space: nowrap;
 }
 
-.previewBtn {
+/* Small icon-only header buttons (preview, date-table toggle) */
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: none;
   border: none;
   color: var(--subtext0);
-  font-size: 14px;
   cursor: pointer;
-  padding: 1px 4px;
+  padding: 2px 3px;
   border-radius: 3px;
   line-height: 1;
   flex-shrink: 0;
 }
 
-.previewBtn:hover {
+.iconBtn:hover {
   color: var(--blue);
   background: var(--surface1);
+}
+
+/* Active date-table designation — calendar lights up yellow */
+.dateBtnActive,
+.dateBtnActive:hover {
+  color: var(--yellow, #f9e2af);
 }
 
 .cardColumns {
@@ -86,6 +95,32 @@
   color: var(--subtext0);
   flex-shrink: 0;
   font-family: "Cascadia Code", "Fira Code", ui-monospace, monospace;
+}
+
+/* Per-column date-column picker (shown on the designated date table when it
+   has more than one date column) */
+.colCalBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--surface2);
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: 3px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.colCalBtn:hover {
+  color: var(--yellow, #f9e2af);
+  background: var(--surface1);
+}
+
+.colCalBtnActive,
+.colCalBtnActive:hover {
+  color: var(--yellow, #f9e2af);
 }
 
 /* Drag handle dot on each column row */
