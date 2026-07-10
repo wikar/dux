@@ -24,7 +24,7 @@ function cmpCells(a: string | number | null, b: string | number | null): number 
   return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
 }
 
-const ResultTable: Component<{ query: string }> = (props) => {
+const ResultTable: Component<{ query: string; includeEmpty: boolean }> = (props) => {
   const client = useDuxClient();
   const [data, setData] = createSignal<QueryResponse | null>(null);
   const [loading, setLoading] = createSignal(false);
@@ -82,13 +82,37 @@ const ResultTable: Component<{ query: string }> = (props) => {
     }
   }
 
-  const sortedRows = createMemo(() => {
+  /** Column indices holding measures — result columns whose name matches a
+   *  quoted alias in the query ("Name", expr pairs in SUMMARIZECOLUMNS). */
+  const measureCols = createMemo(() => {
+    const d = data();
+    if (!d) return new Set<number>();
+    const aliases = new Set<string>();
+    for (const m of props.query.matchAll(/"([^"]*)"/g)) aliases.add(m[1]);
+    const s = new Set<number>();
+    d.columns.forEach((c, i) => {
+      if (aliases.has(c)) s.add(i);
+    });
+    return s;
+  });
+
+  /** Rows after the Include Empty filter: unless the toggle is on, drop rows
+   *  where every measure column is null (empty combinations). */
+  const visibleRows = createMemo(() => {
     const d = data();
     if (!d) return [];
+    const mc = measureCols();
+    if (props.includeEmpty || mc.size === 0) return d.rows;
+    const idxs = [...mc];
+    return d.rows.filter((row) => idxs.some((i) => row[i] !== null));
+  });
+
+  const sortedRows = createMemo(() => {
+    const rows = visibleRows();
     const ci = sortCol();
-    if (ci === -1) return d.rows;
+    if (ci === -1) return rows;
     const dir = sortDir() === "asc" ? 1 : -1;
-    return [...d.rows].sort((a, b) => dir * cmpCells(a[ci], b[ci]));
+    return [...rows].sort((a, b) => dir * cmpCells(a[ci], b[ci]));
   });
 
   return (
@@ -100,7 +124,8 @@ const ResultTable: Component<{ query: string }> = (props) => {
         </Show>
         <Show when={data()}>
           <span class={styles.rowCount}>
-            {data()!.rows.length} row{data()!.rows.length !== 1 ? "s" : ""}
+            {visibleRows().length} row{visibleRows().length !== 1 ? "s" : ""}
+            {visibleRows().length !== data()!.rows.length ? ` (${data()!.rows.length - visibleRows().length} empty hidden)` : ""}
           </span>
         </Show>
       </div>

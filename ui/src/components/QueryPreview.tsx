@@ -9,6 +9,8 @@ const QueryPreview: Component<{
   isDirty: boolean;
   onQueryChange: (q: string) => void;
   onRun: () => void;
+  includeEmpty: boolean;
+  onToggleIncludeEmpty: () => void;
 }> = (props) => {
   const client = useDuxClient();
   const [schema] = createResource(() => client.fetchSchema());
@@ -34,6 +36,21 @@ const QueryPreview: Component<{
           </svg>
           Run
         </button>
+        <label
+          class={styles.toggle}
+          title={props.includeEmpty ? "Showing rows where all measures are null" : "Hiding rows where all measures are null"}
+        >
+          <input
+            type="checkbox"
+            class={styles.toggleInput}
+            checked={props.includeEmpty}
+            onChange={props.onToggleIncludeEmpty}
+          />
+          <span class={styles.toggleTrack}>
+            <span class={styles.toggleKnob} />
+          </span>
+          Include Empty
+        </label>
       </div>
     </div>
   );

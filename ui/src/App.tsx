@@ -19,6 +19,7 @@ const App: Component = () => {
   let importInputRef: HTMLInputElement | undefined;
   const [refreshCount, setRefreshCount] = createSignal(0);
   const [showHidden, setShowHidden] = createSignal(false);
+  const [includeEmpty, setIncludeEmpty] = createSignal(false);
   const [state, setState] = createStore<{ fields: DropField[]; filters: FilterField[] }>({
     fields: [],
     filters: [],
@@ -225,8 +226,15 @@ const App: Component = () => {
 
       {/* Column 3 — Query + results */}
       <div class={styles.col3}>
-        <QueryPreview query={activeQuery()} isDirty={isDirty()} onQueryChange={handleQueryChange} onRun={commitQuery} />
-        <ResultTable query={committedQuery()} />
+        <QueryPreview
+          query={activeQuery()}
+          isDirty={isDirty()}
+          onQueryChange={handleQueryChange}
+          onRun={commitQuery}
+          includeEmpty={includeEmpty()}
+          onToggleIncludeEmpty={() => setIncludeEmpty((v) => !v)}
+        />
+        <ResultTable query={committedQuery()} includeEmpty={includeEmpty()} />
       </div>
     </div>
       </Show>

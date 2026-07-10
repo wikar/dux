@@ -10,8 +10,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/query":  "http://localhost:80",
-      "/schema": "http://localhost:80",
+      "/query":  "http://localhost:8080",
+      "/schema": "http://localhost:8080",
     },
   },
 });
