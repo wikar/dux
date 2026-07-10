@@ -18,6 +18,7 @@ const App: Component = () => {
   const [activeTab, setActiveTab] = createSignal("home");
   let importInputRef: HTMLInputElement | undefined;
   const [refreshCount, setRefreshCount] = createSignal(0);
+  const [showHidden, setShowHidden] = createSignal(false);
   const [state, setState] = createStore<{ fields: DropField[]; filters: FilterField[] }>({
     fields: [],
     filters: [],
@@ -189,13 +190,15 @@ const App: Component = () => {
       <TopBar
         activeTab={activeTab()}
         onTabChange={setActiveTab}
+        showHidden={showHidden()}
+        onToggleShowHidden={() => setShowHidden((v) => !v)}
         actions={activeTab() === "home" ? homeActions() : activeTab() === "explorer" ? explorerActions() : undefined}
       />
       <Show when={activeTab() === "home"}>
         <div class={styles.layout}>
       {/* Column 1 — Schema tree */}
       <div class={styles.col1}>
-        <SchemaTree refetchSignal={refreshCount} />
+        <SchemaTree refetchSignal={refreshCount} showHidden={showHidden()} />
       </div>
 
       {/* Column 2 — Drop zones */}
@@ -228,7 +231,7 @@ const App: Component = () => {
     </div>
       </Show>
       <Show when={activeTab() === "explorer"}>
-        <Explorer refetchSignal={refreshCount} />
+        <Explorer refetchSignal={refreshCount} showHidden={showHidden()} />
       </Show>
       </div>
     </DuxClientContext.Provider>

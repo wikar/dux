@@ -1239,14 +1239,18 @@ func sqlIdent(name string) string {
 	return strings.ToLower(name)
 }
 
-// sqlQualifiedIdent returns a DuckDB-safe SQL identifier for a db-qualified
-// table name (e.g. "atp.matches" → atp.matches, "my db.my table" → "my db"."my table").
+// sqlQualifiedIdent returns a DuckDB-safe SQL identifier for a qualified
+// table name with any number of segments (e.g. "atp.matches" → atp.matches,
+// "bev.sales.Customer" → bev.sales.customer, "my db.my table" → "my db"."my table").
 func sqlQualifiedIdent(name string) string {
-	parts := strings.SplitN(name, ".", 2)
-	if len(parts) != 2 {
+	parts := strings.Split(name, ".")
+	if len(parts) < 2 {
 		return strings.ToLower(name)
 	}
-	return sqlIdent(parts[0]) + "." + sqlIdent(parts[1])
+	for i, p := range parts {
+		parts[i] = sqlIdent(p)
+	}
+	return strings.Join(parts, ".")
 }
 
 // isStringLiteral reports whether expr is a bare string literal node.

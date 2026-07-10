@@ -8,9 +8,24 @@ import styles from "./SchemaTree.module.css";
 import { useDuxClient } from "../clientContext";
 import AddRelationshipModal from "./AddRelationshipModal";
 
+// ─── Icons ───────────────────────────────────────────────────────────────────
+
+/** Outline eye-off icon (slashed eye) for the hidden toggle. */
+const EyeOffIcon: Component<{ size?: number }> = (props) => (
+  <svg width={props.size ?? 12} height={props.size ?? 12} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+    <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+    <line x1="1" y1="1" x2="23" y2="23" />
+  </svg>
+);
+
 // ─── Draggable field row ─────────────────────────────────────────────────────
 
-const FieldRow: Component<{ payload: DragPayload }> = (props) => {
+const FieldRow: Component<{
+  payload: DragPayload;
+  hidden?: boolean;
+  onToggleHidden?: () => void;
+}> = (props) => {
   function handleDragStart(e: DragEvent) {
     e.dataTransfer!.effectAllowed = "copy";
     e.dataTransfer!.setData("application/dux", JSON.stringify(props.payload));
@@ -20,6 +35,7 @@ const FieldRow: Component<{ payload: DragPayload }> = (props) => {
     <div
       draggable={true}
       class={styles.fieldRow}
+      classList={{ [styles.fieldRowHidden]: props.hidden === true }}
       onDragStart={handleDragStart}
     >
       <Show when={props.payload.kind === "measure"} fallback={
@@ -28,6 +44,20 @@ const FieldRow: Component<{ payload: DragPayload }> = (props) => {
         <span class={styles.measureIcon} title="Measure">ƒx</span>
       </Show>
       <span class={styles.fieldName}>{props.payload.name}</span>
+      <Show when={props.onToggleHidden}>
+        <button
+          class={styles.hideBtn}
+          classList={{ [styles.hideBtnActive]: props.hidden === true }}
+          title={props.hidden ? "Hidden — click to unhide" : "Hide this column"}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            props.onToggleHidden?.();
+          }}
+        >
+          <EyeOffIcon size={11} />
+        </button>
+      </Show>
     </div>
   );
 };
@@ -37,13 +67,21 @@ const FieldRow: Component<{ payload: DragPayload }> = (props) => {
 const TableGroup: Component<{
   tableName: string;
   schema: Schema;
+  showHidden?: boolean;
+  onToggleHidden?: () => void;
+  onToggleColumnHidden?: (colName: string) => void;
 }> = (props) => {
   const [open, setOpen] = createSignal(false);
 
+  const table = () => props.schema.Tables[props.tableName];
+  const isHidden = () => table()?.Hidden === true;
+
   const columns = () => {
-    const tbl = props.schema.Tables[props.tableName];
+    const tbl = table();
     if (!tbl) return [];
-    return Object.values(tbl.Columns).sort((a, b) => a.Name.localeCompare(b.Name));
+    return Object.values(tbl.Columns)
+      .filter((c) => props.showHidden || !c.Hidden)
+      .sort((a, b) => a.Name.localeCompare(b.Name));
   };
 
   const measures = () => {
@@ -64,24 +102,43 @@ const TableGroup: Component<{
     <div class={styles.tableGroup}>
       <button
         class={styles.tableHeader}
+        classList={{ [styles.tableHeaderHidden]: isHidden() }}
         onClick={() => setOpen((v) => !v)}
         title={`${total()} fields`}
       >
         <span class={styles.chevron}>{open() ? "▾" : "▸"}</span>
         <span class={styles.tableName}>{props.tableName}</span>
+        <Show when={table()?.IsView}>
+          <span class={styles.viewBadge} title="DuckDB view">view</span>
+        </Show>
         <span class={styles.fieldCount}>{total()}</span>
+        <span
+          class={styles.hideBtn}
+          classList={{ [styles.hideBtnActive]: isHidden() }}
+          title={isHidden() ? "Hidden — click to unhide" : "Hide this table"}
+          role="button"
+          tabIndex={0}
+          onClick={(e) => { e.stopPropagation(); props.onToggleHidden?.(); }}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); props.onToggleHidden?.(); } }}
+        >
+          <EyeOffIcon />
+        </span>
       </button>
 
       <Show when={open()}>
         <div class={styles.fieldList}>
           <For each={columns()}>
             {(col) => (
-              <FieldRow payload={{
-                table: props.tableName,
-                name: col.Name,
-                kind: "column",
-                dataType: col.DataType,
-              }} />
+              <FieldRow
+                payload={{
+                  table: props.tableName,
+                  name: col.Name,
+                  kind: "column",
+                  dataType: col.DataType,
+                }}
+                hidden={col.Hidden === true}
+                onToggleHidden={() => props.onToggleColumnHidden?.(col.Name)}
+              />
             )}
           </For>
           <For each={measures()}>
@@ -354,7 +411,7 @@ const MeasuresSection: Component<{
 
 type ModalMode = "measure-add" | "measure-edit" | "relationship-add" | "relationship-edit";
 
-const SchemaTree: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
+const SchemaTree: Component<{ refetchSignal?: Accessor<number>; showHidden?: boolean }> = (props) => {
   const client = useDuxClient();
   const [schema, { refetch }] = createResource(() => client.fetchSchema());
 
@@ -365,10 +422,48 @@ const SchemaTree: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
   const [editTarget, setEditTarget] = createSignal<EditTarget | undefined>(undefined);
   const [relEditTarget, setRelEditTarget] = createSignal<Relationship | undefined>(undefined);
 
-  const tableNames = () =>
-    Object.keys(schema()?.Tables ?? {}).filter((n) => !isMetaTable(n)).sort();
+  const tableNames = () => {
+    const s = schema();
+    if (!s) return [];
+    return Object.keys(s.Tables)
+      .filter((n) => !isMetaTable(n))
+      .filter((n) => props.showHidden || !s.Tables[n].Hidden)
+      .sort();
+  };
 
   const [deleteError, setDeleteError] = createSignal("");
+
+  async function toggleTableHidden(name: string) {
+    const s = schema();
+    if (!s) return;
+    try {
+      if (s.Tables[name]?.Hidden) {
+        await client.clearHidden(name);
+      } else {
+        await client.setHidden(name);
+      }
+      setDeleteError("");
+      refetch();
+    } catch (e) {
+      setDeleteError(`Failed to toggle hidden: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  async function toggleColumnHidden(name: string, col: string) {
+    const s = schema();
+    if (!s) return;
+    try {
+      if (s.Tables[name]?.Columns[col]?.Hidden) {
+        await client.clearHidden(name, col);
+      } else {
+        await client.setHidden(name, col);
+      }
+      setDeleteError("");
+      refetch();
+    } catch (e) {
+      setDeleteError(`Failed to toggle hidden: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
 
   async function deleteMeasure(table: string, name: string) {
     try {
@@ -415,7 +510,15 @@ const SchemaTree: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
         </Show>
         <Show when={schema()}>
           <For each={tableNames()}>
-            {(name) => <TableGroup tableName={name} schema={schema()!} />}
+            {(name) => (
+              <TableGroup
+                tableName={name}
+                schema={schema()!}
+                showHidden={props.showHidden}
+                onToggleHidden={() => toggleTableHidden(name)}
+                onToggleColumnHidden={(col) => toggleColumnHidden(name, col)}
+              />
+            )}
           </For>
         </Show>
       </div>

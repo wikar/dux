@@ -81,6 +81,61 @@
   flex-shrink: 0;
 }
 
+/* Muted table header when the table/view is hidden (visible via "Show hidden") */
+.tableHeaderHidden {
+  opacity: 0.55;
+}
+
+.tableHeaderHidden .tableName {
+  color: var(--subtext0);
+}
+
+/* Small "view" badge shown next to the name of DuckDB views */
+.viewBadge {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--subtext0);
+  border: 1px solid var(--surface2);
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 14px;
+  flex-shrink: 0;
+}
+
+/* Hidden toggle (eye-off) on table headers and column rows — same accent
+   pattern as the date-table toggle: revealed on hover, yellow when active */
+.hideBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--subtext0);
+  cursor: pointer;
+  padding: 1px 3px;
+  border-radius: 3px;
+  line-height: 1;
+  flex-shrink: 0;
+  opacity: 0;
+}
+
+.tableHeader:hover .hideBtn,
+.fieldRow:hover .hideBtn {
+  opacity: 1;
+}
+
+.hideBtn:hover {
+  color: var(--yellow, #f9e2af);
+  background: var(--surface1);
+}
+
+.hideBtnActive,
+.hideBtnActive:hover {
+  color: var(--yellow, #f9e2af);
+  opacity: 1;
+}
+
 /* ─── Field list ──────────────────────────── */
 
 .fieldList {
@@ -106,6 +161,15 @@
 
 .fieldRow.dragging {
   opacity: 0.4;
+}
+
+/* Muted column row when the column is hidden (visible via "Show hidden") */
+.fieldRowHidden {
+  opacity: 0.55;
+}
+
+.fieldRowHidden .fieldName {
+  color: var(--subtext0);
 }
 
 .measureIcon {

@@ -310,6 +310,56 @@ const openAPISpec = `{
         }
       }
     },
+    "/hidden": {
+      "post": {
+        "summary": "Mark a table, view, or column as hidden",
+        "description": "Marks a table (or view) as hidden when column is omitted, or a single column when it is present. Hidden objects stay queryable; the flag only affects UI presentation.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["table"],
+                "properties": {
+                  "table":  { "type": "string", "example": "atp.matches" },
+                  "column": { "type": "string", "example": "winner_id", "description": "Omit to hide the whole table or view." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Hidden" },
+          "400": { "description": "Missing table" },
+          "404": { "description": "Unknown table or column" }
+        }
+      },
+      "delete": {
+        "summary": "Clear a hidden designation",
+        "description": "Un-hides a table (or view) when column is omitted, or a single column when it is present.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["table"],
+                "properties": {
+                  "table":  { "type": "string" },
+                  "column": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": { "description": "Cleared" },
+          "400": { "description": "Missing table" },
+          "404": { "description": "Unknown table or column" }
+        }
+      }
+    },
     "/refresh": {
       "post": {
         "summary": "Refresh schema metadata",
@@ -342,6 +392,10 @@ Endpoints served on :80:
   GET  /relationships  List all relationships
   POST /relationships  Add a relationship
   DELETE /relationships  Delete a relationship
+  POST /datetable      Designate the model's date table
+  DELETE /datetable    Clear the date-table designation
+  POST /hidden         Mark a table, view, or column as hidden
+  DELETE /hidden       Clear a hidden designation
   POST /refresh        Refresh schema from attached databases
   GET  /docs           Scalar interactive API reference
   GET  /               Query builder UI
@@ -414,6 +468,8 @@ func main() {
 	mux.HandleFunc("DELETE /relationships", deleteRelationshipHandler(metaDB, schema, &schemaMu))
 	mux.HandleFunc("POST /datetable", setDateTableHandler(metaDB, schema, &schemaMu))
 	mux.HandleFunc("DELETE /datetable", deleteDateTableHandler(metaDB, schema, &schemaMu))
+	mux.HandleFunc("POST /hidden", setHiddenHandler(metaDB, schema, &schemaMu))
+	mux.HandleFunc("DELETE /hidden", deleteHiddenHandler(metaDB, schema, &schemaMu))
 	mux.HandleFunc("POST /refresh", refreshHandler(metaDB, db, schema, &schemaMu, *tomlPath))
 
 	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, r *http.Request) {
@@ -506,6 +562,7 @@ func watchDBDir(dir, metaPath string, metaDB *semantic.MetadataDB, schema *seman
 				}
 			}
 			schema.Relationships = append(schema.Relationships, fresh.Relationships...)
+			schema.ApplyHiddenFlags()
 			mu.Unlock()
 			log.Printf("schema refreshed — %d tables, %d relationships total", len(schema.Tables), len(schema.Relationships))
 
@@ -628,6 +685,7 @@ func importHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *syn
 		schema.Relationships = nil
 		schema.Measures = make(map[string]map[string]*parser.MeasureDefinition)
 		schema.DateTables = make(map[string]string)
+		schema.ClearHidden()
 		if err := metaDB.LoadIntoSchema(schema); err != nil {
 			mu.Unlock()
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -832,6 +890,103 @@ func deleteDateTableHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema
 	}
 }
 
+// ─── Hidden ───────────────────────────────────────────────────────────────────
+
+type hiddenRequest struct {
+	Table  string `json:"table"`
+	Column string `json:"column,omitempty"`
+}
+
+// resolveHiddenTarget validates a hidden request against the schema and
+// returns the canonical column name ("" for a table-level designation).
+// The caller must hold the schema lock.
+func resolveHiddenTarget(schema *semantic.Schema, req hiddenRequest) (string, int, error) {
+	table, ok := schema.Tables[req.Table]
+	if !ok {
+		return "", http.StatusNotFound, fmt.Errorf("unknown table %q", req.Table)
+	}
+	if req.Column == "" {
+		return "", 0, nil
+	}
+	col, ok := table.Columns[req.Column]
+	if !ok {
+		return "", http.StatusNotFound, fmt.Errorf("unknown column %q in table %q", req.Column, req.Table)
+	}
+	return col.Name, 0, nil
+}
+
+// setHiddenHandler serves POST /hidden — marks a table, view, or single
+// column as hidden. Body: {"table":"...","column":"..."} (column optional).
+func setHiddenHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req hiddenRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Table == "" {
+			http.Error(w, "table is required", http.StatusBadRequest)
+			return
+		}
+
+		mu.Lock()
+		colName, status, err := resolveHiddenTarget(schema, req)
+		if err != nil {
+			mu.Unlock()
+			http.Error(w, err.Error(), status)
+			return
+		}
+		if colName == "" {
+			schema.SetTableHidden(req.Table, true)
+		} else {
+			schema.SetColumnHidden(req.Table, colName, true)
+		}
+		mu.Unlock()
+
+		if err := metaDB.SaveHidden(strings.ToLower(req.Table), strings.ToLower(colName)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	}
+}
+
+// deleteHiddenHandler serves DELETE /hidden — clears a hidden designation.
+// Body: {"table":"...","column":"..."} (column optional).
+func deleteHiddenHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req hiddenRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Table == "" {
+			http.Error(w, "table is required", http.StatusBadRequest)
+			return
+		}
+
+		mu.Lock()
+		colName, status, err := resolveHiddenTarget(schema, req)
+		if err != nil {
+			mu.Unlock()
+			http.Error(w, err.Error(), status)
+			return
+		}
+		if colName == "" {
+			schema.SetTableHidden(req.Table, false)
+		} else {
+			schema.SetColumnHidden(req.Table, colName, false)
+		}
+		mu.Unlock()
+
+		if err := metaDB.DeleteHidden(strings.ToLower(req.Table), strings.ToLower(colName)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // ─── Relationships ────────────────────────────────────────────────────────────
 
 type relationshipRequest struct {
@@ -992,6 +1147,9 @@ func refreshHandler(metaDB *semantic.MetadataDB, db *sql.DB, schema *semantic.Sc
 		schema.Relationships = fresh.Relationships
 		schema.Measures = fresh.Measures
 		schema.DateTables = fresh.DateTables
+		schema.HiddenTables = fresh.HiddenTables
+		schema.HiddenColumns = fresh.HiddenColumns
+		schema.ApplyHiddenFlags()
 		mu.Unlock()
 
 		log.Printf("schema refreshed — %d tables, %d relationships", len(fresh.Tables), len(fresh.Relationships))

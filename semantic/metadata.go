@@ -69,6 +69,12 @@ func (m *MetadataDB) initSchema() error {
 		table_name  TEXT PRIMARY KEY,
 		column_name TEXT NOT NULL
 	);
+
+	CREATE TABLE IF NOT EXISTS dux_hidden (
+		table_name  TEXT NOT NULL,
+		column_name TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (table_name, column_name)
+	);
 	`
 	if _, err := m.db.Exec(ddl); err != nil {
 		return fmt.Errorf("init metadata schema: %w", err)
@@ -87,7 +93,33 @@ func (m *MetadataDB) LoadIntoSchema(schema *Schema) error {
 	if err := m.loadMeasures(schema); err != nil {
 		return err
 	}
-	return m.loadDateTables(schema)
+	if err := m.loadDateTables(schema); err != nil {
+		return err
+	}
+	return m.loadHidden(schema)
+}
+
+// loadHidden reads the hidden designations. An empty column_name marks the
+// whole table (or view) as hidden.
+func (m *MetadataDB) loadHidden(schema *Schema) error {
+	rows, err := m.db.Query(`SELECT table_name, column_name FROM dux_hidden ORDER BY table_name, column_name`)
+	if err != nil {
+		return fmt.Errorf("load hidden: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var tableName, columnName string
+		if err := rows.Scan(&tableName, &columnName); err != nil {
+			return fmt.Errorf("scan hidden: %w", err)
+		}
+		if columnName == "" {
+			schema.SetTableHidden(tableName, true)
+		} else {
+			schema.SetColumnHidden(tableName, columnName, true)
+		}
+	}
+	return rows.Err()
 }
 
 func (m *MetadataDB) loadDateTables(schema *Schema) error {
@@ -223,6 +255,24 @@ func (m *MetadataDB) DeleteDateTable(tableName string) error {
 	return err
 }
 
+// SaveHidden marks a table (columnName == "") or a single column as hidden.
+func (m *MetadataDB) SaveHidden(tableName, columnName string) error {
+	_, err := m.db.Exec(`
+		INSERT INTO dux_hidden (table_name, column_name) VALUES (?, ?)
+		ON CONFLICT (table_name, column_name) DO NOTHING
+	`, tableName, columnName)
+	if err != nil {
+		return fmt.Errorf("save hidden: %w", err)
+	}
+	return nil
+}
+
+// DeleteHidden removes a hidden designation for a table (columnName == "") or column.
+func (m *MetadataDB) DeleteHidden(tableName, columnName string) error {
+	_, err := m.db.Exec(`DELETE FROM dux_hidden WHERE table_name = ? AND column_name = ?`, tableName, columnName)
+	return err
+}
+
 // DeleteRelationship removes a relationship from the metadata DB.
 func (m *MetadataDB) DeleteRelationship(fromTable, fromColumn, toTable, toColumn string) error {
 	_, err := m.db.Exec(`
@@ -252,6 +302,9 @@ func (m *MetadataDB) ReplaceAllFromSchema(schema *Schema) error {
 	if _, err := tx.Exec(`DELETE FROM dux_date_tables`); err != nil {
 		return fmt.Errorf("clear date tables: %w", err)
 	}
+	if _, err := tx.Exec(`DELETE FROM dux_hidden`); err != nil {
+		return fmt.Errorf("clear hidden: %w", err)
+	}
 
 	for _, r := range schema.Relationships {
 		if _, err := tx.Exec(`
@@ -278,6 +331,23 @@ func (m *MetadataDB) ReplaceAllFromSchema(schema *Schema) error {
 			INSERT INTO dux_date_tables (table_name, column_name) VALUES (?, ?)
 		`, tableName, columnName); err != nil {
 			return fmt.Errorf("insert date table %q: %w", tableName, err)
+		}
+	}
+
+	for tableName := range schema.HiddenTables {
+		if _, err := tx.Exec(`
+			INSERT INTO dux_hidden (table_name, column_name) VALUES (?, '')
+		`, tableName); err != nil {
+			return fmt.Errorf("insert hidden table %q: %w", tableName, err)
+		}
+	}
+	for tableName, cols := range schema.HiddenColumns {
+		for columnName := range cols {
+			if _, err := tx.Exec(`
+				INSERT INTO dux_hidden (table_name, column_name) VALUES (?, ?)
+			`, tableName, columnName); err != nil {
+				return fmt.Errorf("insert hidden column %q.%q: %w", tableName, columnName, err)
+			}
 		}
 	}
 

@@ -22,12 +22,21 @@ type Schema struct {
 	// intelligence functions over any of its columns clear ALL filters on the
 	// table (not just the date column) before applying their date range.
 	DateTables map[string]string
+	// HiddenTables maps a lower-cased table key to true when the whole table
+	// (or view) is marked hidden.
+	HiddenTables map[string]bool
+	// HiddenColumns maps a lower-cased table key to a set of lower-cased
+	// column names marked hidden.
+	HiddenColumns map[string]map[string]bool
 }
 
-// Table represents a table in the schema.
+// Table represents a table or view in the schema.
 type Table struct {
 	Name     string
 	Database string // empty for the primary (main) database; attachment alias otherwise
+	Schema   string // empty for the default ("main") schema; DuckDB schema name otherwise
+	IsView   bool   // true when introspected as a VIEW rather than a BASE TABLE
+	Hidden   bool   // true when the table is marked hidden
 	Columns  map[string]*Column
 }
 
@@ -35,6 +44,7 @@ type Table struct {
 type Column struct {
 	Name     string
 	DataType string // "TEXT", "BIGINT", "DOUBLE", "DATE", etc.
+	Hidden   bool   // true when the column is marked hidden
 }
 
 // Relationship models a foreign-key edge from the fact side (Many) to the
@@ -50,9 +60,100 @@ type Relationship struct {
 // NewSchema returns an empty, initialised Schema.
 func NewSchema() *Schema {
 	return &Schema{
-		Tables:     make(map[string]*Table),
-		Measures:   make(map[string]map[string]*parser.MeasureDefinition),
-		DateTables: make(map[string]string),
+		Tables:        make(map[string]*Table),
+		Measures:      make(map[string]map[string]*parser.MeasureDefinition),
+		DateTables:    make(map[string]string),
+		HiddenTables:  make(map[string]bool),
+		HiddenColumns: make(map[string]map[string]bool),
+	}
+}
+
+// findTable returns the *Table for name using an exact key match first and a
+// case-insensitive scan as fallback, along with the canonical schema key.
+func (s *Schema) findTable(name string) (*Table, string) {
+	if t, ok := s.Tables[name]; ok {
+		return t, name
+	}
+	lower := strings.ToLower(name)
+	for k, t := range s.Tables {
+		if strings.ToLower(k) == lower {
+			return t, k
+		}
+	}
+	return nil, ""
+}
+
+// SetTableHidden marks table (any casing) as hidden or visible, updating both
+// the persistent HiddenTables map and the live Table flag when present.
+func (s *Schema) SetTableHidden(table string, hidden bool) {
+	if s.HiddenTables == nil {
+		s.HiddenTables = make(map[string]bool)
+	}
+	key := strings.ToLower(table)
+	if hidden {
+		s.HiddenTables[key] = true
+	} else {
+		delete(s.HiddenTables, key)
+	}
+	if t, _ := s.findTable(table); t != nil {
+		t.Hidden = hidden
+	}
+}
+
+// SetColumnHidden marks a column of table (any casing) as hidden or visible,
+// updating both the persistent HiddenColumns map and the live Column flag.
+func (s *Schema) SetColumnHidden(table, column string, hidden bool) {
+	if s.HiddenColumns == nil {
+		s.HiddenColumns = make(map[string]map[string]bool)
+	}
+	tKey := strings.ToLower(table)
+	cKey := strings.ToLower(column)
+	if hidden {
+		if s.HiddenColumns[tKey] == nil {
+			s.HiddenColumns[tKey] = make(map[string]bool)
+		}
+		s.HiddenColumns[tKey][cKey] = true
+	} else if cols := s.HiddenColumns[tKey]; cols != nil {
+		delete(cols, cKey)
+		if len(cols) == 0 {
+			delete(s.HiddenColumns, tKey)
+		}
+	}
+	t, _ := s.findTable(table)
+	if t == nil {
+		return
+	}
+	for _, c := range t.Columns {
+		if strings.EqualFold(c.Name, column) {
+			c.Hidden = hidden
+		}
+	}
+}
+
+// ClearHidden removes all hidden designations from the maps and the live
+// Table/Column flags.
+func (s *Schema) ClearHidden() {
+	s.HiddenTables = make(map[string]bool)
+	s.HiddenColumns = make(map[string]map[string]bool)
+	for _, t := range s.Tables {
+		t.Hidden = false
+		for _, c := range t.Columns {
+			c.Hidden = false
+		}
+	}
+}
+
+// ApplyHiddenFlags stamps the Hidden flag onto Tables and Columns from the
+// HiddenTables / HiddenColumns maps. Call after (re-)introspection replaces
+// the Table structs.
+func (s *Schema) ApplyHiddenFlags() {
+	for key, t := range s.Tables {
+		lk := strings.ToLower(key)
+		t.Hidden = s.HiddenTables[lk]
+		hiddenCols := s.HiddenColumns[lk]
+		for _, c := range t.Columns {
+			c.Hidden = hiddenCols != nil && hiddenCols[strings.ToLower(c.Name)]
+		}
 	}
 }
 
@@ -91,10 +192,15 @@ func IntrospectDuckDB(db *sql.DB) (*Schema, error) {
 	schema := NewSchema()
 
 	rows, err := db.Query(`
-		SELECT table_catalog, table_name, column_name, data_type
-		FROM information_schema.columns
-		WHERE table_schema = 'main'
-		ORDER BY table_catalog, table_name, ordinal_position
+		SELECT c.table_catalog, c.table_schema, c.table_name, c.column_name, c.data_type,
+		       COALESCE(t.table_type, 'BASE TABLE')
+		FROM information_schema.columns c
+		LEFT JOIN information_schema.tables t
+			ON  t.table_catalog = c.table_catalog
+			AND t.table_schema  = c.table_schema
+			AND t.table_name    = c.table_name
+		WHERE c.table_schema NOT IN ('information_schema', 'pg_catalog')
+		ORDER BY c.table_catalog, c.table_schema, c.table_name, c.ordinal_position
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("introspect columns: %w", err)
@@ -102,14 +208,15 @@ func IntrospectDuckDB(db *sql.DB) (*Schema, error) {
 	defer rows.Close()
 
 	for rows.Next() {
-		var catalog, tableName, columnName, dataType string
-		if err := rows.Scan(&catalog, &tableName, &columnName, &dataType); err != nil {
+		var catalog, schemaName, tableName, columnName, dataType, tableType string
+		if err := rows.Scan(&catalog, &schemaName, &tableName, &columnName, &dataType, &tableType); err != nil {
 			return nil, fmt.Errorf("scan column row: %w", err)
 		}
 		// For attached databases the catalog differs from the primary db name.
 		// We key the table as "db.table" so that qualified DUX references resolve
 		// unambiguously. The primary database uses a bare table name as key.
-		key := tableName
+		// Tables outside the default "main" schema additionally carry the schema
+		// segment: "db.schema.table" (or "schema.table" for the primary db).
 		dbAlias := ""
 		if catalog != "memory" && catalog != "" {
 			// catalog holds the attachment alias (e.g. "atp") for attached databases,
@@ -118,12 +225,31 @@ func IntrospectDuckDB(db *sql.DB) (*Schema, error) {
 			// schema — but since we don't know the primary name here, we key ALL
 			// non-memory catalogs with a qualified key and let the resolver strip the
 			// prefix for plain (unqualified) references.
-			key = catalog + "." + tableName
 			dbAlias = catalog
 		}
+		schemaPart := ""
+		if schemaName != "main" && schemaName != "" {
+			schemaPart = schemaName
+		}
+		var parts []string
+		if dbAlias != "" {
+			parts = append(parts, dbAlias)
+		}
+		if schemaPart != "" {
+			parts = append(parts, schemaPart)
+		}
+		parts = append(parts, tableName)
+		key := strings.Join(parts, ".")
+
 		t, ok := schema.Tables[key]
 		if !ok {
-			t = &Table{Name: tableName, Database: dbAlias, Columns: make(map[string]*Column)}
+			t = &Table{
+				Name:     tableName,
+				Database: dbAlias,
+				Schema:   schemaPart,
+				IsView:   tableType == "VIEW",
+				Columns:  make(map[string]*Column),
+			}
 			schema.Tables[key] = t
 		}
 		t.Columns[columnName] = &Column{Name: columnName, DataType: dataType}

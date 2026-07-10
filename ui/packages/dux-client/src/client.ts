@@ -93,6 +93,26 @@ export class DuxClient {
     if (!res.ok) throw new Error(await res.text());
   }
 
+  /** Mark a table/view (no column) or a single column as hidden. */
+  async setHidden(table: string, column?: string): Promise<void> {
+    const res = await fetch(this.url("/hidden"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(column ? { table, column } : { table }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+  }
+
+  /** Clear a hidden designation for a table/view (no column) or column. */
+  async clearHidden(table: string, column?: string): Promise<void> {
+    const res = await fetch(this.url("/hidden"), {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(column ? { table, column } : { table }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+  }
+
   async addRelationship(rel: RelInput): Promise<void> {
     const res = await fetch(this.url("/relationships"), {
       method: "POST",

@@ -62,7 +62,7 @@ function computeDagreLayout(s: Schema): Record<string, Pos> {
   return result;
 }
 
-const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
+const Explorer: Component<{ refetchSignal?: Accessor<number>; showHidden?: boolean }> = (props) => {
   const client = useDuxClient();
   const [schema, { refetch }] = createResource(() => client.fetchSchema());
 
@@ -268,6 +268,8 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
     if (!s) { setLineData([]); return; }
     // Subscribe to positions so lines update whenever a card is dragged
     positions();
+    // Subscribe to showHidden so lines update when hidden cards mount/unmount
+    void props.showHidden;
     // Defer to next animation frame so <Show>/<For> DOM is painted
     cancelAnimationFrame(lineRaf);
     lineRaf = requestAnimationFrame(computeLines);
@@ -293,7 +295,10 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
   const tableNames = () => {
     const s = schema();
     if (!s) return [];
-    return Object.keys(s.Tables).filter((n) => !isMetaTable(n)).sort();
+    return Object.keys(s.Tables)
+      .filter((n) => !isMetaTable(n))
+      .filter((n) => props.showHidden || !s.Tables[n].Hidden)
+      .sort();
   };
 
   // ── Date-table designation ─────────────────────────────────────────────────
@@ -326,6 +331,39 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
   async function setDateColumn(name: string, col: string) {
     try {
       await client.setDateTable(name, col);
+      refetch();
+    } catch (err) {
+      alert((err as Error).message);
+    }
+  }
+
+  // ── Hidden designation ─────────────────────────────────────────────────────
+  /** Toggle the hidden flag on a whole table/view. */
+  async function toggleHidden(name: string) {
+    const s = schema();
+    if (!s) return;
+    try {
+      if (s.Tables[name]?.Hidden) {
+        await client.clearHidden(name);
+      } else {
+        await client.setHidden(name);
+      }
+      refetch();
+    } catch (err) {
+      alert((err as Error).message);
+    }
+  }
+
+  /** Toggle the hidden flag on a single column. */
+  async function toggleColumnHidden(name: string, col: string) {
+    const s = schema();
+    if (!s) return;
+    try {
+      if (s.Tables[name]?.Columns[col]?.Hidden) {
+        await client.clearHidden(name, col);
+      } else {
+        await client.setHidden(name, col);
+      }
       refetch();
     } catch (err) {
       alert((err as Error).message);
@@ -410,12 +448,15 @@ const Explorer: Component<{ refetchSignal?: Accessor<number> }> = (props) => {
                   x={pos().x}
                   y={pos().y}
                   dateColumn={dateColumnOf(name)}
+                  showHidden={props.showHidden}
                   onHeaderMouseDown={(e) => onHeaderMouseDown(name, e)}
                   onColDotMouseDown={(e, col) => onColDotMouseDown(name, col, e)}
                   onColumnsScroll={computeLines}
                   onPreview={() => setPreviewTable(name)}
                   onToggleDateTable={() => toggleDateTable(name)}
                   onSetDateColumn={(col) => setDateColumn(name, col)}
+                  onToggleHidden={() => toggleHidden(name)}
+                  onToggleColumnHidden={(col) => toggleColumnHidden(name, col)}
                 />
               );
             }}

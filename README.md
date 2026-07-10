@@ -145,6 +145,20 @@ EVALUATE
     )
 ```
 
+### Views and schemas
+
+DuckDB **views** are introspected alongside tables and behave exactly like them in queries, relationships, and measures. The Explorer marks them with a `VIEW` badge.
+
+Tables and views in a **non-default schema** (anything other than `main`) carry the schema as an extra name segment: `db.schema.table`. The segment is omitted for the default schema.
+
+```dux
+EVALUATE
+    SUMMARIZECOLUMNS(
+        bev.sales.Customer[name],
+        "Orders", COUNTROWS(RELATEDTABLE(bev.sales.Orders))
+    )
+```
+
 ## HTTP API
 
 ### Query
@@ -178,8 +192,8 @@ Returns tables, columns, relationships, and measures as JSON.
 ### Import / export
 
 ```
-GET  /export          → dux.toml download of all measures and relationships
-POST /import          ← dux.toml body; replaces all measures and relationships
+GET  /export          → dux.toml download of all measures, relationships, date-table, and hidden designations
+POST /import          ← dux.toml body; replaces all of the above
 ```
 
 ### Measures
@@ -215,6 +229,22 @@ POST /relationships          (bidirectional)
 
 DELETE /relationships
 {"from_table": "atp.matches", "from_column": "winner_id", "to_table": "atp.players", "to_column": "player_id"}
+→ 204 No Content
+```
+
+### Hidden
+
+```
+POST /hidden                 (hide a table or view)
+{"table": "atp.matches"}
+→ 201 Created
+
+POST /hidden                 (hide a single column)
+{"table": "atp.matches", "column": "winner_id"}
+→ 201 Created
+
+DELETE /hidden               (unhide — same body shapes)
+{"table": "atp.matches"}
 → 204 No Content
 ```
 
@@ -262,6 +292,25 @@ curl http://localhost/export > dux.toml
 # ... edit dux.toml ...
 curl -X POST http://localhost/import --data-binary @dux.toml
 ```
+
+## Hiding tables and columns
+
+Tables, views, and individual columns can be marked **hidden**. Hidden objects stay fully queryable — the flag only affects presentation, matching Power BI's "hide in report view" semantics. Like measures and relationships, hidden designations are persisted in `db/dux.duckdb` and round-trip through `dux.toml`:
+
+```toml
+# Hide a whole table or view
+[[hidden]]
+table = "atp.rounds"
+
+# Hide a single column
+[[hidden]]
+table  = "atp.matches"
+column = "winner_id"
+```
+
+In the UI, the **Show hidden** toggle in the navbar (off by default) controls whether hidden objects are displayed at all — when shown, they render with muted colors. Every table header and column row has an eye-off toggle to hide or unhide it, styled like the date-table calendar toggle: hover a row to reveal it, yellow when active. Works on both the Home schema tree and the Explorer canvas.
+
+Programmatically: `POST /hidden {"table": "...", "column": "..."}` (column optional) / `DELETE /hidden` with the same body.
 
 ## Query syntax
 

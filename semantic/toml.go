@@ -17,6 +17,7 @@ type duxTOML struct {
 	Relationship []tomlRelationship `toml:"relationship"`
 	Measure      []tomlMeasure      `toml:"measure"`
 	DateTable    []tomlDateTable    `toml:"date_table"`
+	Hidden       []tomlHidden       `toml:"hidden"`
 }
 
 // tomlRelationship is one [[relationship]] entry.
@@ -40,6 +41,13 @@ type tomlMeasure struct {
 type tomlDateTable struct {
 	Table  string `toml:"table"`
 	Column string `toml:"column"`
+}
+
+// tomlHidden is one [[hidden]] entry — marks a table (or view) as hidden when
+// column is omitted, or a single column when it is present.
+type tomlHidden struct {
+	Table  string `toml:"table"`
+	Column string `toml:"column,omitempty"`
 }
 
 // ─── Load ─────────────────────────────────────────────────────────────────────
@@ -118,6 +126,18 @@ func LoadDuxTOMLBytes(data []byte, schema *Schema) error {
 		schema.SetDateTable(dt.Table, dt.Column)
 	}
 
+	// Merge hidden designations.
+	for _, h := range doc.Hidden {
+		if h.Table == "" {
+			return fmt.Errorf("hidden entry missing table")
+		}
+		if h.Column == "" {
+			schema.SetTableHidden(h.Table, true)
+		} else {
+			schema.SetColumnHidden(h.Table, h.Column, true)
+		}
+	}
+
 	return nil
 }
 
@@ -179,6 +199,23 @@ func ExportDuxTOML(schema *Schema) ([]byte, error) {
 	}
 	sort.Slice(doc.DateTable, func(i, j int) bool {
 		return doc.DateTable[i].Table < doc.DateTable[j].Table
+	})
+
+	// Hidden designations — tables first, then columns, sorted for determinism.
+	for table := range schema.HiddenTables {
+		doc.Hidden = append(doc.Hidden, tomlHidden{Table: table})
+	}
+	for table, cols := range schema.HiddenColumns {
+		for column := range cols {
+			doc.Hidden = append(doc.Hidden, tomlHidden{Table: table, Column: column})
+		}
+	}
+	sort.Slice(doc.Hidden, func(i, j int) bool {
+		a, b := doc.Hidden[i], doc.Hidden[j]
+		if a.Table != b.Table {
+			return a.Table < b.Table
+		}
+		return a.Column < b.Column
 	})
 
 	var buf bytes.Buffer

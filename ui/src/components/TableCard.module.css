@@ -61,6 +61,36 @@
   color: var(--yellow, #f9e2af);
 }
 
+/* Active hidden designation — eye-off lights up yellow (same accent pattern
+   as the date-table toggle) */
+.hiddenBtnActive,
+.hiddenBtnActive:hover {
+  color: var(--yellow, #f9e2af);
+}
+
+/* Whole card muted when the table/view is hidden (visible via "Show hidden") */
+.cardHiddenState {
+  opacity: 0.55;
+  border-style: dashed;
+}
+
+.cardHiddenState .cardTableName {
+  color: var(--subtext0);
+}
+
+/* Small "view" badge shown next to the name of DuckDB views */
+.viewBadge {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--subtext0);
+  border: 1px solid var(--surface2);
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 14px;
+  flex-shrink: 0;
+}
+
 .cardColumns {
   display: flex;
   flex-direction: column;
@@ -121,6 +151,48 @@
 .colCalBtnActive,
 .colCalBtnActive:hover {
   color: var(--yellow, #f9e2af);
+}
+
+/* Per-column hidden toggle — same shape as the date-column picker; revealed
+   on row hover, always visible when the column is hidden */
+.colHideBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--surface2);
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: 3px;
+  line-height: 1;
+  flex-shrink: 0;
+  opacity: 0;
+}
+
+.colRow:hover .colHideBtn {
+  opacity: 1;
+}
+
+.colHideBtn:hover {
+  color: var(--yellow, #f9e2af);
+  background: var(--surface1);
+}
+
+.colHideBtnActive,
+.colHideBtnActive:hover {
+  color: var(--yellow, #f9e2af);
+  opacity: 1;
+}
+
+/* Muted column row when the column is hidden (visible via "Show hidden") */
+.colRowHidden,
+.colRowHidden .colType {
+  color: var(--surface2);
+}
+
+.colRowHidden:hover {
+  color: var(--subtext0);
 }
 
 /* Drag handle dot on each column row */

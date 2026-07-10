@@ -13,6 +13,15 @@ const EyeIcon: Component = () => (
   </svg>
 );
 
+/** Outline eye-off icon (slashed eye) for the hidden toggle. */
+const EyeOffIcon: Component<{ size?: number }> = (props) => (
+  <svg width={props.size ?? 13} height={props.size ?? 13} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+    <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+    <line x1="1" y1="1" x2="23" y2="23" />
+  </svg>
+);
+
 /** Outline calendar icon for date-table designation. */
 const CalendarIcon: Component<{ size?: number }> = (props) => (
   <svg width={props.size ?? 13} height={props.size ?? 13} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -30,6 +39,8 @@ const TableCard: Component<{
   y: number;
   /** The designated date column when this table is the model's date table. */
   dateColumn?: string | null;
+  /** When true, hidden columns are rendered (muted) instead of filtered out. */
+  showHidden?: boolean;
   /** Called when the user mousedowns on the card header to drag it. */
   onHeaderMouseDown: (e: MouseEvent) => void;
   /** Called when the user mousedowns on a column dot to start a relationship drag. */
@@ -42,16 +53,24 @@ const TableCard: Component<{
   onToggleDateTable?: () => void;
   /** Switch the designated date column within this (already designated) table. */
   onSetDateColumn?: (colName: string) => void;
+  /** Toggle the hidden flag on the whole table/view. */
+  onToggleHidden?: () => void;
+  /** Toggle the hidden flag on a single column. */
+  onToggleColumnHidden?: (colName: string) => void;
 }> = (props) => {
   const columns = () =>
-    Object.values(props.table.Columns).sort((a, b) => a.Name.localeCompare(b.Name));
+    Object.values(props.table.Columns)
+      .filter((c) => props.showHidden || !c.Hidden)
+      .sort((a, b) => a.Name.localeCompare(b.Name));
 
   const dateColumns = () => columns().filter((c) => isDateType(c.DataType));
   const isDateTable = () => props.dateColumn != null;
+  const isHidden = () => props.table.Hidden === true;
 
   return (
     <div
       class={styles.card}
+      classList={{ [styles.cardHiddenState]: isHidden() }}
       data-card={props.tableName}
       style={`left:${props.x}px;top:${props.y}px`}
     >
@@ -59,6 +78,9 @@ const TableCard: Component<{
         <span class={styles.cardTableName} title={props.tableName}>
           {props.tableName}
         </span>
+        <Show when={props.table.IsView}>
+          <span class={styles.viewBadge} title="DuckDB view">view</span>
+        </Show>
         <Show when={dateColumns().length > 0}>
           <button
             class={styles.iconBtn}
@@ -79,6 +101,18 @@ const TableCard: Component<{
         </Show>
         <button
           class={styles.iconBtn}
+          classList={{ [styles.hiddenBtnActive]: isHidden() }}
+          title={isHidden() ? "Hidden — click to unhide" : "Hide this table"}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            props.onToggleHidden?.();
+          }}
+        >
+          <EyeOffIcon />
+        </button>
+        <button
+          class={styles.iconBtn}
           title="Preview top 10 rows"
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => {
@@ -95,6 +129,7 @@ const TableCard: Component<{
           {(col) => (
             <div
               class={styles.colRow}
+              classList={{ [styles.colRowHidden]: col.Hidden === true }}
               data-table={props.tableName}
               data-col={col.Name}
             >
@@ -122,6 +157,18 @@ const TableCard: Component<{
                   <CalendarIcon size={11} />
                 </button>
               </Show>
+              <button
+                class={styles.colHideBtn}
+                classList={{ [styles.colHideBtnActive]: col.Hidden === true }}
+                title={col.Hidden ? "Hidden — click to unhide" : "Hide this column"}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  props.onToggleColumnHidden?.(col.Name);
+                }}
+              >
+                <EyeOffIcon size={11} />
+              </button>
               <span class={styles.colType}>
                 {col.DataType.split("(")[0].toUpperCase()}
               </span>

@@ -74,3 +74,11 @@
   background: var(--surface1);
   border-color: var(--surface2);
 }
+
+/* "Show hidden" toggle in the on state — highlighted like the date-table
+   toggle's active accent */
+.actionBtnActive,
+.actionBtnActive:hover {
+  color: var(--yellow, #f9e2af);
+  border-color: var(--yellow, #f9e2af);
+}
