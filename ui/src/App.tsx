@@ -1,10 +1,9 @@
 import { createMemo, createSignal, createEffect, Show } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type { Component } from "solid-js";
-import { DuxClient } from "dux-client";
-import type { DropField, FilterField, DragPayload, Aggregate } from "dux-client";
-import { generateQuery, isNumeric } from "dux-client";
-import { DuxClientContext } from "./clientContext";
+import { duxClient as client } from "./dux/client";
+import type { DropField, FilterField, DragPayload, Aggregate } from "./dux/types";
+import { generateQuery, isNumeric } from "./dux/generateQuery";
 import SchemaTree from "./components/SchemaTree";
 import DropZone from "./components/DropZone";
 import QueryPreview from "./components/QueryPreview";
@@ -14,7 +13,6 @@ import Explorer from "./components/Explorer";
 import styles from "./App.module.css";
 
 const App: Component = () => {
-  const client = new DuxClient();
   const [activeTab, setActiveTab] = createSignal("home");
   let importInputRef: HTMLInputElement | undefined;
   const [refreshCount, setRefreshCount] = createSignal(0);
@@ -196,7 +194,6 @@ const App: Component = () => {
   );
 
   return (
-    <DuxClientContext.Provider value={client}>
       <div class={styles.appShell}>
       <TopBar
         activeTab={activeTab()}
@@ -257,7 +254,6 @@ const App: Component = () => {
         <Explorer refetchSignal={refreshCount} showHidden={showHidden()} />
       </Show>
       </div>
-    </DuxClientContext.Provider>
   );
 };
 

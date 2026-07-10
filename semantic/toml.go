@@ -91,30 +91,19 @@ func LoadDuxTOMLBytes(data []byte, schema *Schema) error {
 		if m.Table == "" || m.Name == "" || m.Expression == "" {
 			return fmt.Errorf("measure entry missing table, name, or expression")
 		}
-		defines, err := parser.ParseMeasures(
-			fmt.Sprintf("DEFINE\n    MEASURE %s[%s] = %s", m.Table, m.Name, m.Expression),
-		)
-		if err != nil {
-			return fmt.Errorf("measure %q: %w", m.Name, err)
+		// Measure names must be unique across tables so that bare
+		// [MeasureName] references stay unambiguous.
+		table := StripSingleQuotes(m.Table)
+		for existingTable, defs := range schema.Measures {
+			if existingTable == table {
+				continue
+			}
+			if _, conflicts := defs[m.Name]; conflicts {
+				return fmt.Errorf("measure %q already defined in table %q", m.Name, existingTable)
+			}
 		}
-		for _, def := range defines {
-			def.Expression = m.Expression
-			table := StripSingleQuotes(def.Table)
-			name := StripBrackets(def.Column)
-			// Measure names must be unique across tables so that bare
-			// [MeasureName] references stay unambiguous.
-			for existingTable, defs := range schema.Measures {
-				if existingTable == table {
-					continue
-				}
-				if _, conflicts := defs[name]; conflicts {
-					return fmt.Errorf("measure %q already defined in table %q", name, existingTable)
-				}
-			}
-			if schema.Measures[table] == nil {
-				schema.Measures[table] = make(map[string]*parser.MeasureDefinition)
-			}
-			schema.Measures[table][name] = def
+		if err := schema.AddMeasureFromExpr(m.Table, m.Name, m.Expression); err != nil {
+			return fmt.Errorf("measure %q: %w", m.Name, err)
 		}
 	}
 

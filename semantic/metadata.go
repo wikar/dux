@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/danielwikar/dux/parser"
 	_ "github.com/duckdb/duckdb-go/v2"
 )
 
@@ -183,20 +182,8 @@ func (m *MetadataDB) loadMeasures(schema *Schema) error {
 		if err := rows.Scan(&tableName, &name, &expression); err != nil {
 			return fmt.Errorf("scan measure: %w", err)
 		}
-		defines, err := parser.ParseMeasures(
-			fmt.Sprintf("DEFINE\n    MEASURE %s[%s] = %s", tableName, name, expression),
-		)
-		if err != nil {
+		if err := schema.AddMeasureFromExpr(tableName, name, expression); err != nil {
 			return fmt.Errorf("parse stored measure %q.%q: %w", tableName, name, err)
-		}
-		for _, def := range defines {
-			def.Expression = expression
-			table := StripSingleQuotes(def.Table)
-			n := StripBrackets(def.Column)
-			if schema.Measures[table] == nil {
-				schema.Measures[table] = make(map[string]*parser.MeasureDefinition)
-			}
-			schema.Measures[table][n] = def
 		}
 	}
 	return rows.Err()

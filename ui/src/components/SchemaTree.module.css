@@ -159,10 +159,6 @@
   color: var(--text);
 }
 
-.fieldRow.dragging {
-  opacity: 0.4;
-}
-
 /* Muted column row when the column is hidden (visible via "Show hidden") */
 .fieldRowHidden {
   opacity: 0.55;

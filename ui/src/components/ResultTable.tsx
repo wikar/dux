@@ -1,8 +1,8 @@
 import { createSignal, createEffect, createMemo, For, Show } from "solid-js";
 import type { Component } from "solid-js";
-import type { QueryResponse } from "dux-client";
+import type { QueryResponse } from "../dux/types";
 import styles from "./ResultTable.module.css";
-import { useDuxClient } from "../clientContext";
+import { duxClient as client } from "../dux/client";
 
 type SortDir = "asc" | "desc";
 
@@ -31,7 +31,6 @@ const ResultTable: Component<{
    *  Excel-pasteable TSV (header + filtered/sorted rows), or null if empty. */
   registerCopyProvider?: (fn: () => string | null) => void;
 }> = (props) => {
-  const client = useDuxClient();
   const [data, setData] = createSignal<QueryResponse | null>(null);
   const [loading, setLoading] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);

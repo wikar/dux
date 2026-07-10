@@ -19,7 +19,6 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -404,52 +403,8 @@ Flags:
 `
 
 func main() {
-	showVersion := flag.Bool("version", false, "print version and exit")
-	dbDir := flag.String("db-dir", "db", "directory containing *.duckdb / *.db data files")
-	duxDB := flag.String("dux", "", "path to dux metadata database (default: <db-dir>/dux.duckdb)")
-	tomlPath := flag.String("toml", "dux.toml", "path to dux.toml configuration file")
-	// One-shot import / export flags (run, then exit).
-	importPath := flag.String("import", "", "import this dux.toml into the metadata DB then start normally")
-	exportPath := flag.String("export", "", "export measures and schema to this path then exit")
-
-	flag.Usage = func() {
-		fmt.Fprint(os.Stderr, usage)
-		flag.PrintDefaults()
-	}
-	flag.Parse()
-
-	if *showVersion {
-		fmt.Println("duxd", version)
-		os.Exit(0)
-	}
-
-	// Resolve metadata DB path.
-	metaPath := *duxDB
-	if metaPath == "" {
-		metaPath = filepath.Join(*dbDir, "dux.duckdb")
-	}
-
-	// Common startup: open metadata DB, attach data DBs, introspect, load metadata + TOML.
-	metaDB, db, schema, err := bootstrap.Bootstrap(*dbDir, metaPath, *tomlPath)
-	if err != nil {
-		log.Fatalf("%v", err)
-	}
+	metaDB, db, schema, dbDir, metaPath, tomlPath := bootstrap.Startup("duxd", version, usage, false)
 	defer metaDB.Close()
-
-	// --import: load TOML into metadata DB then continue startup.
-	if *importPath != "" {
-		if err := bootstrap.ImportTOML(metaDB, *importPath, schema); err != nil {
-			log.Fatalf("import: %v", err)
-		}
-	}
-
-	// --export: write TOML to file then exit.
-	if *exportPath != "" {
-		if err := bootstrap.ExportTOML(*exportPath, schema); err != nil {
-			log.Fatalf("export: %v", err)
-		}
-		os.Exit(0)
-	}
 
 	// Schema is shared between HTTP handlers; protect mutations with a mutex.
 	var schemaMu sync.RWMutex
@@ -470,7 +425,7 @@ func main() {
 	mux.HandleFunc("DELETE /datetable", deleteDateTableHandler(metaDB, schema, &schemaMu))
 	mux.HandleFunc("POST /hidden", setHiddenHandler(metaDB, schema, &schemaMu))
 	mux.HandleFunc("DELETE /hidden", deleteHiddenHandler(metaDB, schema, &schemaMu))
-	mux.HandleFunc("POST /refresh", refreshHandler(metaDB, db, schema, &schemaMu, *tomlPath))
+	mux.HandleFunc("POST /refresh", refreshHandler(metaDB, db, schema, &schemaMu, tomlPath))
 
 	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -489,7 +444,7 @@ func main() {
 	mux.Handle("/", http.FileServerFS(distFS))
 
 	// Watch db-dir for new database files and auto-attach them.
-	go watchDBDir(*dbDir, metaPath, metaDB, schema, &schemaMu)
+	go watchDBDir(dbDir, metaPath, metaDB, schema, &schemaMu)
 
 	log.Printf("duxd %s listening on :8080  (metadata: %s)", version, metaPath)
 	log.Fatal(http.ListenAndServe(":8080", mux))
@@ -537,13 +492,9 @@ func watchDBDir(dir, metaPath string, metaDB *semantic.MetadataDB, schema *seman
 				continue
 			}
 
-			stem := strings.TrimSuffix(name, filepath.Ext(name))
-			escapedPath := strings.ReplaceAll(absPath, "'", "''")
-			quotedStem := `"` + strings.ReplaceAll(stem, `"`, `""`) + `"`
-			q := fmt.Sprintf("ATTACH '%s' AS %s (READ_ONLY)", escapedPath, quotedStem)
-
 			db := metaDB.DB()
-			if _, err := db.Exec(q); err != nil {
+			stem, err := bootstrap.AttachDB(db, absPath, name)
+			if err != nil {
 				log.Printf("warning: auto-attach %q as %q: %v", absPath, stem, err)
 				continue
 			}
@@ -743,30 +694,20 @@ func addMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu 
 			return
 		}
 
-		// Parse the expression through the DUX parser to produce an AST node.
-		defines, err := parser.ParseMeasures(
-			fmt.Sprintf("DEFINE\n    MEASURE %s[%s] = %s", req.Table, req.Name, req.Expression),
-		)
-		if err != nil || len(defines) == 0 {
+		// Parse and store in the in-memory schema.
+		mu.Lock()
+		err := schema.AddMeasureFromExpr(req.Table, req.Name, req.Expression)
+		mu.Unlock()
+		if err != nil {
 			http.Error(w, fmt.Sprintf("invalid expression: %v", err), http.StatusBadRequest)
 			return
 		}
-		def := defines[0]
-		def.Expression = req.Expression
 
 		// Persist to the metadata DB.
 		if err := metaDB.SaveMeasure(req.Table, req.Name, req.Expression); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		// Update the in-memory schema.
-		mu.Lock()
-		if schema.Measures[req.Table] == nil {
-			schema.Measures[req.Table] = make(map[string]*parser.MeasureDefinition)
-		}
-		schema.Measures[req.Table][req.Name] = def
-		mu.Unlock()
 
 		w.WriteHeader(http.StatusCreated)
 	}

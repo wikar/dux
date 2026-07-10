@@ -1,23 +1,13 @@
 import { createSignal, createResource, createEffect, on, For, Show, onMount, onCleanup } from "solid-js";
 import type { Accessor, Component } from "solid-js";
-import type { Schema, DragPayload, Relationship } from "dux-client";
-import { isMetaTable, resolveTable } from "dux-client";
+import type { Schema, DragPayload, Relationship } from "../dux/types";
+import { isMetaTable, resolveTable } from "../dux/schemaHelpers";
 import TypeIcon from "./TypeIcon";
 import DuxEditor from "./DuxEditor";
 import styles from "./SchemaTree.module.css";
-import { useDuxClient } from "../clientContext";
+import { duxClient as client } from "../dux/client";
 import AddRelationshipModal from "./AddRelationshipModal";
-
-// ─── Icons ───────────────────────────────────────────────────────────────────
-
-/** Outline eye-off icon (slashed eye) for the hidden toggle. */
-const EyeOffIcon: Component<{ size?: number }> = (props) => (
-  <svg width={props.size ?? 12} height={props.size ?? 12} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-    <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-    <line x1="1" y1="1" x2="23" y2="23" />
-  </svg>
-);
+import { EyeOffIcon } from "./icons";
 
 // ─── Draggable field row ─────────────────────────────────────────────────────
 
@@ -121,7 +111,7 @@ const TableGroup: Component<{
           onClick={(e) => { e.stopPropagation(); props.onToggleHidden?.(); }}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); props.onToggleHidden?.(); } }}
         >
-          <EyeOffIcon />
+          <EyeOffIcon size={12} />
         </span>
       </button>
 
@@ -167,7 +157,6 @@ const AddMeasureModal: Component<{
   onClose: () => void;
   onSaved: () => void;
 }> = (props) => {
-  const client = useDuxClient();
   const isEdit = () => !!props.initial;
   const [table, setTable] = createSignal(props.initial?.table ?? "");
   const [name, setName] = createSignal(props.initial?.name ?? "");
@@ -412,7 +401,6 @@ const MeasuresSection: Component<{
 type ModalMode = "measure-add" | "measure-edit" | "relationship-add" | "relationship-edit";
 
 const SchemaTree: Component<{ refetchSignal?: Accessor<number>; showHidden?: boolean }> = (props) => {
-  const client = useDuxClient();
   const [schema, { refetch }] = createResource(() => client.fetchSchema());
 
   // Re-fetch when the parent bumps the signal (e.g. after POST /refresh).

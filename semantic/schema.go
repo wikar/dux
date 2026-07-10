@@ -68,6 +68,30 @@ func NewSchema() *Schema {
 	}
 }
 
+// AddMeasureFromExpr parses a measure expression through the DUX parser and
+// stores the resulting definition under the parsed table and measure name.
+func (s *Schema) AddMeasureFromExpr(table, name, expr string) error {
+	defines, err := parser.ParseMeasures(
+		fmt.Sprintf("DEFINE\n    MEASURE %s[%s] = %s", table, name, expr),
+	)
+	if err != nil {
+		return err
+	}
+	if len(defines) == 0 {
+		return fmt.Errorf("no measure parsed")
+	}
+	for _, def := range defines {
+		def.Expression = expr
+		t := StripSingleQuotes(def.Table)
+		n := StripBrackets(def.Column)
+		if s.Measures[t] == nil {
+			s.Measures[t] = make(map[string]*parser.MeasureDefinition)
+		}
+		s.Measures[t][n] = def
+	}
+	return nil
+}
+
 // findTable returns the *Table for name using an exact key match first and a
 // case-insensitive scan as fallback, along with the canonical schema key.
 func (s *Schema) findTable(name string) (*Table, string) {

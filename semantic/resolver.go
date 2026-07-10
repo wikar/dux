@@ -213,46 +213,9 @@ func (r *Resolver) resolveTerm(t *parser.Term) error {
 	return nil
 }
 
-// resolveFuncCall validates a function name and resolves its arguments.
+// resolveFuncCall resolves a function call's argument expressions. Arity is
+// validated by the emitter.
 func (r *Resolver) resolveFuncCall(fc *parser.FuncCall) error {
-	name := strings.ToUpper(fc.Name)
-
-	switch name {
-	case "SUMX", "AVERAGEX", "COUNTX", "MINX", "MAXX", "CONCATENATEX",
-		"ADDCOLUMNS", "SELECTCOLUMNS":
-		return r.resolveIterFunc(fc)
-	case "CALCULATE":
-		return r.resolveCalculate(fc)
-	default:
-		// Generic resolution: just walk all argument expressions.
-		for _, arg := range fc.Args {
-			if err := r.resolveExpr(arg); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// resolveIterFunc resolves the source table and inner expressions of an
-// iterator function.
-func (r *Resolver) resolveIterFunc(fc *parser.FuncCall) error {
-	if len(fc.Args) < 1 {
-		return &SemanticError{Message: fmt.Sprintf("%s requires at least 1 argument", fc.Name)}
-	}
-	for _, arg := range fc.Args {
-		if err := r.resolveExpr(arg); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// resolveCalculate resolves the inner expression and filter arguments of CALCULATE.
-func (r *Resolver) resolveCalculate(fc *parser.FuncCall) error {
-	if len(fc.Args) == 0 {
-		return &SemanticError{Message: "CALCULATE requires at least 1 argument"}
-	}
 	for _, arg := range fc.Args {
 		if err := r.resolveExpr(arg); err != nil {
 			return err

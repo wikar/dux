@@ -1,15 +1,14 @@
 import { createSignal, onMount, onCleanup, For, Show } from "solid-js";
 import type { Component } from "solid-js";
-import type { QueryResponse } from "dux-client";
+import type { QueryResponse } from "../dux/types";
 import treeStyles from "./SchemaTree.module.css";
 import styles from "./PreviewModal.module.css";
-import { useDuxClient } from "../clientContext";
+import { duxClient as client } from "../dux/client";
 
 const PreviewModal: Component<{
   tableName: string;
   onClose: () => void;
 }> = (props) => {
-  const client = useDuxClient();
   const [data, setData] = createSignal<QueryResponse | null>(null);
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);

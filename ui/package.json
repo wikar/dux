@@ -3,9 +3,6 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "workspaces": [
-    "packages/*"
-  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -13,7 +10,6 @@
   },
   "dependencies": {
     "dagre": "^0.8.5",
-    "dux-client": "workspace:*",
     "highlight.js": "^11.11.1",
     "solid-js": "^1.9.5"
   },

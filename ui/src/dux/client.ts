@@ -8,27 +8,16 @@ export interface RelInput {
   bidirectional?: boolean;
 }
 
-/**
- * Typed client for the DUX backend API.
- *
- * @param baseUrl  Origin of the DUX backend, e.g. "http://localhost:80".
- *                 Leave empty to use the same origin as the consuming app (default).
- */
+/** Typed client for the DUX backend API (same-origin). */
 export class DuxClient {
-  constructor(public readonly baseUrl: string = "") {}
-
-  private url(path: string): string {
-    return `${this.baseUrl}${path}`;
-  }
-
   async fetchSchema(): Promise<Schema> {
-    const res = await fetch(this.url("/schema"));
+    const res = await fetch("/schema");
     if (!res.ok) throw new Error(`schema fetch failed: ${res.status}`);
     return res.json() as Promise<Schema>;
   }
 
   async executeQuery(query: string): Promise<QueryResponse> {
-    const res = await fetch(this.url("/query"), {
+    const res = await fetch("/query", {
       method: "POST",
       headers: { "Content-Type": "text/plain" },
       body: query,
@@ -39,7 +28,7 @@ export class DuxClient {
   }
 
   async importToml(text: string): Promise<void> {
-    const res = await fetch(this.url("/import"), {
+    const res = await fetch("/import", {
       method: "POST",
       headers: { "Content-Type": "text/plain" },
       body: text,
@@ -48,11 +37,11 @@ export class DuxClient {
   }
 
   exportTomlUrl(): string {
-    return this.url("/export");
+    return "/export";
   }
 
   async refresh(): Promise<void> {
-    const res = await fetch(this.url("/refresh"), { method: "POST" });
+    const res = await fetch("/refresh", { method: "POST" });
     if (!res.ok) throw new Error(`refresh failed: ${res.status}`);
   }
 
@@ -61,7 +50,7 @@ export class DuxClient {
     name: string,
     expression: string
   ): Promise<void> {
-    const res = await fetch(this.url("/measures"), {
+    const res = await fetch("/measures", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ table, name, expression }),
@@ -71,7 +60,7 @@ export class DuxClient {
 
   async deleteMeasure(table: string, name: string): Promise<void> {
     const res = await fetch(
-      this.url(`/measures/${encodeURIComponent(table)}/${encodeURIComponent(name)}`),
+      `/measures/${encodeURIComponent(table)}/${encodeURIComponent(name)}`,
       { method: "DELETE" }
     );
     if (!res.ok) throw new Error(await res.text());
@@ -79,7 +68,7 @@ export class DuxClient {
 
   /** Designate table/column as the model's date table (replaces any previous). */
   async setDateTable(table: string, column: string): Promise<void> {
-    const res = await fetch(this.url("/datetable"), {
+    const res = await fetch("/datetable", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ table, column }),
@@ -89,13 +78,13 @@ export class DuxClient {
 
   /** Clear the date-table designation. */
   async clearDateTable(): Promise<void> {
-    const res = await fetch(this.url("/datetable"), { method: "DELETE" });
+    const res = await fetch("/datetable", { method: "DELETE" });
     if (!res.ok) throw new Error(await res.text());
   }
 
   /** Mark a table/view (no column) or a single column as hidden. */
   async setHidden(table: string, column?: string): Promise<void> {
-    const res = await fetch(this.url("/hidden"), {
+    const res = await fetch("/hidden", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(column ? { table, column } : { table }),
@@ -105,7 +94,7 @@ export class DuxClient {
 
   /** Clear a hidden designation for a table/view (no column) or column. */
   async clearHidden(table: string, column?: string): Promise<void> {
-    const res = await fetch(this.url("/hidden"), {
+    const res = await fetch("/hidden", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(column ? { table, column } : { table }),
@@ -114,7 +103,7 @@ export class DuxClient {
   }
 
   async addRelationship(rel: RelInput): Promise<void> {
-    const res = await fetch(this.url("/relationships"), {
+    const res = await fetch("/relationships", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(rel),
@@ -123,7 +112,7 @@ export class DuxClient {
   }
 
   async deleteRelationship(rel: RelInput): Promise<void> {
-    const res = await fetch(this.url("/relationships"), {
+    const res = await fetch("/relationships", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(rel),
@@ -131,3 +120,6 @@ export class DuxClient {
     if (!res.ok) throw new Error(await res.text());
   }
 }
+
+/** Shared client instance used across the UI. */
+export const duxClient = new DuxClient();

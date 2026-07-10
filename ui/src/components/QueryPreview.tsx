@@ -2,7 +2,7 @@ import { createResource, createSignal } from "solid-js";
 import type { Component } from "solid-js";
 import DuxEditor from "./DuxEditor";
 import styles from "./QueryPreview.module.css";
-import { useDuxClient } from "../clientContext";
+import { duxClient as client } from "../dux/client";
 
 const QueryPreview: Component<{
   query: string;
@@ -14,7 +14,6 @@ const QueryPreview: Component<{
   /** Copies the displayed results to the clipboard; resolves false when there is nothing to copy. */
   onCopyResults: () => Promise<boolean>;
 }> = (props) => {
-  const client = useDuxClient();
   const [schema] = createResource(() => client.fetchSchema());
   const [copied, setCopied] = createSignal(false);
   let copiedTimer: ReturnType<typeof setTimeout>;

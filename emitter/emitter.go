@@ -965,25 +965,10 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	for _, p := range wherePreds {
 		outerPreds = append(outerPreds, p.sql)
 	}
-	switch len(allTables) {
-	case 0:
-		// No tables referenced — no FROM clause.
-	case 1:
-		fromClause = sqlIdent(allTables[0])
-	default:
-		if e.Schema != nil {
-			jp, jpErr := semantic.InferJoinPath(e.Schema, allTables)
-			if jpErr != nil {
-				return "", jpErr
-			}
-			fromClause = emitFlatJoins(allTables[0], jp)
-		} else {
-			// No schema available — comma-join and let DuckDB report any errors.
-			parts := make([]string, len(allTables))
-			for i, t := range allTables {
-				parts[i] = sqlIdent(t)
-			}
-			fromClause = strings.Join(parts, ", ")
+	if len(allTables) > 0 {
+		var err error
+		if fromClause, err = e.calcFromClause(allTables); err != nil {
+			return "", err
 		}
 	}
 

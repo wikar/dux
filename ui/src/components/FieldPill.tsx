@@ -1,7 +1,7 @@
 import { Show } from "solid-js";
 import type { Component } from "solid-js";
-import type { DropField, FilterField, Aggregate } from "dux-client";
-import { isNumeric } from "dux-client";
+import type { DropField, FilterField, Aggregate } from "../dux/types";
+import { isNumeric } from "../dux/generateQuery";
 import TypeIcon from "./TypeIcon";
 import styles from "./FieldPill.module.css";
 

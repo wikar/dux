@@ -1,8 +1,9 @@
 import { createMemo, createSignal, onMount } from "solid-js";
 import type { Component } from "solid-js";
 import hljs from "highlight.js/lib/core";
-import type { Schema } from "dux-client";
-import { duxLanguage, getCompletion } from "dux-client";
+import type { Schema } from "../dux/types";
+import duxLanguage from "../dux/duxLanguage";
+import { getCompletion } from "../dux/completion";
 import styles from "./DuxEditor.module.css";
 
 hljs.registerLanguage("dux", duxLanguage);

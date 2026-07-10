@@ -9,14 +9,14 @@ import {
   onCleanup,
 } from "solid-js";
 import type { Accessor, Component } from "solid-js";
-import type { Schema, Relationship } from "dux-client";
-import { isMetaTable, resolveTable, isDateType } from "dux-client";
+import type { Schema, Relationship } from "../dux/types";
+import { isMetaTable, resolveTable, isDateType } from "../dux/schemaHelpers";
 import dagre from "dagre";
 import TableCard from "./TableCard";
 import AddRelationshipModal from "./AddRelationshipModal";
 import PreviewModal from "./PreviewModal";
 import styles from "./Explorer.module.css";
-import { useDuxClient } from "../clientContext";
+import { duxClient as client } from "../dux/client";
 
 // ─── Layout constants ────────────────────────────────────────────────────────
 const CARD_WIDTH = 240;
@@ -63,7 +63,6 @@ function computeDagreLayout(s: Schema): Record<string, Pos> {
 }
 
 const Explorer: Component<{ refetchSignal?: Accessor<number>; showHidden?: boolean }> = (props) => {
-  const client = useDuxClient();
   const [schema, { refetch }] = createResource(() => client.fetchSchema());
 
   // Re-fetch when the parent bumps the signal (e.g. after POST /refresh).

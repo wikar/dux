@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"database/sql"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +14,58 @@ import (
 
 	"github.com/danielwikar/dux/semantic"
 )
+
+// Startup parses the command-line flags shared by dux and duxd, runs the
+// Bootstrap sequence, and handles the --version/--import/--export one-shot
+// flags. exitAfterImport controls whether --import terminates the process
+// (dux) or continues startup (duxd). The returned dbDir, metaPath, and
+// tomlPath are the resolved flag values.
+func Startup(binName, version, usage string, exitAfterImport bool) (metaDB *semantic.MetadataDB, db *sql.DB, schema *semantic.Schema, dbDir, metaPath, tomlPath string) {
+	showVersion := flag.Bool("version", false, "print version and exit")
+	dbDirFlag := flag.String("db-dir", "db", "directory containing *.duckdb / *.db data files")
+	duxDB := flag.String("dux", "", "path to dux metadata database (default: <db-dir>/dux.duckdb)")
+	tomlFlag := flag.String("toml", "dux.toml", "path to dux.toml configuration file")
+	importPath := flag.String("import", "", "import this dux.toml into the metadata DB")
+	exportPath := flag.String("export", "", "export measures and schema to this path then exit")
+
+	flag.Usage = func() {
+		fmt.Fprint(os.Stderr, usage)
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(binName, version)
+		os.Exit(0)
+	}
+
+	// Resolve metadata DB path.
+	metaPath = *duxDB
+	if metaPath == "" {
+		metaPath = filepath.Join(*dbDirFlag, "dux.duckdb")
+	}
+
+	metaDB, db, schema, err := Bootstrap(*dbDirFlag, metaPath, *tomlFlag)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+
+	if *importPath != "" {
+		if err := ImportTOML(metaDB, *importPath, schema); err != nil {
+			log.Fatalf("import: %v", err)
+		}
+		if exitAfterImport {
+			os.Exit(0)
+		}
+	}
+	if *exportPath != "" {
+		if err := ExportTOML(*exportPath, schema); err != nil {
+			log.Fatalf("export: %v", err)
+		}
+		os.Exit(0)
+	}
+	return metaDB, db, schema, *dbDirFlag, metaPath, *tomlFlag
+}
 
 // Bootstrap performs the common startup sequence shared by both the dux CLI
 // and the duxd server:
@@ -91,17 +144,23 @@ func AttachDataDBs(db *sql.DB, dir, metaPath string) error {
 			continue // skip the metadata DB itself
 		}
 
-		stem := strings.TrimSuffix(name, filepath.Ext(name))
-		escapedPath := strings.ReplaceAll(absPath, "'", "''")
-		quotedStem := `"` + strings.ReplaceAll(stem, `"`, `""`) + `"`
-		q := fmt.Sprintf("ATTACH '%s' AS %s (READ_ONLY)", escapedPath, quotedStem)
-		if _, err := db.Exec(q); err != nil {
+		if stem, err := AttachDB(db, absPath, name); err != nil {
 			log.Printf("warning: attach %q as %q: %v", absPath, stem, err)
 		} else {
 			log.Printf("attached %q as %q (read-only)", name, stem)
 		}
 	}
 	return nil
+}
+
+// AttachDB attaches a single database file to db as a read-only named
+// attachment aliased by the filename stem, which is returned.
+func AttachDB(db *sql.DB, absPath, name string) (string, error) {
+	stem := strings.TrimSuffix(name, filepath.Ext(name))
+	escapedPath := strings.ReplaceAll(absPath, "'", "''")
+	quotedStem := `"` + strings.ReplaceAll(stem, `"`, `""`) + `"`
+	_, err := db.Exec(fmt.Sprintf("ATTACH '%s' AS %s (READ_ONLY)", escapedPath, quotedStem))
+	return stem, err
 }
 
 // ImportTOML parses a dux.toml file, persists its contents to the metadata

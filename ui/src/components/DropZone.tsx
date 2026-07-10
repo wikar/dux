@@ -1,6 +1,6 @@
 import { createSignal, For, Show } from "solid-js";
 import type { Component } from "solid-js";
-import type { DropField, FilterField, DragPayload } from "dux-client";
+import type { DropField, FilterField, DragPayload } from "../dux/types";
 import FieldPill from "./FieldPill";
 import styles from "./DropZone.module.css";
 

@@ -1,9 +1,9 @@
 import { createSignal, Show, onMount, onCleanup } from "solid-js";
 import type { Component } from "solid-js";
-import type { Schema, Relationship } from "dux-client";
-import { isMetaTable, resolveTable } from "dux-client";
+import type { Schema, Relationship } from "../dux/types";
+import { isMetaTable, resolveTable } from "../dux/schemaHelpers";
 import styles from "./SchemaTree.module.css";
-import { useDuxClient } from "../clientContext";
+import { duxClient as client } from "../dux/client";
 
 const AddRelationshipModal: Component<{
   schema: Schema;
@@ -14,7 +14,6 @@ const AddRelationshipModal: Component<{
   onClose: () => void;
   onSaved: () => void;
 }> = (props) => {
-  const client = useDuxClient();
   const isEdit = () => !!props.initial;
   const tables = () => Object.keys(props.schema.Tables).filter((n) => !isMetaTable(n)).sort();
 
@@ -111,6 +110,29 @@ const AddRelationshipModal: Component<{
     }
   }
 
+  const select = (
+    label: string,
+    placeholder: string,
+    options: string[],
+    value: () => string,
+    onChange: (v: string) => void
+  ) => (
+    <>
+      <label class={styles.modalLabel}>{label}</label>
+      <select
+        class={styles.modalSelect}
+        onChange={(e) => onChange((e.currentTarget as HTMLSelectElement).value)}
+      >
+        <option value="">{placeholder}</option>
+        {options.map((o) => (
+          <option value={o} selected={o === value()}>
+            {o}
+          </option>
+        ))}
+      </select>
+    </>
+  );
+
   return (
     <div
       class={styles.modalOverlay}
@@ -126,63 +148,10 @@ const AddRelationshipModal: Component<{
           </button>
         </div>
         <div class={styles.modalBody}>
-          <label class={styles.modalLabel}>From table</label>
-          <select
-            class={styles.modalSelect}
-            onChange={(e) => {
-              setFromTable((e.currentTarget as HTMLSelectElement).value);
-              setFromCol("");
-            }}
-          >
-            <option value="">— select table —</option>
-            {tables().map((t) => (
-              <option value={t} selected={t === fromTable()}>
-                {t}
-              </option>
-            ))}
-          </select>
-
-          <label class={styles.modalLabel}>From column</label>
-          <select
-            class={styles.modalSelect}
-            onChange={(e) => setFromCol((e.currentTarget as HTMLSelectElement).value)}
-          >
-            <option value="">— select column —</option>
-            {colsFor(fromTable()).map((c) => (
-              <option value={c} selected={c === fromCol()}>
-                {c}
-              </option>
-            ))}
-          </select>
-
-          <label class={styles.modalLabel}>To table</label>
-          <select
-            class={styles.modalSelect}
-            onChange={(e) => {
-              setToTable((e.currentTarget as HTMLSelectElement).value);
-              setToCol("");
-            }}
-          >
-            <option value="">— select table —</option>
-            {tables().map((t) => (
-              <option value={t} selected={t === toTable()}>
-                {t}
-              </option>
-            ))}
-          </select>
-
-          <label class={styles.modalLabel}>To column</label>
-          <select
-            class={styles.modalSelect}
-            onChange={(e) => setToCol((e.currentTarget as HTMLSelectElement).value)}
-          >
-            <option value="">— select column —</option>
-            {colsFor(toTable()).map((c) => (
-              <option value={c} selected={c === toCol()}>
-                {c}
-              </option>
-            ))}
-          </select>
+          {select("From table", "— select table —", tables(), fromTable, (v) => { setFromTable(v); setFromCol(""); })}
+          {select("From column", "— select column —", colsFor(fromTable()), fromCol, setFromCol)}
+          {select("To table", "— select table —", tables(), toTable, (v) => { setToTable(v); setToCol(""); })}
+          {select("To column", "— select column —", colsFor(toTable()), toCol, setToCol)}
 
           <Show when={error()}>
             <div class={styles.modalError}>{error()}</div>

@@ -30,14 +30,8 @@ type JoinStep struct {
 	// OnToCol is the column on the joined (Table) side.
 	OnToCol string
 	// Bidirectional indicates that this edge was declared bidirectional in the
-	// schema. The emitter must emit a _bd_{Table} CTE for this step instead of
-	// a raw LEFT JOIN.
+	// schema.
 	Bidirectional bool
-	// BidiForward is only meaningful when Bidirectional is true. It records the
-	// traversal direction: true means the BFS traversed the edge in its declared
-	// direction (rel.FromTable → rel.ToTable); false means it traversed in
-	// reverse (rel.ToTable → rel.FromTable).
-	BidiForward bool
 }
 
 // InferJoinPath performs a BFS over the Relationship graph to find the minimum
@@ -104,19 +98,16 @@ func bfsJoin(schema *Schema, from, to string) ([]JoinStep, error) {
 
 		for _, rel := range schema.Relationships {
 			var nextRaw, fromCol, toCol string
-			var bidiForward bool
 
 			switch {
 			case tableNamesMatch(rel.FromTable, curr.table):
 				nextRaw = rel.ToTable
 				fromCol = rel.FromColumn
 				toCol = rel.ToColumn
-				bidiForward = true
 			case tableNamesMatch(rel.ToTable, curr.table):
 				nextRaw = rel.FromTable
 				fromCol = rel.ToColumn
 				toCol = rel.FromColumn
-				bidiForward = false
 			default:
 				continue
 			}
@@ -135,7 +126,6 @@ func bfsJoin(schema *Schema, from, to string) ([]JoinStep, error) {
 				OnFromCol:     fromCol,
 				OnToCol:       toCol,
 				Bidirectional: rel.Bidirectional,
-				BidiForward:   bidiForward,
 			}
 			// Copy the slice to avoid aliasing across BFS branches.
 			newSteps := make([]JoinStep, len(curr.steps)+1)

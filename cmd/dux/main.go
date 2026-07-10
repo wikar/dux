@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 
 	// Register the DuckDB driver with database/sql.
@@ -42,53 +41,8 @@ Flags:
 `
 
 func main() {
-	showVersion := flag.Bool("version", false, "print version and exit")
-	dbDir := flag.String("db-dir", "db", "directory containing *.duckdb / *.db data files")
-	duxDB := flag.String("dux", "", "path to dux metadata database (default: <db-dir>/dux.duckdb)")
-	tomlPath := flag.String("toml", "dux.toml", "path to dux.toml configuration file")
-	importPath := flag.String("import", "", "import this dux.toml into the metadata DB then exit")
-	exportPath := flag.String("export", "", "export measures and schema to this path then exit")
-
-	flag.Usage = func() {
-		fmt.Fprint(os.Stderr, usage)
-		flag.PrintDefaults()
-	}
-
-	flag.Parse()
-
-	if *showVersion {
-		fmt.Println("dux", version)
-		os.Exit(0)
-	}
-
-	// Resolve metadata DB path.
-	metaPath := *duxDB
-	if metaPath == "" {
-		metaPath = filepath.Join(*dbDir, "dux.duckdb")
-	}
-
-	// Common startup: open metadata DB, attach data DBs, introspect, load metadata + TOML.
-	metaDB, db, schema, err := bootstrap.Bootstrap(*dbDir, metaPath, *tomlPath)
-	if err != nil {
-		log.Fatalf("%v", err)
-	}
+	metaDB, db, schema, _, _, _ := bootstrap.Startup("dux", version, usage, true)
 	defer metaDB.Close()
-
-	// --import: load TOML into metadata DB then exit.
-	if *importPath != "" {
-		if err := bootstrap.ImportTOML(metaDB, *importPath, schema); err != nil {
-			log.Fatalf("import: %v", err)
-		}
-		os.Exit(0)
-	}
-
-	// --export: write the current schema + measures to a dux.toml file.
-	if *exportPath != "" {
-		if err := bootstrap.ExportTOML(*exportPath, schema); err != nil {
-			log.Fatalf("export: %v", err)
-		}
-		os.Exit(0)
-	}
 
 	if args := flag.Args(); len(args) > 0 {
 		runFile(db, schema, args[0])
