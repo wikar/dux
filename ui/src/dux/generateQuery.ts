@@ -33,21 +33,31 @@ export function generateQuery(fields: DropField[], filters: FilterField[]): stri
     }
   }
 
-  // TREATAS filter args (only when a value has been entered)
-  const treatasArgs = filters
+  // Filter args (only when a value has been entered): "=" compiles to
+  // TREATAS equality (multi-value), other operators to FILTER(table, pred).
+  const filterArgs = filters
     .filter((f) => f.value.trim() !== "")
     .map((f) => {
-      const vals = f.value
-        .split(",")
-        .map((v) => v.trim())
-        .filter(Boolean);
       const numeric = isNumeric(f.dataType);
-      const valList = vals.map((v) => (numeric ? v : `"${v}"`)).join(", ");
-      return `TREATAS({${valList}}, ${f.table}[${f.name}])`;
+      const col = `${f.table}[${f.name}]`;
+      const op = f.op || "=";
+      if (op === "=") {
+        const vals = f.value
+          .split(",")
+          .map((v) => v.trim())
+          .filter(Boolean);
+        const valList = vals.map((v) => (numeric ? v : `"${v}"`)).join(", ");
+        return `TREATAS({${valList}}, ${col})`;
+      }
+      const v = f.value.trim();
+      if (op === "contains") {
+        return `FILTER(${f.table}, SEARCH("${v}", ${col}) > 0)`;
+      }
+      return `FILTER(${f.table}, ${col} ${op} ${numeric ? v : `"${v}"`})`;
     });
 
   // Order: dimensions → filters → measures (SUMMARIZECOLUMNS spec)
-  const allArgs = [...dimArgs, ...treatasArgs, ...measureArgs];
+  const allArgs = [...dimArgs, ...filterArgs, ...measureArgs];
 
   return `EVALUATE SUMMARIZECOLUMNS(\n    ${allArgs.join(",\n    ")}\n)`;
 }

@@ -3,6 +3,7 @@ import type { Component } from "solid-js";
 import DuxEditor from "./DuxEditor";
 import styles from "./QueryPreview.module.css";
 import { duxClient as client } from "../dux/client";
+import type { QueryFailedError } from "../dux/client";
 
 const QueryPreview: Component<{
   query: string;
@@ -13,6 +14,8 @@ const QueryPreview: Component<{
   onToggleIncludeEmpty: () => void;
   /** Copies the displayed results to the clipboard; resolves false when there is nothing to copy. */
   onCopyResults: () => Promise<boolean>;
+  /** Current query failure, marked at its source position in the editor. */
+  error?: QueryFailedError | null;
 }> = (props) => {
   const [schema] = createResource(() => client.fetchSchema());
   const [copied, setCopied] = createSignal(false);
@@ -34,6 +37,7 @@ const QueryPreview: Component<{
         onChange={props.onQueryChange}
         schema={schema()}
         placeholder="// Drop fields to build a query"
+        error={props.error}
       />
       <div class={styles.toolbar}>
         <button

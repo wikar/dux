@@ -54,10 +54,15 @@ export interface DropField {
   aggregate?: Aggregate;
 }
 
+/** Filter comparison operator. "=" compiles to TREATAS (multi-value, comma-
+ *  separated); the rest compile to FILTER(table, pred) arguments. */
+export type FilterOp = "=" | "<>" | ">" | ">=" | "<" | "<=" | "contains";
+
 export interface FilterField {
   table: string;
   name: string;
   dataType: string;
+  op: FilterOp;
   value: string;
 }
 

@@ -124,6 +124,53 @@ func TestStitched_MultiTableFanOut(t *testing.T) {
 	}
 }
 
+// An iterator aggregate participates in its cluster's group context: SUMX
+// over one fact aggregates per group cell inside that cluster's CTE, not as
+// an uncorrelated whole-table subquery.
+func TestStitched_IteratorAggregateInCluster(t *testing.T) {
+	db, schema := setupMultiTableDB(t)
+	_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+		dates[year],
+		"SoldX",    SUMX(fact_sales, fact_sales[qty] * 2),
+		"Returned", SUM(fact_returns[rqty])
+	)`)
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d: %v", len(rows), rows)
+	}
+	r2024 := rowByKey(t, rows, "year", 2024)
+	r2025 := rowByKey(t, rows, "year", 2025)
+	if got := toFloat(cell(t, r2024, "SoldX")); got != 70 {
+		t.Errorf("2024 SoldX = %v, want 70 (whole-table subquery would give 84)", got)
+	}
+	if got := toFloat(cell(t, r2025, "SoldX")); got != 14 {
+		t.Errorf("2025 SoldX = %v, want 14", got)
+	}
+	if got := toFloat(cell(t, r2024, "Returned")); got != 6 {
+		t.Errorf("2024 Returned = %v, want 6", got)
+	}
+}
+
+// A FILTER(table, pred) argument on the shared dimension routes into both
+// cluster CTEs, exactly like a TREATAS filter.
+func TestStitched_FilterArgReachesAllClusters(t *testing.T) {
+	db, schema := setupMultiTableDB(t)
+	_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+		dates[year],
+		FILTER(dates, dates[year] >= 2025),
+		"Sold",     SUM(fact_sales[qty]),
+		"Returned", SUM(fact_returns[rqty])
+	)`)
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row (2025 only), got %d: %v", len(rows), rows)
+	}
+	if got := toFloat(cell(t, rows[0], "Sold")); got != 7 {
+		t.Errorf("Sold = %v, want 7", got)
+	}
+	if got := toFloat(cell(t, rows[0], "Returned")); got != 4 {
+		t.Errorf("Returned = %v, want 4", got)
+	}
+}
+
 // A TREATAS filter on the shared dimension must gate BOTH clusters.
 func TestStitched_SharedDimFilterReachesAllClusters(t *testing.T) {
 	db, schema := setupMultiTableDB(t)

@@ -8,12 +8,33 @@ export interface RelInput {
   bidirectional?: boolean;
 }
 
+/** Query failure with pipeline stage and 1-based source position (0 = unknown). */
+export class QueryFailedError extends Error {
+  constructor(
+    message: string,
+    public stage = "",
+    public line = 0,
+    public column = 0
+  ) {
+    super(message);
+  }
+}
+
 /** Typed client for the DUX backend API (same-origin). */
 export class DuxClient {
   async fetchSchema(): Promise<Schema> {
     const res = await fetch("/schema");
     if (!res.ok) throw new Error(`schema fetch failed: ${res.status}`);
     return res.json() as Promise<Schema>;
+  }
+
+  /** Distinct values of a column (max 50), optionally narrowed by a search term. */
+  async fetchValues(table: string, column: string, q = ""): Promise<string[]> {
+    const params = new URLSearchParams({ table, column });
+    if (q) params.set("q", q);
+    const res = await fetch(`/values?${params}`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json() as Promise<string[]>;
   }
 
   async executeQuery(query: string): Promise<QueryResponse> {
@@ -23,7 +44,18 @@ export class DuxClient {
       body: query,
     });
     const text = await res.text();
-    if (!res.ok) throw new Error(text || `query failed: ${res.status}`);
+    if (!res.ok) {
+      // Pipeline errors arrive as {error, stage, line, column} JSON.
+      try {
+        const j = JSON.parse(text);
+        if (j && typeof j.error === "string") {
+          throw new QueryFailedError(j.error, j.stage ?? "", j.line ?? 0, j.column ?? 0);
+        }
+      } catch (e) {
+        if (e instanceof QueryFailedError) throw e;
+      }
+      throw new Error(text || `query failed: ${res.status}`);
+    }
     return JSON.parse(text) as QueryResponse;
   }
 

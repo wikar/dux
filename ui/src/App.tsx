@@ -2,6 +2,7 @@ import { createMemo, createSignal, createEffect, Show } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type { Component } from "solid-js";
 import { duxClient as client } from "./dux/client";
+import type { QueryFailedError } from "./dux/client";
 import type { DropField, FilterField, DragPayload, Aggregate } from "./dux/types";
 import { generateQuery, isNumeric } from "./dux/generateQuery";
 import SchemaTree from "./components/SchemaTree";
@@ -18,6 +19,7 @@ const App: Component = () => {
   const [refreshCount, setRefreshCount] = createSignal(0);
   const [showHidden, setShowHidden] = createSignal(false);
   const [includeEmpty, setIncludeEmpty] = createSignal(false);
+  const [queryError, setQueryError] = createSignal<QueryFailedError | null>(null);
   const [state, setState] = createStore<{ fields: DropField[]; filters: FilterField[] }>({
     fields: [],
     filters: [],
@@ -43,6 +45,8 @@ const App: Component = () => {
   function handleQueryChange(q: string) {
     setActiveQuery(q);
     setIsDirty(true);
+    // The marker position refers to the text as it was when the query ran.
+    setQueryError(null);
   }
 
   function commitQuery() {
@@ -95,6 +99,7 @@ const App: Component = () => {
       table: payload.table,
       name: payload.name,
       dataType: payload.dataType,
+      op: "=",
       value: "",
     };
     setState("filters", (f) => [...f, filter]);
@@ -227,6 +232,7 @@ const App: Component = () => {
           onDrop={addToFilters}
           onRemove={(i) => setState("filters", produce((f) => { f.splice(i, 1); }))}
           onValueChange={(i, val) => setState("filters", i, "value", val)}
+          onOpChange={(i, op) => setState("filters", i, "op", op)}
           onReorder={reorderFilters}
         />
       </div>
@@ -241,11 +247,13 @@ const App: Component = () => {
           includeEmpty={includeEmpty()}
           onToggleIncludeEmpty={() => setIncludeEmpty((v) => !v)}
           onCopyResults={copyResults}
+          error={queryError()}
         />
         <ResultTable
           query={committedQuery()}
           includeEmpty={includeEmpty()}
           registerCopyProvider={(fn) => (resultsTsv = fn)}
+          onQueryError={setQueryError}
         />
       </div>
     </div>

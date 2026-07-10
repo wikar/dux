@@ -1,6 +1,7 @@
 package semantic
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,10 @@ import (
 // SemanticError is a structured semantic-analysis failure.
 type SemanticError struct {
 	Message string
+	// Line and Column are the 1-based source position of the offending
+	// reference; 0 when unknown.
+	Line   int
+	Column int
 }
 
 func (e *SemanticError) Error() string {
@@ -158,6 +163,8 @@ func (r *Resolver) resolveTableExpr(t *parser.TableExpr) error {
 	if !r.tableExists(tableName) {
 		return &SemanticError{
 			Message: fmt.Sprintf("unknown table %q", tableName),
+			Line:    t.Pos.Line,
+			Column:  t.Pos.Column,
 		}
 	}
 	return nil
@@ -234,7 +241,12 @@ func (r *Resolver) resolveColRef(cr *parser.ColRef) error {
 		name := StripBrackets(cr.Column)
 		_, err := FindMeasureByName(name, r.localMeasures)
 		if err != nil {
-			return err // ambiguous
+			// Ambiguous — anchor the error to this reference.
+			var se *SemanticError
+			if errors.As(err, &se) && se.Line == 0 {
+				se.Line, se.Column = cr.Pos.Line, cr.Pos.Column
+			}
+			return err
 		}
 		// Whether or not it's a measure, we don't error — a bare column ref
 		// without a table qualifier is resolved at runtime against the active scope.
@@ -259,11 +271,15 @@ func (r *Resolver) resolveColRef(cr *parser.ColRef) error {
 	if !ok {
 		return &SemanticError{
 			Message: fmt.Sprintf("unknown table %q", tableName),
+			Line:    cr.Pos.Line,
+			Column:  cr.Pos.Column,
 		}
 	}
 	if _, ok := t.Columns[col]; !ok {
 		return &SemanticError{
 			Message: fmt.Sprintf("unknown column %q in table %q", col, tableName),
+			Line:    cr.Pos.Line,
+			Column:  cr.Pos.Column,
 		}
 	}
 	return nil

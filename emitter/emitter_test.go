@@ -155,31 +155,34 @@ func TestIterators(t *testing.T) {
 		dux   string
 		wants []string
 	}{
+		// Inside SUMMARIZECOLUMNS an iterator over a bare table aggregates
+		// inline over the grouped FROM rows (group-context correlation).
 		{
 			"SUMX",
 			`EVALUATE SUMMARIZECOLUMNS(sales[region], "Rev", SUMX(sales, sales[amount] * sales[qty]))`,
-			[]string{"SELECT SUM(", "FROM sales AS __row_sales"},
+			[]string{"SUM(amount * qty)", "GROUP BY region"},
 		},
 		{
 			"AVERAGEX",
 			`EVALUATE SUMMARIZECOLUMNS(sales[region], "Avg", AVERAGEX(sales, sales[amount]))`,
-			[]string{"SELECT AVG(", "FROM sales AS __row_sales"},
+			[]string{"AVG(amount)", "GROUP BY region"},
 		},
 		{
 			"COUNTX",
 			`EVALUATE SUMMARIZECOLUMNS(sales[region], "N", COUNTX(sales, sales[id]))`,
-			[]string{"SELECT COUNT(", "FROM sales AS __row_sales"},
+			[]string{"COUNT(id)", "GROUP BY region"},
 		},
 		{
 			"MINX",
 			`EVALUATE SUMMARIZECOLUMNS(sales[region], "Min", MINX(sales, sales[amount]))`,
-			[]string{"SELECT MIN(", "FROM sales AS __row_sales"},
+			[]string{"MIN(amount)", "GROUP BY region"},
 		},
 		{
 			"MAXX",
 			`EVALUATE SUMMARIZECOLUMNS(sales[region], "Max", MAXX(sales, sales[amount]))`,
-			[]string{"SELECT MAX(", "FROM sales AS __row_sales"},
+			[]string{"MAX(amount)", "GROUP BY region"},
 		},
+		// Outside a group context the scalar-subquery form is kept.
 		{
 			"CONCATENATEX",
 			`EVALUATE CONCATENATEX(sales, sales[region], ", ")`,
@@ -191,6 +194,9 @@ func TestIterators(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			sql := emit(t, tt.dux)
 			assertContains(t, sql, tt.wants...)
+			if strings.Contains(tt.dux, "SUMMARIZECOLUMNS") {
+				assertNotContains(t, sql, "__row_sales")
+			}
 		})
 	}
 }

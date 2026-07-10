@@ -2,6 +2,8 @@
 package parser
 
 import (
+	"errors"
+
 	"github.com/alecthomas/participle/v2"
 )
 
@@ -21,6 +23,17 @@ var duxParser = participle.MustBuild[Query](
 // Parse parses a DUX query string and returns the root AST node.
 func Parse(input string) (*Query, error) {
 	return duxParser.ParseString("", input)
+}
+
+// ErrorDetails returns the 1-based source position and bare message of a
+// parse error when it carries one (participle errors do).
+func ErrorDetails(err error) (line, col int, msg string, ok bool) {
+	var perr participle.Error
+	if errors.As(err, &perr) {
+		pos := perr.Position()
+		return pos.Line, pos.Column, perr.Message(), true
+	}
+	return 0, 0, "", false
 }
 
 // ParseMeasures parses a standalone measures file that contains only a DEFINE

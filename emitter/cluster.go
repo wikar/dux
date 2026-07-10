@@ -292,6 +292,11 @@ func (e *Emitter) measureExprTables(expr *parser.Expr) []string {
 			}
 		}
 		if t.FuncCall != nil {
+			// Attribute an iterator's bare-table source to the expression so
+			// the table lands in the measure's cluster (see emitIterAgg).
+			if tbl := iterBareTable(t.FuncCall); tbl != "" {
+				add(tbl)
+			}
 			for _, arg := range t.FuncCall.Args {
 				walkExpr(arg)
 			}

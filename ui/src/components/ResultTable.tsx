@@ -2,7 +2,7 @@ import { createSignal, createEffect, createMemo, For, Show } from "solid-js";
 import type { Component } from "solid-js";
 import type { QueryResponse } from "../dux/types";
 import styles from "./ResultTable.module.css";
-import { duxClient as client } from "../dux/client";
+import { duxClient as client, QueryFailedError } from "../dux/client";
 
 type SortDir = "asc" | "desc";
 
@@ -30,6 +30,8 @@ const ResultTable: Component<{
   /** Called once with a getter that returns the displayed dataset as
    *  Excel-pasteable TSV (header + filtered/sorted rows), or null if empty. */
   registerCopyProvider?: (fn: () => string | null) => void;
+  /** Reports the current query failure (null when the query succeeds or clears). */
+  onQueryError?: (err: QueryFailedError | null) => void;
 }> = (props) => {
   const [data, setData] = createSignal<QueryResponse | null>(null);
   const [loading, setLoading] = createSignal(false);
@@ -57,6 +59,7 @@ const ResultTable: Component<{
     if (!q) {
       setData(null);
       setError(null);
+      props.onQueryError?.(null);
       return;
     }
     debounceTimer = setTimeout(async () => {
@@ -65,12 +68,20 @@ const ResultTable: Component<{
       try {
         const json = await client.executeQuery(q);
         setData(json);
+        props.onQueryError?.(null);
         // Default: sort DESC by first numeric column
         const first = numericCols().values().next();
         setSortCol(first.done ? -1 : first.value);
         setSortDir("desc");
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        if (err instanceof QueryFailedError) {
+          const pos = err.line > 0 ? ` (line ${err.line}, column ${err.column})` : "";
+          setError(`${err.stage ? err.stage + ": " : ""}${err.message}${pos}`);
+          props.onQueryError?.(err);
+        } else {
+          setError(err instanceof Error ? err.message : String(err));
+          props.onQueryError?.(null);
+        }
         setData(null);
       } finally {
         setLoading(false);

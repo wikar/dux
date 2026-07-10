@@ -50,11 +50,6 @@
   flex-shrink: 0;
 }
 
-.eq {
-  color: var(--subtext0);
-  flex-shrink: 0;
-}
-
 .filterInput {
   background: var(--surface2);
   color: var(--text);
@@ -63,7 +58,8 @@
   padding: 2px 6px;
   font-size: 12px;
   width: 90px;
-  flex-shrink: 0;
+  min-width: 40px;
+  flex-shrink: 1;
 }
 .filterInput:focus {
   outline: none;

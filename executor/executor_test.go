@@ -2,6 +2,7 @@ package executor_test
 
 import (
 	"database/sql"
+	"errors"
 	"math/big"
 	"testing"
 
@@ -183,20 +184,105 @@ func TestExecute_Aggregation(t *testing.T) {
 
 // ─── Iterator functions ───────────────────────────────────────────────────────
 
+func TestExecute_PositionedErrors(t *testing.T) {
+	db, schema := setupTestDB(t)
+
+	t.Run("resolve error carries source position", func(t *testing.T) {
+		_, _, err := executorExecute(db, schema, "EVALUATE SUMMARIZECOLUMNS(\n    sales[region],\n    \"X\", SUM(sales[nope])\n)")
+		var qe *executor.QueryError
+		if !errors.As(err, &qe) {
+			t.Fatalf("expected *executor.QueryError, got %T: %v", err, err)
+		}
+		if qe.Stage != "resolve" {
+			t.Errorf("Stage = %q, want resolve", qe.Stage)
+		}
+		if qe.Line != 3 || qe.Column <= 0 {
+			t.Errorf("position = %d:%d, want line 3 with a positive column", qe.Line, qe.Column)
+		}
+	})
+
+	t.Run("parse error carries source position", func(t *testing.T) {
+		_, _, err := executorExecute(db, schema, "EVALUATE SUMMARIZECOLUMNS(sales[region],")
+		var qe *executor.QueryError
+		if !errors.As(err, &qe) {
+			t.Fatalf("expected *executor.QueryError, got %T: %v", err, err)
+		}
+		if qe.Stage != "parse" || qe.Line < 1 {
+			t.Errorf("stage/position = %q %d:%d, want parse with a position", qe.Stage, qe.Line, qe.Column)
+		}
+	})
+}
+
 func TestExecute_Iterators(t *testing.T) {
 	db, schema := setupTestDB(t)
 
 	t.Run("SUMX", func(t *testing.T) {
-		// Iterator subqueries run over the whole table (no group-context push-down).
-		// Both North and South will therefore show the table-wide total of 2050.
+		// Iterators over a bare table respect the group's filter context:
+		// each region aggregates only its own rows.
 		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(sales[region], "Rev", SUMX(sales, sales[amount] * sales[qty]))`)
 		if len(rows) != 2 {
 			t.Fatalf("expected 2 rows, got %d", len(rows))
 		}
+		want := map[string]float64{"North": 450, "South": 1600}
 		for _, row := range rows {
-			v := toFloat(row["Rev"])
-			if v != 2050 {
-				t.Errorf("expected table-wide SUMX total 2050, got %v", v)
+			region := row["region"].(string)
+			if v := toFloat(row["Rev"]); v != want[region] {
+				t.Errorf("region %s: expected SUMX %v, got %v", region, want[region], v)
+			}
+		}
+	})
+
+	t.Run("SUMX_grouped_by_related_dimension", func(t *testing.T) {
+		// Group key on the one-side dimension; the iterated fact table joins
+		// through the relationship and aggregates per group.
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(products[category], "Rev", SUMX(sales, sales[amount] * sales[qty]))`)
+		if len(rows) != 2 {
+			t.Fatalf("expected 2 rows, got %d", len(rows))
+		}
+		want := map[string]float64{"Electronics": 1850, "Misc": 200}
+		for _, row := range rows {
+			cat := row["category"].(string)
+			if v := toFloat(row["Rev"]); v != want[cat] {
+				t.Errorf("category %s: expected SUMX %v, got %v", cat, want[cat], v)
+			}
+		}
+	})
+
+	t.Run("SUMX_constant_expression_joins_iterated_table", func(t *testing.T) {
+		// The iterated table reaches the FROM clause even when the inner
+		// expression references no columns.
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(products[category], "N", SUMX(sales, 1))`)
+		want := map[string]float64{"Electronics": 4, "Misc": 2}
+		for _, row := range rows {
+			cat := row["category"].(string)
+			if v := toFloat(row["N"]); v != want[cat] {
+				t.Errorf("category %s: expected %v rows, got %v", cat, want[cat], v)
+			}
+		}
+	})
+
+	t.Run("FILTER_argument_restricts_context", func(t *testing.T) {
+		// FILTER(table, pred) in the group position acts as a filter argument
+		// (range/comparison filters, complementing TREATAS equality).
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(sales[region], FILTER(sales, sales[qty] >= 3), "Rev", SUM(sales[amount]))`)
+		if len(rows) != 1 {
+			t.Fatalf("expected 1 row (South only), got %d: %v", len(rows), rows)
+		}
+		if v := toFloat(rows[0]["Rev"]); v != 400 {
+			t.Errorf("expected Rev 400 (150+250), got %v", v)
+		}
+	})
+
+	t.Run("SUMX_over_FILTER_keeps_whole_table_scan", func(t *testing.T) {
+		// A nested table expression is an explicit iteration source — it does
+		// not inherit the group context (matches the scalar-subquery form).
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(sales[region], "Rev", SUMX(FILTER(sales, sales[qty] > 3), sales[amount] * sales[qty]))`)
+		if len(rows) != 2 {
+			t.Fatalf("expected 2 rows, got %d", len(rows))
+		}
+		for _, row := range rows {
+			if v := toFloat(row["Rev"]); v != 1000 {
+				t.Errorf("expected table-wide filtered total 1000, got %v", v)
 			}
 		}
 	})

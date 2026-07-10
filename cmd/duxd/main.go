@@ -19,6 +19,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -26,6 +27,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -413,6 +416,7 @@ func main() {
 
 	mux.HandleFunc("POST /query", queryHandler(db, schema, &schemaMu))
 	mux.HandleFunc("GET /schema", schemaHandler(schema, &schemaMu))
+	mux.HandleFunc("GET /values", valuesHandler(db, schema, &schemaMu))
 	mux.HandleFunc("GET /export", exportHandler(schema, &schemaMu))
 	mux.HandleFunc("POST /import", importHandler(metaDB, schema, &schemaMu))
 	mux.HandleFunc("GET /measures", listMeasuresHandler(schema, &schemaMu))
@@ -571,12 +575,125 @@ func queryHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.Ha
 		cols, rowMaps, err := executor.Execute(db, schema, string(body))
 		mu.RUnlock()
 		if err != nil {
+			// Structured pipeline errors carry a stage and source position;
+			// serve them as JSON so the UI can mark the offending spot.
+			var qe *executor.QueryError
+			if errors.As(err, &qe) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error":  qe.Message,
+					"stage":  qe.Stage,
+					"line":   qe.Line,
+					"column": qe.Column,
+				})
+				return
+			}
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		writeJSON(w, pivotResults(cols, rowMaps))
 	}
+}
+
+// valuesHandler serves GET /values?table=...&column=...&q=... — distinct
+// values of a column for filter pickers, optionally narrowed by a
+// case-insensitive substring match, capped at 50.
+func valuesHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tableKey := r.URL.Query().Get("table")
+		colName := r.URL.Query().Get("column")
+		q := r.URL.Query().Get("q")
+		if tableKey == "" || colName == "" {
+			http.Error(w, "table and column are required", http.StatusBadRequest)
+			return
+		}
+
+		mu.RLock()
+		table, ok := schema.Tables[tableKey]
+		var col *semantic.Column
+		if ok {
+			col = table.Columns[colName]
+		}
+		mu.RUnlock()
+		if !ok {
+			http.Error(w, fmt.Sprintf("unknown table %q", tableKey), http.StatusNotFound)
+			return
+		}
+		if col == nil {
+			http.Error(w, fmt.Sprintf("unknown column %q in table %q", colName, tableKey), http.StatusNotFound)
+			return
+		}
+
+		// No SQL ORDER BY: DuckDB's string sort validates UTF-8 and errors on
+		// data files with mis-encoded text (hash DISTINCT and scans do not).
+		// The result is sorted in Go instead.
+		colSQL := quoteIdent(col.Name)
+		query := fmt.Sprintf(
+			"SELECT CAST(v AS VARCHAR) FROM (SELECT DISTINCT %s AS v FROM %s WHERE %s IS NOT NULL",
+			colSQL, quoteTableKey(tableKey), colSQL)
+		var args []any
+		if q != "" {
+			query += fmt.Sprintf(` AND CAST(%s AS VARCHAR) ILIKE ? ESCAPE '\'`, colSQL)
+			args = append(args, "%"+escapeLike(q)+"%")
+		}
+		query += ") LIMIT 50"
+
+		rows, err := db.Query(query, args...)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		values := []string{}
+		for rows.Next() {
+			var s string
+			if err := rows.Scan(&s); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			values = append(values, s)
+		}
+		if err := rows.Err(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Numeric-aware sort: numbers by value, everything else lexically.
+		sort.Slice(values, func(i, j int) bool {
+			a, errA := strconv.ParseFloat(values[i], 64)
+			b, errB := strconv.ParseFloat(values[j], 64)
+			if errA == nil && errB == nil {
+				return a < b
+			}
+			return values[i] < values[j]
+		})
+		writeJSON(w, values)
+	}
+}
+
+// quoteIdent wraps a single identifier in double quotes, escaping embedded ones.
+func quoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// quoteTableKey quotes each dot-separated segment of a schema table key
+// (e.g. "bev.Sales" → "bev"."Sales").
+func quoteTableKey(key string) string {
+	parts := strings.Split(key, ".")
+	for i, p := range parts {
+		parts[i] = quoteIdent(p)
+	}
+	return strings.Join(parts, ".")
+}
+
+// escapeLike escapes LIKE wildcards in a user-supplied search term.
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	return strings.ReplaceAll(s, `_`, `\_`)
 }
 
 // schemaHandler serves GET /schema.

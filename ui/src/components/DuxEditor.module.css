@@ -75,6 +75,15 @@
   opacity: 0.5;
 }
 
+/* Red squiggle under the query-error position; hoverable for the message */
+.errorMark {
+  position: absolute;
+  height: 3px;
+  background-image: linear-gradient(135deg, transparent 40%, var(--red, #f38ba8) 40%, var(--red, #f38ba8) 60%, transparent 60%);
+  background-size: 6px 3px;
+  background-repeat: repeat-x;
+}
+
 /* ── highlight.js token colours (Catppuccin Mocha) ──────────────────── */
 
 .highlight :global(.hljs-keyword)  { color: var(--mauve); }

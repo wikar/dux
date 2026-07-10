@@ -1,11 +1,16 @@
-import { Show } from "solid-js";
+import { Show, createSignal, createUniqueId } from "solid-js";
 import type { Component } from "solid-js";
-import type { DropField, FilterField, Aggregate } from "../dux/types";
+import type { DropField, FilterField, Aggregate, FilterOp } from "../dux/types";
 import { isNumeric } from "../dux/generateQuery";
+import { isDateType } from "../dux/schemaHelpers";
+import { duxClient } from "../dux/client";
 import TypeIcon from "./TypeIcon";
 import styles from "./FieldPill.module.css";
 
 const AGGREGATES: Aggregate[] = ["SUM", "COUNT", "AVERAGE", "MIN", "MAX", "DISTINCTCOUNT", "VALUES"];
+
+const COMPARE_OPS: FilterOp[] = ["=", "<>", ">", ">=", "<", "<="];
+const TEXT_OPS: FilterOp[] = ["=", "<>", "contains"];
 
 interface FieldPillProps {
   field: DropField | FilterField;
@@ -15,10 +20,29 @@ interface FieldPillProps {
   onReorder: (toIndex: number) => void;
   onAggChange?: (agg: Aggregate) => void;
   onValueChange?: (val: string) => void;
+  onOpChange?: (op: FilterOp) => void;
 }
 
 const FieldPill: Component<FieldPillProps> = (props) => {
   const field = () => props.field as DropField & FilterField;
+  const listId = createUniqueId();
+  const [suggestions, setSuggestions] = createSignal<string[]>([]);
+  let suggestTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // Fetch distinct column values (debounced) to feed the datalist. For a
+  // multi-value "=" filter, suggest completions for the term after the last comma.
+  function loadSuggestions(raw: string) {
+    if (props.zone !== "filters") return;
+    const term = raw.split(",").pop()?.trim() ?? "";
+    clearTimeout(suggestTimer);
+    suggestTimer = setTimeout(() => {
+      const prefix = raw.slice(0, raw.lastIndexOf(",") + 1);
+      duxClient
+        .fetchValues(field().table, field().name, term)
+        .then((vals) => setSuggestions(prefix ? vals.map((v) => `${prefix} ${v}`) : vals))
+        .catch(() => setSuggestions([]));
+    }, 150);
+  }
 
   // Reorder via drag within the same zone — encode index in dataTransfer
   function handleDragStart(e: DragEvent) {
@@ -80,16 +104,33 @@ const FieldPill: Component<FieldPillProps> = (props) => {
         </select>
       </Show>
 
-      {/* value input (filters zone) — comma-separated values for TREATAS */}
+      {/* operator + value input (filters zone) */}
       <Show when={props.zone === "filters"}>
-        <span class={styles.eq}>∈</span>
+        <select
+          class={styles.aggSelect}
+          value={field().op ?? "="}
+          onChange={(e) => props.onOpChange?.(e.currentTarget.value as FilterOp)}
+        >
+          {(isNumeric(field().dataType ?? "") || isDateType(field().dataType ?? "")
+            ? COMPARE_OPS
+            : TEXT_OPS
+          ).map((o) => <option value={o}>{o}</option>)}
+        </select>
         <input
           class={styles.filterInput}
           type="text"
-          placeholder="val1, val2, …"
+          placeholder={(field().op ?? "=") === "=" ? "val1, val2, …" : "value"}
           value={field().value ?? ""}
-          onInput={(e) => props.onValueChange?.(e.currentTarget.value)}
+          list={listId}
+          onInput={(e) => {
+            props.onValueChange?.(e.currentTarget.value);
+            loadSuggestions(e.currentTarget.value);
+          }}
+          onFocus={() => loadSuggestions(field().value ?? "")}
         />
+        <datalist id={listId}>
+          {suggestions().map((v) => <option value={v} />)}
+        </datalist>
       </Show>
 
       {/* remove */}

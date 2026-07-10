@@ -434,15 +434,28 @@ func (e *Emitter) emitCountBlank(fc *parser.FuncCall) (string, error) {
 
 // ─── Iterator (X) functions ──────────────────────────────────────────────────
 
-// emitIterAgg emits an X-function as:
+// emitIterAgg emits an X-function.
+//
+// Inside a SUMMARIZECOLUMNS measure context, an iterator over a bare schema
+// table participates in the group's filter context: its rows ARE the joined,
+// grouped FROM rows, so the aggregate emits inline exactly like SUM/MIN/…
+// (a subquery here would scan the whole table and repeat the table-wide value
+// in every group cell). Nested table expressions (FILTER(...), VALUES(...))
+// and iterators nested inside another iterator's row context keep the scalar
+// subquery form:
 //
 //	SELECT <agg>(__row.<expr>) FROM <table> AS __row
-//
-// When inside SUMMARIZECOLUMNS the outer GROUP BY is correlated automatically
-// by the SUMMARIZECOLUMNS emitter.
 func (e *Emitter) emitIterAgg(agg string, fc *parser.FuncCall) (string, error) {
 	if len(fc.Args) != 2 {
 		return "", fmt.Errorf("%s requires exactly 2 arguments", fc.Name)
+	}
+
+	if e.groupedIterInline(fc.Args[0]) {
+		inner, err := e.emitExpr(fc.Args[1])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s(%s)", agg, inner), nil
 	}
 
 	src, alias, pop, err := e.iterSource(fc.Args[0])
@@ -462,6 +475,41 @@ func (e *Emitter) emitIterAgg(agg string, fc *parser.FuncCall) (string, error) {
 	), nil
 }
 
+// groupedIterInline reports whether an iterator's table argument should
+// aggregate inline over the enclosing grouped FROM rather than in a scalar
+// subquery (see emitIterAgg). True only inside a SUMMARIZECOLUMNS measure
+// context, at aggregate top level (no active row context), for a bare table
+// known to the schema — VAR temp tables and nested table expressions keep the
+// subquery form.
+func (e *Emitter) groupedIterInline(arg *parser.Expr) bool {
+	if e.groupCtx == nil || len(e.rowCtx.Bindings) > 0 || e.Schema == nil {
+		return false
+	}
+	name := bareTableArg(arg)
+	if name == "" {
+		return false
+	}
+	_, ok := e.Schema.Tables[semantic.ResolveTable(e.Schema, name)]
+	return ok
+}
+
+// bareTableArg returns the table name when expr is a plain bare table
+// reference (Ident, QuotedIdent, or QualifiedIdent), "" otherwise.
+func bareTableArg(expr *parser.Expr) string {
+	if expr == nil || expr.Left == nil || len(expr.Right) > 0 {
+		return ""
+	}
+	switch t := expr.Left; {
+	case t.Ident != "":
+		return t.Ident
+	case t.QuotedIdent != "":
+		return semantic.StripSingleQuotes(t.QuotedIdent)
+	case t.QualifiedIdent != "":
+		return t.QualifiedIdent
+	}
+	return ""
+}
+
 // iterSource resolves an iterator function's table argument, binding row
 // context for the underlying table (when there is one) so column references
 // inside the iterated expression resolve to the row alias. The returned pop
@@ -479,10 +527,19 @@ func (e *Emitter) iterSource(arg *parser.Expr) (*tableSource, string, func(), er
 	return src, e.nextAlias("__row"), func() {}, nil
 }
 
-// emitConcatenateX emits CONCATENATEX as string_agg.
+// emitConcatenateX emits CONCATENATEX as string_agg. The same group-context
+// inlining as emitIterAgg applies inside SUMMARIZECOLUMNS.
 func (e *Emitter) emitConcatenateX(fc *parser.FuncCall) (string, error) {
 	if len(fc.Args) < 2 || len(fc.Args) > 3 {
 		return "", fmt.Errorf("CONCATENATEX requires 2 or 3 arguments")
+	}
+
+	if e.groupedIterInline(fc.Args[0]) {
+		inner, delim, err := e.concatenateXArgs(fc)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("string_agg(%s, %s)", inner, delim), nil
 	}
 
 	src, alias, pop, err := e.iterSource(fc.Args[0])
@@ -491,24 +548,31 @@ func (e *Emitter) emitConcatenateX(fc *parser.FuncCall) (string, error) {
 	}
 	defer pop()
 
-	inner, err := e.emitExpr(fc.Args[1])
+	inner, delim, err := e.concatenateXArgs(fc)
 	if err != nil {
 		return "", err
-	}
-
-	delim := "', '"
-	if len(fc.Args) == 3 {
-		d, err := e.emitExpr(fc.Args[2])
-		if err != nil {
-			return "", err
-		}
-		delim = d
 	}
 
 	return fmt.Sprintf(
 		"(SELECT string_agg(%s, %s) FROM %s AS %s)",
 		inner, delim, src.sql, alias,
 	), nil
+}
+
+// concatenateXArgs emits CONCATENATEX's expression and (optional) delimiter
+// arguments; the delimiter defaults to ", ".
+func (e *Emitter) concatenateXArgs(fc *parser.FuncCall) (inner, delim string, err error) {
+	inner, err = e.emitExpr(fc.Args[1])
+	if err != nil {
+		return "", "", err
+	}
+	delim = "', '"
+	if len(fc.Args) == 3 {
+		if delim, err = e.emitExpr(fc.Args[2]); err != nil {
+			return "", "", err
+		}
+	}
+	return inner, delim, nil
 }
 
 // ─── Filter context functions ────────────────────────────────────────────────
@@ -856,6 +920,37 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 			pred, err := e.emitTreatas(treatasFC)
 			if err != nil {
 				return "", err
+			}
+			wherePreds = append(wherePreds, taggedPred{table: predTable, col: predCol, sql: pred})
+			continue
+		}
+		// FILTER(Table, pred) in the group position is a filter argument:
+		// the predicate restricts the filter context, like TREATAS but for
+		// arbitrary comparisons (ranges, inequality, string search).
+		if arg.Left != nil && arg.Left.FuncCall != nil &&
+			strings.ToUpper(arg.Left.FuncCall.Name) == "FILTER" && len(arg.Right) == 0 {
+			filterFC := arg.Left.FuncCall
+			if len(filterFC.Args) != 2 {
+				return "", fmt.Errorf("FILTER requires exactly 2 arguments")
+			}
+			tbl := bareTableArg(filterFC.Args[0])
+			if tbl == "" {
+				return "", fmt.Errorf("SUMMARIZECOLUMNS: a FILTER argument must name a bare table (e.g. FILTER(Sales, Sales[qty] > 1))")
+			}
+			pred, err := e.emitExpr(filterFC.Args[1])
+			if err != nil {
+				return "", err
+			}
+			predTable := strings.ToLower(semantic.StripSingleQuotes(tbl))
+			// The first predicate column on the filtered table identifies the
+			// filter for CALCULATE modifier checks (ALL(t[c]) removal).
+			var predCol string
+			for _, cr := range collectColRefs(filterFC.Args[1]) {
+				crTable := semantic.StripSingleQuotes(cr.Table)
+				if strings.ToLower(crTable) == predTable {
+					predCol = strings.ToLower(e.resolveColName(crTable, semantic.StripBrackets(cr.Column)))
+					break
+				}
 			}
 			wherePreds = append(wherePreds, taggedPred{table: predTable, col: predCol, sql: pred})
 			continue
@@ -1286,18 +1381,25 @@ func collectTables(expr *parser.Expr) []string {
 			walkTerm(op.Right)
 		}
 	}
+	add := func(tableName string) {
+		if !seen[tableName] {
+			seen[tableName] = true
+			result = append(result, tableName)
+		}
+	}
 	walkTerm = func(t *parser.Term) {
 		if t == nil {
 			return
 		}
 		if t.ColRef != nil && t.ColRef.Table != "" {
-			tableName := semantic.StripSingleQuotes(t.ColRef.Table)
-			if !seen[tableName] {
-				seen[tableName] = true
-				result = append(result, tableName)
-			}
+			add(semantic.StripSingleQuotes(t.ColRef.Table))
 		}
 		if t.FuncCall != nil {
+			// An iterator's bare-table source joins the enclosing FROM so the
+			// inline aggregate (see emitIterAgg) has rows to aggregate over.
+			if tbl := iterBareTable(t.FuncCall); tbl != "" {
+				add(tbl)
+			}
 			for _, arg := range t.FuncCall.Args {
 				walkExpr(arg)
 			}
@@ -1309,6 +1411,20 @@ func collectTables(expr *parser.Expr) []string {
 
 	walkExpr(expr)
 	return result
+}
+
+// iterBareTable returns the bare-table first argument of an iterator
+// aggregate call, or "" when the call is not an iterator or its source is a
+// nested table expression.
+func iterBareTable(fc *parser.FuncCall) string {
+	name := strings.ToUpper(fc.Name)
+	if _, ok := iterAggs[name]; !ok && name != "CONCATENATEX" {
+		return ""
+	}
+	if len(fc.Args) == 0 {
+		return ""
+	}
+	return bareTableArg(fc.Args[0])
 }
 
 // tableNameFromExpr extracts a bare table name from the first argument of a

@@ -2,6 +2,7 @@ import { createMemo, createSignal, onMount } from "solid-js";
 import type { Component } from "solid-js";
 import hljs from "highlight.js/lib/core";
 import type { Schema } from "../dux/types";
+import type { QueryFailedError } from "../dux/client";
 import duxLanguage from "../dux/duxLanguage";
 import { getCompletion } from "../dux/completion";
 import styles from "./DuxEditor.module.css";
@@ -23,6 +24,8 @@ const DuxEditor: Component<{
   class?: string;
   /** Hide internal dux_* meta tables from completions. */
   excludeMetaTables?: boolean;
+  /** Query failure to mark at its 1-based source position (line 0 = no marker). */
+  error?: QueryFailedError | null;
 }> = (props) => {
   let highlightEl: HTMLPreElement | undefined;
   let rulerEl: HTMLSpanElement | undefined;
@@ -50,6 +53,18 @@ const DuxEditor: Component<{
     const top = 8 + (lines.length - 1) * (12.5 * 1.55) - scrollTop(); // padTop + line * lineHeight
     const left = 12 + lines[lines.length - 1].length * charW - scrollLeft(); // padLeft + col * charWidth
     return `display:block;top:${top}px;left:${left}px`;
+  });
+
+  // Red underline from the error's column to the end of that line.
+  const errorStyle = createMemo(() => {
+    const e = props.error;
+    if (!e || e.line <= 0) return "display:none";
+    const lineText = props.value.split("\n")[e.line - 1] ?? "";
+    const col = Math.min(Math.max(e.column, 1), lineText.length + 1);
+    const chars = Math.max(lineText.length - (col - 1), 2);
+    const top = 8 + (e.line - 1) * (12.5 * 1.55) + 15 - scrollTop(); // baseline of the line
+    const left = 12 + (col - 1) * charW - scrollLeft();
+    return `display:block;top:${top}px;left:${left}px;width:${chars * charW}px`;
   });
 
   function refreshGhost(text: string, pos: number) {
@@ -121,6 +136,12 @@ const DuxEditor: Component<{
       <span ref={rulerEl} class={styles.ruler} aria-hidden="true">M</span>
       {/* Inline ghost-text suggestion */}
       <span class={styles.ghost} style={ghostStyle()} aria-hidden="true">{ghost()}</span>
+      {/* Error position marker */}
+      <span
+        class={styles.errorMark}
+        style={errorStyle()}
+        title={props.error?.message}
+      />
       <textarea
         class={styles.code}
         value={props.value}

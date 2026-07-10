@@ -1,6 +1,8 @@
 // Package parser defines the DUX AST node types and the participle-annotated grammar.
 package parser
 
+import participelexer "github.com/alecthomas/participle/v2/lexer"
+
 // Query is the root node of a DUX program.
 type Query struct {
 	// Defines holds zero or more MEASURE declarations from a DEFINE block.
@@ -35,6 +37,8 @@ type MeasureDefinition struct {
 // table names that contain spaces (e.g. 'Order Lines'), or a QualifiedIdent
 // for db-qualified names (e.g. atp.matches).
 type TableExpr struct {
+	// Pos is the 1-based source position, auto-filled by participle.
+	Pos            participelexer.Position
 	Func           *FuncCall `parser:"  @@"`
 	QualifiedTable string    `parser:"| @QualifiedIdent"`
 	QuotedTable    string    `parser:"| @QuotedIdent"`
@@ -109,8 +113,8 @@ type FuncCall struct {
 // semantic resolution and SQL emission. The surrounding single quotes in Table
 // are stripped by StripSingleQuotes when used as a schema key or SQL identifier.
 type ColRef struct {
-	// Table is the optional table qualifier — a plain Ident, a single-quoted
-	// QuotedIdent, or a dot-separated QualifiedIdent (db.table).
+	// Pos is the 1-based source position, auto-filled by participle.
+	Pos    participelexer.Position
 	Table  string `parser:"( @( QualifiedIdent | Ident | QuotedIdent ) )?"`
 	Column string `parser:"@ColRef"`
 }

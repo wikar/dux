@@ -1,6 +1,6 @@
 import { createSignal, For, Show } from "solid-js";
 import type { Component } from "solid-js";
-import type { DropField, FilterField, DragPayload } from "../dux/types";
+import type { DropField, FilterField, DragPayload, FilterOp } from "../dux/types";
 import FieldPill from "./FieldPill";
 import styles from "./DropZone.module.css";
 
@@ -12,6 +12,7 @@ interface DropZoneProps {
   onRemove: (idx: number) => void;
   onAggChange?: (idx: number, agg: DropField["aggregate"]) => void;
   onValueChange?: (idx: number, value: string) => void;
+  onOpChange?: (idx: number, op: FilterOp) => void;
   onReorder: (from: number, to: number) => void;
 }
 
@@ -65,6 +66,7 @@ const DropZone: Component<DropZoneProps> = (props) => {
                 onReorder={(to) => props.onReorder(idx(), to)}
                 onAggChange={(agg) => props.onAggChange?.(idx(), agg)}
                 onValueChange={(val) => props.onValueChange?.(idx(), val)}
+                onOpChange={(op) => props.onOpChange?.(idx(), op)}
               />
             )}
           </For>

@@ -5,6 +5,7 @@ package executor
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -20,6 +21,39 @@ import (
 // including VAR materialisation. Queries that exceed this are cancelled.
 const QueryTimeout = 60 * time.Second
 
+// QueryError is a query-pipeline failure with its pipeline stage and, when
+// the underlying error carries one, a 1-based source position.
+type QueryError struct {
+	Stage   string // "parse", "resolve", "emit", or "execute query"
+	Message string // error text, without stage prefix or position
+	Line    int    // 0 when unknown
+	Column  int
+	err     error
+}
+
+func (e *QueryError) Error() string {
+	if e.Line > 0 {
+		return fmt.Sprintf("%s: %s (line %d, column %d)", e.Stage, e.Message, e.Line, e.Column)
+	}
+	return e.Stage + ": " + e.Message
+}
+
+func (e *QueryError) Unwrap() error { return e.err }
+
+// queryErr wraps err as a QueryError, extracting the source position from
+// parse and semantic errors when available.
+func queryErr(stage string, err error) *QueryError {
+	qe := &QueryError{Stage: stage, Message: err.Error(), err: err}
+	if line, col, msg, ok := parser.ErrorDetails(err); ok {
+		qe.Line, qe.Column, qe.Message = line, col, msg
+	}
+	var se *semantic.SemanticError
+	if errors.As(err, &se) && se.Line > 0 {
+		qe.Line, qe.Column = se.Line, se.Column
+	}
+	return qe
+}
+
 // Execute parses the DUX input, resolves it against schema, emits DuckDB SQL,
 // and runs it against db. It returns the ordered column names followed by all
 // rows as maps keyed by column name. Column order matches the SELECT list of
@@ -34,12 +68,12 @@ const QueryTimeout = 60 * time.Second
 func Execute(db *sql.DB, schema *semantic.Schema, input string) ([]string, []map[string]any, error) {
 	q, err := parser.Parse(input)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse: %w", err)
+		return nil, nil, queryErr("parse", err)
 	}
 
 	r := &semantic.Resolver{Schema: schema}
 	if err := r.Resolve(q); err != nil {
-		return nil, nil, fmt.Errorf("resolve: %w", err)
+		return nil, nil, queryErr("resolve", err)
 	}
 
 	em := &emitter.Emitter{Schema: schema, Measures: r.EffectiveMeasures()}
@@ -96,12 +130,12 @@ func Execute(db *sql.DB, schema *semantic.Schema, input string) ([]string, []map
 
 	sqlStr, err := em.Emit(q)
 	if err != nil {
-		return nil, nil, fmt.Errorf("emit: %w", err)
+		return nil, nil, queryErr("emit", err)
 	}
 
 	rows, err := conn.QueryContext(ctx, sqlStr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("execute query: %w", err)
+		return nil, nil, queryErr("execute query", err)
 	}
 	defer rows.Close()
 	return scanRows(rows)
