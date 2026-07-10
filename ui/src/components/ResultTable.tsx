@@ -24,7 +24,13 @@ function cmpCells(a: string | number | null, b: string | number | null): number 
   return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
 }
 
-const ResultTable: Component<{ query: string; includeEmpty: boolean }> = (props) => {
+const ResultTable: Component<{
+  query: string;
+  includeEmpty: boolean;
+  /** Called once with a getter that returns the displayed dataset as
+   *  Excel-pasteable TSV (header + filtered/sorted rows), or null if empty. */
+  registerCopyProvider?: (fn: () => string | null) => void;
+}> = (props) => {
   const client = useDuxClient();
   const [data, setData] = createSignal<QueryResponse | null>(null);
   const [loading, setLoading] = createSignal(false);
@@ -113,6 +119,19 @@ const ResultTable: Component<{ query: string; includeEmpty: boolean }> = (props)
     if (ci === -1) return rows;
     const dir = sortDir() === "asc" ? 1 : -1;
     return [...rows].sort((a, b) => dir * cmpCells(a[ci], b[ci]));
+  });
+
+  // Expose the displayed dataset as TSV so the Copy Results button
+  // (in the query toolbar) can put it on the clipboard for Excel.
+  props.registerCopyProvider?.(() => {
+    const d = data();
+    if (!d) return null;
+    // Tabs/newlines inside a cell would break the grid shape on paste.
+    const esc = (v: string | number | null) =>
+      v === null ? "" : String(v).replace(/[\t\r\n]+/g, " ");
+    const lines = [d.columns.map(esc).join("\t")];
+    for (const row of sortedRows()) lines.push(row.map(esc).join("\t"));
+    return lines.join("\r\n");
   });
 
   return (

@@ -52,6 +52,16 @@ const App: Component = () => {
     setIsDirty(false);
   }
 
+  // Getter registered by ResultTable; returns the displayed dataset as TSV.
+  let resultsTsv: (() => string | null) | undefined;
+
+  async function copyResults(): Promise<boolean> {
+    const tsv = resultsTsv?.();
+    if (!tsv) return false;
+    await navigator.clipboard.writeText(tsv);
+    return true;
+  }
+
   // A field is a "metric" if it's a pre-defined measure or a numeric column.
   // Non-metric (group-by) columns always sort before metrics.
   const isMetric = (f: DropField) =>
@@ -233,8 +243,13 @@ const App: Component = () => {
           onRun={commitQuery}
           includeEmpty={includeEmpty()}
           onToggleIncludeEmpty={() => setIncludeEmpty((v) => !v)}
+          onCopyResults={copyResults}
         />
-        <ResultTable query={committedQuery()} includeEmpty={includeEmpty()} />
+        <ResultTable
+          query={committedQuery()}
+          includeEmpty={includeEmpty()}
+          registerCopyProvider={(fn) => (resultsTsv = fn)}
+        />
       </div>
     </div>
       </Show>

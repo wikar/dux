@@ -1,4 +1,4 @@
-import { createResource } from "solid-js";
+import { createResource, createSignal } from "solid-js";
 import type { Component } from "solid-js";
 import DuxEditor from "./DuxEditor";
 import styles from "./QueryPreview.module.css";
@@ -11,9 +11,20 @@ const QueryPreview: Component<{
   onRun: () => void;
   includeEmpty: boolean;
   onToggleIncludeEmpty: () => void;
+  /** Copies the displayed results to the clipboard; resolves false when there is nothing to copy. */
+  onCopyResults: () => Promise<boolean>;
 }> = (props) => {
   const client = useDuxClient();
   const [schema] = createResource(() => client.fetchSchema());
+  const [copied, setCopied] = createSignal(false);
+  let copiedTimer: ReturnType<typeof setTimeout>;
+
+  async function handleCopy() {
+    if (!(await props.onCopyResults())) return;
+    setCopied(true);
+    clearTimeout(copiedTimer);
+    copiedTimer = setTimeout(() => setCopied(false), 1500);
+  }
 
   return (
     <div class={styles.panel}>
@@ -35,6 +46,23 @@ const QueryPreview: Component<{
             <path d="M3 2.5l10 5.5-10 5.5V2.5z" />
           </svg>
           Run
+        </button>
+        <button
+          class={`${styles.runBtn} ${copied() ? styles.copiedBtn : ""}`}
+          title="Copy results to clipboard (paste into Excel)"
+          onClick={handleCopy}
+        >
+          {copied() ? (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M2.5 8.5l4 4 7-8" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+              <path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" />
+            </svg>
+          )}
+          {copied() ? "Copied" : "Copy Results"}
         </button>
         <label
           class={styles.toggle}
