@@ -7,9 +7,6 @@ export interface Column {
 
 export interface Table {
   Name: string;
-  Database?: string;
-  /** DuckDB schema name; empty/absent for the default ("main") schema. */
-  Schema?: string;
   /** True when introspected as a VIEW rather than a BASE TABLE. */
   IsView?: boolean;
   /** True when the table/view is marked hidden. */

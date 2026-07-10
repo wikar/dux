@@ -3,13 +3,12 @@ package parser
 
 import (
 	"github.com/alecthomas/participle/v2"
-	duxlexer "github.com/danielwikar/dux/lexer"
 )
 
 // duxParser is the compiled participle parser. Built once at init time.
 var duxParser = participle.MustBuild[Query](
-	// Use the DUX stateful lexer.
-	participle.Lexer(duxlexer.Definition),
+	// Use the DUX stateful lexer (see lexer.go).
+	participle.Lexer(lexerDefinition),
 	// Drop whitespace and comment tokens before the parser sees them.
 	participle.Elide("Whitespace", "LineComment", "BlockComment"),
 	// Allow keywords to be written in any case (EVALUATE, evaluate, Evaluate…).

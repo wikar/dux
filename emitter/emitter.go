@@ -252,6 +252,17 @@ func (e *Emitter) emitLiteral(l *parser.Literal) string {
 
 // ─── Function dispatch ───────────────────────────────────────────────────────
 
+// simpleAggs maps DAX aggregate function names to their DuckDB spelling.
+var simpleAggs = map[string]string{
+	"SUM": "SUM", "AVERAGE": "AVG", "COUNT": "COUNT", "COUNTA": "COUNT",
+	"MIN": "MIN", "MAX": "MAX", "MEDIAN": "MEDIAN",
+}
+
+// iterAggs maps DAX iterator (row-context) aggregates to their DuckDB spelling.
+var iterAggs = map[string]string{
+	"SUMX": "SUM", "AVERAGEX": "AVG", "COUNTX": "COUNT", "MINX": "MIN", "MAXX": "MAX",
+}
+
 func (e *Emitter) emitFuncCall(fc *parser.FuncCall) (string, error) {
 	// A lifted aggregate inside a cross-cluster measure expression emits as
 	// its stitched cluster CTE column (see stitched.go).
@@ -260,40 +271,21 @@ func (e *Emitter) emitFuncCall(fc *parser.FuncCall) (string, error) {
 			return ref, nil
 		}
 	}
-	switch strings.ToUpper(fc.Name) {
+	name := strings.ToUpper(fc.Name)
+	if sqlFn, ok := simpleAggs[name]; ok {
+		return e.emitSimpleAgg(sqlFn, fc)
+	}
+	if sqlFn, ok := iterAggs[name]; ok {
+		return e.emitIterAgg(sqlFn, fc)
+	}
+	switch name {
 	// Aggregation
-	case "SUM":
-		return e.emitSimpleAgg("SUM", fc)
-	case "AVERAGE":
-		return e.emitSimpleAgg("AVG", fc)
-	case "COUNT":
-		return e.emitSimpleAgg("COUNT", fc)
-	case "COUNTA":
-		return e.emitSimpleAgg("COUNT", fc)
 	case "COUNTBLANK":
 		return e.emitCountBlank(fc)
-	case "MIN":
-		return e.emitSimpleAgg("MIN", fc)
-	case "MAX":
-		return e.emitSimpleAgg("MAX", fc)
-	case "MEDIAN":
-		return e.emitSimpleAgg("MEDIAN", fc)
 	case "COUNTROWS":
 		return e.emitCountRows(fc)
 	case "DISTINCTCOUNT":
 		return e.emitDistinctCount(fc)
-
-	// Iterator (row-context) functions
-	case "SUMX":
-		return e.emitIterAgg("SUM", fc)
-	case "AVERAGEX":
-		return e.emitIterAgg("AVG", fc)
-	case "COUNTX":
-		return e.emitIterAgg("COUNT", fc)
-	case "MINX":
-		return e.emitIterAgg("MIN", fc)
-	case "MAXX":
-		return e.emitIterAgg("MAX", fc)
 	case "CONCATENATEX":
 		return e.emitConcatenateX(fc)
 

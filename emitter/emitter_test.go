@@ -26,7 +26,6 @@ func minSchema() *semantic.Schema {
 	s := semantic.NewSchema()
 	s.Tables["sales"] = &semantic.Table{
 		Name:     "sales",
-		Database: "",
 		Columns: map[string]*semantic.Column{
 			"id":      {Name: "id", DataType: "INTEGER"},
 			"product": {Name: "product", DataType: "TEXT"},
@@ -37,7 +36,6 @@ func minSchema() *semantic.Schema {
 	}
 	s.Tables["products"] = &semantic.Table{
 		Name:     "products",
-		Database: "",
 		Columns: map[string]*semantic.Column{
 			"product":  {Name: "product", DataType: "TEXT"},
 			"category": {Name: "category", DataType: "TEXT"},

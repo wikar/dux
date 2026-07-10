@@ -423,8 +423,8 @@ func main() {
 	mux.HandleFunc("DELETE /relationships", deleteRelationshipHandler(metaDB, schema, &schemaMu))
 	mux.HandleFunc("POST /datetable", setDateTableHandler(metaDB, schema, &schemaMu))
 	mux.HandleFunc("DELETE /datetable", deleteDateTableHandler(metaDB, schema, &schemaMu))
-	mux.HandleFunc("POST /hidden", setHiddenHandler(metaDB, schema, &schemaMu))
-	mux.HandleFunc("DELETE /hidden", deleteHiddenHandler(metaDB, schema, &schemaMu))
+	mux.HandleFunc("POST /hidden", hiddenHandler(metaDB, schema, &schemaMu, true))
+	mux.HandleFunc("DELETE /hidden", hiddenHandler(metaDB, schema, &schemaMu, false))
 	mux.HandleFunc("POST /refresh", refreshHandler(metaDB, db, schema, &schemaMu, tomlPath))
 
 	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, r *http.Request) {
@@ -754,6 +754,28 @@ func isDateColumnType(dataType string) bool {
 	return dt == "DATE" || strings.HasPrefix(dt, "TIMESTAMP")
 }
 
+// clearDateTables removes every date-table designation from the in-memory
+// schema and returns the cleared table keys. The caller must hold the schema
+// write lock.
+func clearDateTables(schema *semantic.Schema) []string {
+	previous := make([]string, 0, len(schema.DateTables))
+	for tbl := range schema.DateTables {
+		previous = append(previous, tbl)
+	}
+	schema.DateTables = make(map[string]string)
+	return previous
+}
+
+// dropDateTables deletes the given date-table designations from the metadata DB.
+func dropDateTables(metaDB *semantic.MetadataDB, tables []string) error {
+	for _, tbl := range tables {
+		if err := metaDB.DeleteDateTable(tbl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // setDateTableHandler serves POST /datetable — designates the model's date
 // table and date column. Only one date table is allowed: any previous
 // designation is replaced.
@@ -787,19 +809,13 @@ func setDateTableHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, m
 			http.Error(w, fmt.Sprintf("column %q has type %s — a DATE or TIMESTAMP column is required", req.Column, col.DataType), http.StatusBadRequest)
 			return
 		}
-		previous := make([]string, 0, len(schema.DateTables))
-		for tbl := range schema.DateTables {
-			previous = append(previous, tbl)
-		}
-		schema.DateTables = make(map[string]string)
+		previous := clearDateTables(schema)
 		schema.SetDateTable(req.Table, col.Name)
 		mu.Unlock()
 
-		for _, tbl := range previous {
-			if err := metaDB.DeleteDateTable(tbl); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
+		if err := dropDateTables(metaDB, previous); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 		if err := metaDB.SaveDateTable(strings.ToLower(req.Table), col.Name); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -814,18 +830,12 @@ func setDateTableHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, m
 func deleteDateTableHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		previous := make([]string, 0, len(schema.DateTables))
-		for tbl := range schema.DateTables {
-			previous = append(previous, tbl)
-		}
-		schema.DateTables = make(map[string]string)
+		previous := clearDateTables(schema)
 		mu.Unlock()
 
-		for _, tbl := range previous {
-			if err := metaDB.DeleteDateTable(tbl); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
+		if err := dropDateTables(metaDB, previous); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
@@ -856,9 +866,10 @@ func resolveHiddenTarget(schema *semantic.Schema, req hiddenRequest) (string, in
 	return col.Name, 0, nil
 }
 
-// setHiddenHandler serves POST /hidden — marks a table, view, or single
-// column as hidden. Body: {"table":"...","column":"..."} (column optional).
-func setHiddenHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+// hiddenHandler serves POST /hidden (hide=true) and DELETE /hidden
+// (hide=false) — sets or clears a hidden designation for a table, view, or
+// single column. Body: {"table":"...","column":"..."} (column optional).
+func hiddenHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex, hide bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req hiddenRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -878,53 +889,27 @@ func setHiddenHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *
 			return
 		}
 		if colName == "" {
-			schema.SetTableHidden(req.Table, true)
+			schema.SetTableHidden(req.Table, hide)
 		} else {
-			schema.SetColumnHidden(req.Table, colName, true)
+			schema.SetColumnHidden(req.Table, colName, hide)
 		}
 		mu.Unlock()
 
-		if err := metaDB.SaveHidden(strings.ToLower(req.Table), strings.ToLower(colName)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		table, column := strings.ToLower(req.Table), strings.ToLower(colName)
+		if hide {
+			err = metaDB.SaveHidden(table, column)
+		} else {
+			err = metaDB.DeleteHidden(table, column)
 		}
-		w.WriteHeader(http.StatusCreated)
-	}
-}
-
-// deleteHiddenHandler serves DELETE /hidden — clears a hidden designation.
-// Body: {"table":"...","column":"..."} (column optional).
-func deleteHiddenHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req hiddenRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if req.Table == "" {
-			http.Error(w, "table is required", http.StatusBadRequest)
-			return
-		}
-
-		mu.Lock()
-		colName, status, err := resolveHiddenTarget(schema, req)
 		if err != nil {
-			mu.Unlock()
-			http.Error(w, err.Error(), status)
-			return
-		}
-		if colName == "" {
-			schema.SetTableHidden(req.Table, false)
-		} else {
-			schema.SetColumnHidden(req.Table, colName, false)
-		}
-		mu.Unlock()
-
-		if err := metaDB.DeleteHidden(strings.ToLower(req.Table), strings.ToLower(colName)); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
+		if hide {
+			w.WriteHeader(http.StatusCreated)
+		} else {
+			w.WriteHeader(http.StatusNoContent)
+		}
 	}
 }
 
@@ -936,6 +921,24 @@ type relationshipRequest struct {
 	ToTable       string `json:"to_table"`
 	ToColumn      string `json:"to_column"`
 	Bidirectional bool   `json:"bidirectional"`
+}
+
+// matches reports whether rel joins the same table/column pair as the request.
+func (req relationshipRequest) matches(rel *semantic.Relationship) bool {
+	return rel.FromTable == req.FromTable && rel.FromColumn == req.FromColumn &&
+		rel.ToTable == req.ToTable && rel.ToColumn == req.ToColumn
+}
+
+// removeRelationship drops the matching relationship from the in-memory
+// schema. The caller must hold the schema write lock.
+func removeRelationship(schema *semantic.Schema, req relationshipRequest) {
+	rels := schema.Relationships[:0]
+	for _, rel := range schema.Relationships {
+		if !req.matches(rel) {
+			rels = append(rels, rel)
+		}
+	}
+	schema.Relationships = rels
 }
 
 // listRelationshipsHandler serves GET /relationships.
@@ -977,8 +980,7 @@ func addRelationshipHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema
 		// a duplicate entry in the in-memory schema.
 		var existing *semantic.Relationship
 		for _, rel := range schema.Relationships {
-			if rel.FromTable == req.FromTable && rel.FromColumn == req.FromColumn &&
-				rel.ToTable == req.ToTable && rel.ToColumn == req.ToColumn {
+			if req.matches(rel) {
 				existing = rel
 				break
 			}
@@ -1001,15 +1003,7 @@ func addRelationshipHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema
 			if existing != nil {
 				existing.Bidirectional = prevBidi
 			} else {
-				rels := schema.Relationships[:0]
-				for _, rel := range schema.Relationships {
-					if rel.FromTable == req.FromTable && rel.FromColumn == req.FromColumn &&
-						rel.ToTable == req.ToTable && rel.ToColumn == req.ToColumn {
-						continue
-					}
-					rels = append(rels, rel)
-				}
-				schema.Relationships = rels
+				removeRelationship(schema, req)
 			}
 			mu.Unlock()
 			_ = metaDB.DeleteRelationship(req.FromTable, req.FromColumn, req.ToTable, req.ToColumn)
@@ -1042,15 +1036,7 @@ func deleteRelationshipHandler(metaDB *semantic.MetadataDB, schema *semantic.Sch
 		}
 
 		mu.Lock()
-		rels := schema.Relationships[:0]
-		for _, rel := range schema.Relationships {
-			if rel.FromTable == req.FromTable && rel.FromColumn == req.FromColumn &&
-				rel.ToTable == req.ToTable && rel.ToColumn == req.ToColumn {
-				continue
-			}
-			rels = append(rels, rel)
-		}
-		schema.Relationships = rels
+		removeRelationship(schema, req)
 		mu.Unlock()
 
 		w.WriteHeader(http.StatusNoContent)

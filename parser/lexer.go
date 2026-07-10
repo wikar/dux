@@ -1,13 +1,12 @@
-// Package lexer defines the stateful lexer for the DUX query language.
-package lexer
+package parser
 
 import (
 	participelexer "github.com/alecthomas/participle/v2/lexer"
 )
 
-// Definition is the stateful lexer used by the DUX parser.
+// lexerDefinition is the stateful lexer for the DUX query language.
 // Rules are evaluated in order; first match wins.
-var Definition = participelexer.MustStateful(participelexer.Rules{
+var lexerDefinition = participelexer.MustStateful(participelexer.Rules{
 	"Root": {
 		// Whitespace is listed first so the stateful lexer matches it before any
 		// other rule; token priority is determined by order of appearance.

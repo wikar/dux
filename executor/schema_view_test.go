@@ -62,21 +62,13 @@ func TestIntrospectViewsAndSchemas(t *testing.T) {
 	}
 
 	// A table in a non-default schema of the primary db is keyed schema.table.
-	cust, ok := schema.Tables["sales.Customer"]
-	if !ok {
+	if _, ok := schema.Tables["sales.Customer"]; !ok {
 		t.Fatalf("sales.Customer not introspected; keys: %v", tableKeys(schema))
-	}
-	if cust.Schema != "sales" {
-		t.Errorf("sales.Customer Schema = %q, want %q", cust.Schema, "sales")
 	}
 
 	// A table in a non-default schema of an attached db is keyed db.schema.table.
-	region, ok := schema.Tables["bev.dim.Region"]
-	if !ok {
+	if _, ok := schema.Tables["bev.dim.Region"]; !ok {
 		t.Fatalf("bev.dim.Region not introspected; keys: %v", tableKeys(schema))
-	}
-	if region.Database != "bev" || region.Schema != "dim" {
-		t.Errorf("bev.dim.Region Database/Schema = %q/%q, want bev/dim", region.Database, region.Schema)
 	}
 }
 

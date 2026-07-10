@@ -30,14 +30,13 @@ type Schema struct {
 	HiddenColumns map[string]map[string]bool
 }
 
-// Table represents a table or view in the schema.
+// Table represents a table or view in the schema. The database and DuckDB
+// schema qualifiers are encoded in the Tables map key (e.g. "atp.matches").
 type Table struct {
-	Name     string
-	Database string // empty for the primary (main) database; attachment alias otherwise
-	Schema   string // empty for the default ("main") schema; DuckDB schema name otherwise
-	IsView   bool   // true when introspected as a VIEW rather than a BASE TABLE
-	Hidden   bool   // true when the table is marked hidden
-	Columns  map[string]*Column
+	Name    string
+	IsView  bool // true when introspected as a VIEW rather than a BASE TABLE
+	Hidden  bool // true when the table is marked hidden
+	Columns map[string]*Column
 }
 
 // Column represents a single column within a Table.
@@ -268,11 +267,9 @@ func IntrospectDuckDB(db *sql.DB) (*Schema, error) {
 		t, ok := schema.Tables[key]
 		if !ok {
 			t = &Table{
-				Name:     tableName,
-				Database: dbAlias,
-				Schema:   schemaPart,
-				IsView:   tableType == "VIEW",
-				Columns:  make(map[string]*Column),
+				Name:    tableName,
+				IsView:  tableType == "VIEW",
+				Columns: make(map[string]*Column),
 			}
 			schema.Tables[key] = t
 		}
