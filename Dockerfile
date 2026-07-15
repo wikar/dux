@@ -2,7 +2,6 @@
 FROM oven/bun:1-alpine AS ui-builder
 WORKDIR /app
 COPY ui/bun.lock ui/package.json ./
-COPY ui/packages/dux-client/package.json ./packages/dux-client/package.json
 RUN bun install --frozen-lockfile
 COPY ui/ .
 RUN bun run build
