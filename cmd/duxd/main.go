@@ -2,7 +2,9 @@
 //
 // It embeds DuckDB in-process and exposes endpoints on :80:
 //
-//	POST /query   — accepts a DUX query string, returns a JSON result set
+//	POST /query   — accepts a DUX query string (or a JSON envelope with
+//	                external filters), returns a JSON result set
+//	GET  /version — server version and API capability flags
 //	GET  /schema  — returns tables, columns, and relationships as JSON
 //	GET  /export  — exports measures and relationships as TOML
 //	POST /import  — imports a dux.toml body, updates the metadata DB
@@ -65,6 +67,33 @@ const openAPISpec = `{
             "text/plain": {
               "schema": { "type": "string" },
               "example": "EVALUATE SUMMARIZECOLUMNS(atp.matches[surface], \"Matches\", COUNT(atp.matches[match_num]))"
+            },
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                  "query": { "type": "string", "description": "The DUX query text" },
+                  "filters": {
+                    "type": "array",
+                    "description": "External filters applied to the query's outermost filter context (dashboard slicers). Ops: in, between, =, !=, <, <=, >, >=, contains.",
+                    "items": {
+                      "type": "object",
+                      "required": ["table", "column", "op"],
+                      "properties": {
+                        "table":  { "type": "string" },
+                        "column": { "type": "string" },
+                        "op":     { "type": "string", "enum": ["in", "between", "=", "!=", "<", "<=", ">", ">=", "contains"] },
+                        "values": { "type": "array", "description": "op=in" },
+                        "value":  { "description": "scalar ops and contains" },
+                        "from":   { "description": "op=between" },
+                        "to":     { "description": "op=between" }
+                      }
+                    }
+                  }
+                }
+              },
+              "example": { "query": "EVALUATE SUMMARIZECOLUMNS(atp.matches[surface], \"Matches\", COUNT(atp.matches[match_num]))", "filters": [ { "table": "atp.matches", "column": "surface", "op": "in", "values": ["Clay", "Grass"] } ] }
             }
           }
         },
@@ -84,6 +113,22 @@ const openAPISpec = `{
             }
           },
           "400": { "description": "Parse or execution error" }
+        }
+      }
+    },
+    "/version": {
+      "get": {
+        "summary": "Server version and API capabilities",
+        "description": "Returns the duxd version and capability flags (externalFilters, measureFormats) for client handshakes.",
+        "responses": {
+          "200": {
+            "description": "Version object",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
         }
       }
     },
@@ -431,6 +476,16 @@ func main() {
 	mux.HandleFunc("DELETE /hidden", hiddenHandler(metaDB, schema, &schemaMu, false))
 	mux.HandleFunc("POST /refresh", refreshHandler(metaDB, db, schema, &schemaMu, tomlPath))
 
+	mux.HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{
+			"version": version,
+			"capabilities": map[string]bool{
+				"externalFilters": true,
+				"measureFormats":  true,
+			},
+		})
+	})
+
 	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, openAPISpec)
@@ -558,7 +613,16 @@ func writeJSON(w http.ResponseWriter, v any) {
 	}
 }
 
-// queryHandler handles POST /query.
+// queryRequest is the JSON body form of POST /query. The filters are applied
+// to the query's outermost filter context (see executor.ApplyExternalFilters).
+type queryRequest struct {
+	Query   string                    `json:"query"`
+	Filters []executor.ExternalFilter `json:"filters,omitempty"`
+}
+
+// queryHandler handles POST /query. The body is either a raw DUX query string
+// or, with Content-Type application/json, a queryRequest envelope carrying
+// external filters.
 func queryHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -571,8 +635,24 @@ func queryHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.Ha
 			return
 		}
 
+		query := string(body)
+		var filters []executor.ExternalFilter
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+			var req queryRequest
+			if err := json.Unmarshal(body, &req); err != nil {
+				http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			if strings.TrimSpace(req.Query) == "" {
+				http.Error(w, `"query" is required in the JSON body`, http.StatusBadRequest)
+				return
+			}
+			query = req.Query
+			filters = req.Filters
+		}
+
 		mu.RLock()
-		cols, rowMaps, err := executor.Execute(db, schema, string(body))
+		cols, rowMaps, err := executor.ExecuteFiltered(db, schema, query, filters)
 		mu.RUnlock()
 		if err != nil {
 			// Structured pipeline errors carry a stage and source position;
@@ -768,9 +848,10 @@ func importHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *syn
 // ─── Measures ────────────────────────────────────────────────────────────────
 
 type measureRequest struct {
-	Table      string `json:"table"`
-	Name       string `json:"name"`
-	Expression string `json:"expression"`
+	Table      string                  `json:"table"`
+	Name       string                  `json:"name"`
+	Expression string                  `json:"expression"`
+	Format     *semantic.MeasureFormat `json:"format,omitempty"`
 }
 
 // listMeasuresHandler serves GET /measures.
@@ -778,15 +859,21 @@ type measureRequest struct {
 func listMeasuresHandler(schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		type item struct {
-			Table      string `json:"table"`
-			Name       string `json:"name"`
-			Expression string `json:"expression"`
+			Table      string                  `json:"table"`
+			Name       string                  `json:"name"`
+			Expression string                  `json:"expression"`
+			Format     *semantic.MeasureFormat `json:"format,omitempty"`
 		}
 		mu.RLock()
 		var out []item
 		for table, defs := range schema.Measures {
 			for name, def := range defs {
-				out = append(out, item{Table: table, Name: name, Expression: def.Expression})
+				out = append(out, item{
+					Table:      table,
+					Name:       name,
+					Expression: def.Expression,
+					Format:     schema.MeasureFormatFor(table, name),
+				})
 			}
 		}
 		mu.RUnlock()
@@ -810,10 +897,20 @@ func addMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu 
 			http.Error(w, "table, name, and expression are required", http.StatusBadRequest)
 			return
 		}
+		if req.Format != nil {
+			if err := req.Format.Validate(); err != nil {
+				http.Error(w, fmt.Sprintf("invalid format: %v", err), http.StatusBadRequest)
+				return
+			}
+		}
 
-		// Parse and store in the in-memory schema.
+		// Parse and store in the in-memory schema. A nil format clears any
+		// previously stored format — the request replaces the measure whole.
 		mu.Lock()
 		err := schema.AddMeasureFromExpr(req.Table, req.Name, req.Expression)
+		if err == nil {
+			schema.SetMeasureFormat(req.Table, req.Name, req.Format)
+		}
 		mu.Unlock()
 		if err != nil {
 			http.Error(w, fmt.Sprintf("invalid expression: %v", err), http.StatusBadRequest)
@@ -821,7 +918,7 @@ func addMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu 
 		}
 
 		// Persist to the metadata DB.
-		if err := metaDB.SaveMeasure(req.Table, req.Name, req.Expression); err != nil {
+		if err := metaDB.SaveMeasure(req.Table, req.Name, req.Expression, req.Format); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -852,6 +949,7 @@ func deleteMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, 
 				delete(schema.Measures, table)
 			}
 		}
+		schema.DeleteMeasureFormat(table, name)
 		mu.Unlock()
 
 		w.WriteHeader(http.StatusNoContent)

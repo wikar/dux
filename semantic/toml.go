@@ -29,11 +29,13 @@ type tomlRelationship struct {
 	Bidirectional bool   `toml:"bidirectional,omitempty"`
 }
 
-// tomlMeasure is one [[measure]] entry.
+// tomlMeasure is one [[measure]] entry. Format is optional and serialises as
+// a nested [measure.format] table.
 type tomlMeasure struct {
-	Table      string `toml:"table"`
-	Name       string `toml:"name"`
-	Expression string `toml:"expression"`
+	Table      string         `toml:"table"`
+	Name       string         `toml:"name"`
+	Expression string         `toml:"expression"`
+	Format     *MeasureFormat `toml:"format,omitempty"`
 }
 
 // tomlDateTable is one [[date_table]] entry — designates a table as the model's
@@ -104,6 +106,12 @@ func LoadDuxTOMLBytes(data []byte, schema *Schema) error {
 		}
 		if err := schema.AddMeasureFromExpr(m.Table, m.Name, m.Expression); err != nil {
 			return fmt.Errorf("measure %q: %w", m.Name, err)
+		}
+		if m.Format != nil {
+			if err := m.Format.Validate(); err != nil {
+				return fmt.Errorf("measure %q: %w", m.Name, err)
+			}
+			schema.SetMeasureFormat(m.Table, m.Name, m.Format)
 		}
 	}
 
@@ -179,6 +187,7 @@ func ExportDuxTOML(schema *Schema) ([]byte, error) {
 			Table:      entry.table,
 			Name:       entry.name,
 			Expression: entry.def.Expression,
+			Format:     schema.MeasureFormatFor(entry.table, entry.name),
 		})
 	}
 

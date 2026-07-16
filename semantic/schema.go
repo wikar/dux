@@ -16,7 +16,11 @@ import (
 type Schema struct {
 	Tables        map[string]*Table
 	Measures      map[string]map[string]*parser.MeasureDefinition // table → name → def
-	Relationships []*Relationship
+	// MeasureFormats holds optional display formats, keyed identically to
+	// Measures (table → measure name). Parallel map because the measure
+	// definition itself is a parser type that cannot reference semantic types.
+	MeasureFormats map[string]map[string]*MeasureFormat
+	Relationships  []*Relationship
 	// DateTables maps a lower-cased table key to the name of its date column.
 	// A designated date table gets DAX "mark as date table" semantics: time
 	// intelligence functions over any of its columns clear ALL filters on the
@@ -89,6 +93,13 @@ func (s *Schema) AddMeasureFromExpr(table, name, expr string) error {
 		s.Measures[t][n] = def
 	}
 	return nil
+}
+
+// FindTable returns the *Table for name using an exact key match first and a
+// case-insensitive scan as fallback, along with the canonical schema key.
+// Returns (nil, "") when the table is unknown.
+func (s *Schema) FindTable(name string) (*Table, string) {
+	return s.findTable(name)
 }
 
 // findTable returns the *Table for name using an exact key match first and a

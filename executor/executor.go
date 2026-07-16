@@ -66,9 +66,19 @@ func queryErr(stage string, err error) *QueryError {
 // session-scoped temporary table on a dedicated connection before the final
 // RETURN expression is evaluated. Temp tables are dropped on all code paths.
 func Execute(db *sql.DB, schema *semantic.Schema, input string) ([]string, []map[string]any, error) {
+	return ExecuteFiltered(db, schema, input, nil)
+}
+
+// ExecuteFiltered is Execute with external filters applied to the query's
+// outermost filter context after parsing (see ApplyExternalFilters).
+func ExecuteFiltered(db *sql.DB, schema *semantic.Schema, input string, filters []ExternalFilter) ([]string, []map[string]any, error) {
 	q, err := parser.Parse(input)
 	if err != nil {
 		return nil, nil, queryErr("parse", err)
+	}
+
+	if err := ApplyExternalFilters(q, schema, filters); err != nil {
+		return nil, nil, &QueryError{Stage: "filters", Message: err.Error(), err: err}
 	}
 
 	r := &semantic.Resolver{Schema: schema}

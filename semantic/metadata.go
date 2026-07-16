@@ -2,6 +2,7 @@ package semantic
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	_ "github.com/duckdb/duckdb-go/v2"
@@ -77,6 +78,10 @@ func (m *MetadataDB) initSchema() error {
 	`
 	if _, err := m.db.Exec(ddl); err != nil {
 		return fmt.Errorf("init metadata schema: %w", err)
+	}
+	// Migration for databases created before measure formats existed.
+	if _, err := m.db.Exec(`ALTER TABLE dux_measures ADD COLUMN IF NOT EXISTS format TEXT`); err != nil {
+		return fmt.Errorf("migrate dux_measures.format: %w", err)
 	}
 	return nil
 }
@@ -168,7 +173,7 @@ func (m *MetadataDB) loadRelationships(schema *Schema) error {
 
 func (m *MetadataDB) loadMeasures(schema *Schema) error {
 	rows, err := m.db.Query(`
-		SELECT table_name, name, expression
+		SELECT table_name, name, expression, format
 		FROM dux_measures
 		ORDER BY table_name, name
 	`)
@@ -179,11 +184,19 @@ func (m *MetadataDB) loadMeasures(schema *Schema) error {
 
 	for rows.Next() {
 		var tableName, name, expression string
-		if err := rows.Scan(&tableName, &name, &expression); err != nil {
+		var format sql.NullString
+		if err := rows.Scan(&tableName, &name, &expression, &format); err != nil {
 			return fmt.Errorf("scan measure: %w", err)
 		}
 		if err := schema.AddMeasureFromExpr(tableName, name, expression); err != nil {
 			return fmt.Errorf("parse stored measure %q.%q: %w", tableName, name, err)
+		}
+		if format.Valid && format.String != "" {
+			var f MeasureFormat
+			if err := json.Unmarshal([]byte(format.String), &f); err != nil {
+				return fmt.Errorf("parse stored format for %q.%q: %w", tableName, name, err)
+			}
+			schema.SetMeasureFormat(tableName, name, &f)
 		}
 	}
 	return rows.Err()
@@ -206,12 +219,23 @@ func (m *MetadataDB) SaveRelationship(fromTable, fromColumn, toTable, toColumn s
 
 // SaveMeasure inserts or replaces a measure in the metadata DB.
 // expression should be the raw DUX expression string (e.g. "COUNT(matches[match_num])").
-func (m *MetadataDB) SaveMeasure(tableName, name, expression string) error {
+// format is the optional display format; nil clears any stored format.
+func (m *MetadataDB) SaveMeasure(tableName, name, expression string, format *MeasureFormat) error {
+	var formatJSON any // NULL when no format
+	if format != nil {
+		data, err := json.Marshal(format)
+		if err != nil {
+			return fmt.Errorf("encode measure format: %w", err)
+		}
+		formatJSON = string(data)
+	}
 	_, err := m.db.Exec(`
-		INSERT INTO dux_measures (id, table_name, name, expression)
-		VALUES (nextval('dux_measures_id_seq'), ?, ?, ?)
-		ON CONFLICT (table_name, name) DO UPDATE SET expression = excluded.expression
-	`, tableName, name, expression)
+		INSERT INTO dux_measures (id, table_name, name, expression, format)
+		VALUES (nextval('dux_measures_id_seq'), ?, ?, ?, ?)
+		ON CONFLICT (table_name, name) DO UPDATE SET
+			expression = excluded.expression,
+			format     = excluded.format
+	`, tableName, name, expression, formatJSON)
 	if err != nil {
 		return fmt.Errorf("save measure: %w", err)
 	}
@@ -304,10 +328,18 @@ func (m *MetadataDB) ReplaceAllFromSchema(schema *Schema) error {
 
 	for tableName, defs := range schema.Measures {
 		for measureName, def := range defs {
+			var formatJSON any // NULL when no format
+			if f := schema.MeasureFormatFor(tableName, measureName); f != nil {
+				data, err := json.Marshal(f)
+				if err != nil {
+					return fmt.Errorf("encode format for measure %q: %w", measureName, err)
+				}
+				formatJSON = string(data)
+			}
 			if _, err := tx.Exec(`
-				INSERT INTO dux_measures (id, table_name, name, expression)
-				VALUES (nextval('dux_measures_id_seq'), ?, ?, ?)
-			`, tableName, measureName, def.Expression); err != nil {
+				INSERT INTO dux_measures (id, table_name, name, expression, format)
+				VALUES (nextval('dux_measures_id_seq'), ?, ?, ?, ?)
+			`, tableName, measureName, def.Expression, formatJSON); err != nil {
 				return fmt.Errorf("insert measure %q: %w", measureName, err)
 			}
 		}
