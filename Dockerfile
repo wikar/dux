@@ -1,9 +1,11 @@
-# --- UI build stage (Bun) ---
+# --- UI build stage (Bun workspace: web/core + web/builder) ---
 FROM oven/bun:1-alpine AS ui-builder
-WORKDIR /app
-COPY ui/bun.lock ui/package.json ./
+WORKDIR /app/web
+COPY web/bun.lock web/package.json ./
+COPY web/core/package.json core/
+COPY web/builder/package.json builder/
 RUN bun install --frozen-lockfile
-COPY ui/ .
+COPY web/ .
 RUN bun run build
 
 # --- Go build stage ---
@@ -13,7 +15,7 @@ ARG VERSION=dev
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-COPY --from=ui-builder /app/dist ./ui/dist
+COPY --from=ui-builder /app/web/builder/dist ./web/builder/dist
 RUN go build -ldflags="-X main.version=${VERSION}" -o duxd ./cmd/duxd
 RUN go build -ldflags="-X main.version=${VERSION}" -o dux ./cmd/dux
 

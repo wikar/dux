@@ -1,22 +1,13 @@
-import {
-  createSignal,
-  createResource,
-  createEffect,
-  on,
-  For,
-  Show,
-  onMount,
-  onCleanup,
-} from "solid-js";
-import type { Accessor, Component } from "solid-js";
-import type { Schema, Relationship } from "../dux/types";
-import { isMetaTable, resolveTable, isDateType } from "../dux/schemaHelpers";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
+import type { Schema, Relationship } from "@dux/core";
+import { isMetaTable, resolveTable, isDateType, duxClient as client } from "@dux/core";
 import dagre from "dagre";
 import TableCard from "./TableCard";
 import AddRelationshipModal from "./AddRelationshipModal";
 import PreviewModal from "./PreviewModal";
 import styles from "./Explorer.module.css";
-import { duxClient as client } from "../dux/client";
+import { useFetch } from "../hooks";
 
 // ─── Layout constants ────────────────────────────────────────────────────────
 const CARD_WIDTH = 240;
@@ -62,40 +53,46 @@ function computeDagreLayout(s: Schema): Record<string, Pos> {
   return result;
 }
 
-const Explorer: Component<{ refetchSignal?: Accessor<number>; showHidden?: boolean }> = (props) => {
-  const [schema, { refetch }] = createResource(() => client.fetchSchema());
+type RelDrag = { fromTable: string; fromCol: string; x1: number; y1: number; x2: number; y2: number };
+type LineDatum = { key: string; d: string; x1: number; y1: number; x2: number; y2: number; bidirectional: boolean };
+type CardDrag = { table: string; startMouseX: number; startMouseY: number; startCardX: number; startCardY: number };
 
-  // Re-fetch when the parent bumps the signal (e.g. after POST /refresh).
-  createEffect(on(() => props.refetchSignal?.(), () => refetch(), { defer: true }));
+export default function Explorer(props: { refreshCount?: number; showHidden?: boolean }) {
+  const { data: schema, error: schemaError, loading, refetch } =
+    useFetch(() => client.fetchSchema(), [props.refreshCount]);
 
   // Absolute positions for each table card on the canvas
-  const [positions, setPositions] = createSignal<Record<string, Pos>>({});
+  const [positions, setPositions] = useState<Record<string, Pos>>({});
 
   // Modal state
-  const [relPrefill, setRelPrefill] = createSignal<Partial<Relationship> | null>(null);
-  const [relEdit, setRelEdit] = createSignal<Relationship | null>(null);
-  const [previewTable, setPreviewTable] = createSignal<string | null>(null);
+  const [relPrefill, setRelPrefill] = useState<Partial<Relationship> | null>(null);
+  const [relEdit, setRelEdit] = useState<Relationship | null>(null);
+  const [previewTable, setPreviewTable] = useState<string | null>(null);
 
   // In-progress relationship drag (renders as a dashed SVG line)
-  type RelDrag = { fromTable: string; fromCol: string; x1: number; y1: number; x2: number; y2: number };
-  const [relDrag, setRelDrag] = createSignal<RelDrag | null>(null);
+  const [relDrag, setRelDrag] = useState<RelDrag | null>(null);
+  const relDragRef = useRef<RelDrag | null>(null);
+  relDragRef.current = relDrag;
 
   // Mutable card-drag ref (not reactive — updated on every mousemove)
-  let cardDragRef: { table: string; startMouseX: number; startMouseY: number; startCardX: number; startCardY: number } | null = null;
+  const cardDragRef = useRef<CardDrag | null>(null);
 
   // DOM ref for canvas coordinate calculation
-  let canvasInnerEl!: HTMLDivElement;
+  const canvasInnerEl = useRef<HTMLDivElement>(null);
+
+  // Latest schema, readable from stable callbacks (global listeners, rAF).
+  const schemaRef = useRef<Schema | undefined>(undefined);
+  schemaRef.current = schema;
 
   // Initialise positions when schema first loads; only add newly-seen tables
-  createEffect(() => {
-    const s = schema();
-    if (!s) return;
-    const names = Object.keys(s.Tables).filter((n) => !isMetaTable(n)).sort();
+  useEffect(() => {
+    if (!schema) return;
+    const names = Object.keys(schema.Tables).filter((n) => !isMetaTable(n)).sort();
     setPositions((prev) => {
       const existing = Object.keys(prev);
       if (existing.length === 0) {
         // First load — use dagre for a relationship-aware layout
-        return computeDagreLayout(s);
+        return computeDagreLayout(schema);
       }
       // Subsequent: only add new tables below the existing ones
       const missing = names.filter((n) => !(n in prev));
@@ -110,19 +107,19 @@ const Explorer: Component<{ refetchSignal?: Accessor<number>; showHidden?: boole
       });
       return next;
     });
-  });
+  }, [schema]);
 
   /** Canvas-space coordinates from a viewport MouseEvent. */
-  function canvasCoords(e: MouseEvent): Pos {
-    const rect = canvasInnerEl.getBoundingClientRect();
+  const canvasCoords = useCallback((e: { clientX: number; clientY: number }): Pos => {
+    const rect = canvasInnerEl.current!.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-  }
+  }, []);
 
   // ── Global mouse event handlers ────────────────────────────────────────────
-  onMount(() => {
+  useEffect(() => {
     function onMouseMove(e: MouseEvent) {
-      if (cardDragRef) {
-        const { table, startMouseX, startMouseY, startCardX, startCardY } = cardDragRef;
+      if (cardDragRef.current) {
+        const { table, startMouseX, startMouseY, startCardX, startCardY } = cardDragRef.current;
         setPositions((p) => ({
           ...p,
           [table]: {
@@ -131,16 +128,16 @@ const Explorer: Component<{ refetchSignal?: Accessor<number>; showHidden?: boole
           },
         }));
       }
-      if (relDrag()) {
+      if (relDragRef.current) {
         const { x, y } = canvasCoords(e);
         setRelDrag((rd) => (rd ? { ...rd, x2: x, y2: y } : rd));
       }
     }
 
     function onMouseUp(e: MouseEvent) {
-      cardDragRef = null;
+      cardDragRef.current = null;
 
-      const drag = relDrag();
+      const drag = relDragRef.current;
       if (drag) {
         // Walk up from the element under the cursor to find a colRow with data-col
         let cur = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
@@ -161,18 +158,18 @@ const Explorer: Component<{ refetchSignal?: Accessor<number>; showHidden?: boole
 
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
-    onCleanup(() => {
+    return () => {
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
-    });
-  });
+    };
+  }, [canvasCoords]);
 
   // ── Card / column drag callbacks ────────────────────────────────────────────
-  function onHeaderMouseDown(tableName: string, e: MouseEvent) {
-    const pos = positions()[tableName];
+  function onHeaderMouseDown(tableName: string, e: ReactMouseEvent) {
+    const pos = positions[tableName];
     if (!pos) return;
     e.preventDefault();
-    cardDragRef = {
+    cardDragRef.current = {
       table: tableName,
       startMouseX: e.clientX,
       startMouseY: e.clientY,
@@ -181,12 +178,12 @@ const Explorer: Component<{ refetchSignal?: Accessor<number>; showHidden?: boole
     };
   }
 
-  function onColDotMouseDown(tableName: string, colName: string, e: MouseEvent) {
+  function onColDotMouseDown(tableName: string, colName: string, e: ReactMouseEvent) {
     e.preventDefault();
     // Use the dot element's actual bounding rect for an accurate line start
     const dotEl = e.target as HTMLElement;
     const dotRect = dotEl.getBoundingClientRect();
-    const canvasRect = canvasInnerEl.getBoundingClientRect();
+    const canvasRect = canvasInnerEl.current!.getBoundingClientRect();
     const x1 = dotRect.left + dotRect.width / 2 - canvasRect.left;
     const y1 = dotRect.top + dotRect.height / 2 - canvasRect.top;
     const { x: x2, y: y2 } = canvasCoords(e);
@@ -194,13 +191,14 @@ const Explorer: Component<{ refetchSignal?: Accessor<number>; showHidden?: boole
   }
 
   // ── DOM-based relationship lines ───────────────────────────────────────────
-  // We defer DOM queries to requestAnimationFrame so that <Show>/<For> children
-  // are guaranteed to be painted before we call getBoundingClientRect.
-  // For columns inside a max-height scrollable card, dots that are scrolled out
-  // of view are clamped to the card's visible bounds.
-  const [lineData, setLineData] = createSignal<{ key: string; d: string; x1: number; y1: number; x2: number; y2: number; bidirectional: boolean }[]>([]);
-  const [hoveredRel, setHoveredRel] = createSignal<string | null>(null);
-  let lineRaf = 0;
+  // We defer DOM queries to requestAnimationFrame so the card DOM is painted
+  // before we call getBoundingClientRect. For columns inside a max-height
+  // scrollable card, dots scrolled out of view are clamped to the card bounds.
+  const [lineData, setLineData] = useState<LineDatum[]>([]);
+  const [hoveredRel, setHoveredRel] = useState<string | null>(null);
+  const hoveredRelRef = useRef<string | null>(null);
+  hoveredRelRef.current = hoveredRel;
+  const lineRaf = useRef(0);
 
   /** Read a dot's canvas-local centre, clamped to its card's scrollable column area. */
   function dotPos(dot: HTMLElement, canvasRect: DOMRect): Pos {
@@ -222,22 +220,23 @@ const Explorer: Component<{ refetchSignal?: Accessor<number>; showHidden?: boole
     return { x: cx, y: cy };
   }
 
-  function computeLines() {
-    const s = schema();
-    if (!s || !canvasInnerEl) { setLineData([]); return; }
+  const computeLines = useCallback(() => {
+    const s = schemaRef.current;
+    const canvas = canvasInnerEl.current;
+    if (!s || !canvas) { setLineData([]); return; }
 
     const rels = s.Relationships ?? [];
     const tnames = Object.keys(s.Tables).filter((n) => !isMetaTable(n));
-    const canvasRect = canvasInnerEl.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
 
     const lines = rels.flatMap((rel) => {
       const fromKey = resolveTable(rel.FromTable, tnames);
       const toKey = resolveTable(rel.ToTable, tnames);
 
-      const fromDot = canvasInnerEl.querySelector(
+      const fromDot = canvas.querySelector(
         `[data-dot-table="${CSS.escape(fromKey)}"][data-dot-col="${CSS.escape(rel.FromColumn)}"]`
       ) as HTMLElement | null;
-      const toDot = canvasInnerEl.querySelector(
+      const toDot = canvas.querySelector(
         `[data-dot-table="${CSS.escape(toKey)}"][data-dot-col="${CSS.escape(rel.ToColumn)}"]`
       ) as HTMLElement | null;
       if (!fromDot || !toDot) return [];
@@ -260,27 +259,23 @@ const Explorer: Component<{ refetchSignal?: Accessor<number>; showHidden?: boole
     });
 
     setLineData(lines);
-  }
+  }, []);
 
-  createEffect(() => {
-    const s = schema();
-    if (!s) { setLineData([]); return; }
-    // Subscribe to positions so lines update whenever a card is dragged
-    positions();
-    // Subscribe to showHidden so lines update when hidden cards mount/unmount
-    void props.showHidden;
-    // Defer to next animation frame so <Show>/<For> DOM is painted
-    cancelAnimationFrame(lineRaf);
-    lineRaf = requestAnimationFrame(computeLines);
-  });
+  useEffect(() => {
+    if (!schema) { setLineData([]); return; }
+    // Re-run whenever a card is dragged (positions) or hidden cards mount/unmount
+    // (showHidden). Defer to next animation frame so the DOM is painted.
+    cancelAnimationFrame(lineRaf.current);
+    lineRaf.current = requestAnimationFrame(computeLines);
+  }, [schema, positions, props.showHidden, computeLines]);
 
-  onCleanup(() => cancelAnimationFrame(lineRaf));
+  useEffect(() => () => cancelAnimationFrame(lineRaf.current), []);
 
   // ── Delete hovered relationship on Del / Backspace ─────────────────────────
-  onMount(() => {
+  useEffect(() => {
     async function onKeyDown(e: KeyboardEvent) {
       if (e.key !== "Delete" && e.key !== "Backspace") return;
-      const key = hoveredRel();
+      const key = hoveredRelRef.current;
       if (!key) return;
       const [fromTable, fromColumn, toTable, toColumn] = key.split("\0");
       await client.deleteRelationship({ from_table: fromTable, from_column: fromColumn, to_table: toTable, to_column: toColumn });
@@ -288,33 +283,30 @@ const Explorer: Component<{ refetchSignal?: Accessor<number>; showHidden?: boole
       refetch();
     }
     document.addEventListener("keydown", onKeyDown);
-    onCleanup(() => document.removeEventListener("keydown", onKeyDown));
-  });
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [refetch]);
 
-  const tableNames = () => {
-    const s = schema();
-    if (!s) return [];
-    return Object.keys(s.Tables)
-      .filter((n) => !isMetaTable(n))
-      .filter((n) => props.showHidden || !s.Tables[n].Hidden)
-      .sort();
-  };
+  const tableNames = !schema
+    ? []
+    : Object.keys(schema.Tables)
+        .filter((n) => !isMetaTable(n))
+        .filter((n) => props.showHidden || !schema.Tables[n].Hidden)
+        .sort();
 
   // ── Date-table designation ─────────────────────────────────────────────────
   /** The designated date column when the named table is the model's date table. */
   const dateColumnOf = (name: string): string | null =>
-    schema()?.DateTables?.[name.toLowerCase()] ?? null;
+    schema?.DateTables?.[name.toLowerCase()] ?? null;
 
   /** Toggle a table as the date table. Designating picks the first date column
       (the only one, when there is exactly one); a second click clears it. */
   async function toggleDateTable(name: string) {
-    const s = schema();
-    if (!s) return;
+    if (!schema) return;
     try {
       if (dateColumnOf(name)) {
         await client.clearDateTable();
       } else {
-        const dateCols = Object.values(s.Tables[name].Columns)
+        const dateCols = Object.values(schema.Tables[name].Columns)
           .filter((c) => isDateType(c.DataType))
           .sort((a, b) => a.Name.localeCompare(b.Name));
         if (dateCols.length === 0) return;
@@ -339,10 +331,9 @@ const Explorer: Component<{ refetchSignal?: Accessor<number>; showHidden?: boole
   // ── Hidden designation ─────────────────────────────────────────────────────
   /** Toggle the hidden flag on a whole table/view. */
   async function toggleHidden(name: string) {
-    const s = schema();
-    if (!s) return;
+    if (!schema) return;
     try {
-      if (s.Tables[name]?.Hidden) {
+      if (schema.Tables[name]?.Hidden) {
         await client.clearHidden(name);
       } else {
         await client.setHidden(name);
@@ -355,10 +346,9 @@ const Explorer: Component<{ refetchSignal?: Accessor<number>; showHidden?: boole
 
   /** Toggle the hidden flag on a single column. */
   async function toggleColumnHidden(name: string, col: string) {
-    const s = schema();
-    if (!s) return;
+    if (!schema) return;
     try {
-      if (s.Tables[name]?.Columns[col]?.Hidden) {
+      if (schema.Tables[name]?.Columns[col]?.Hidden) {
         await client.clearHidden(name, col);
       } else {
         await client.setHidden(name, col);
@@ -370,134 +360,122 @@ const Explorer: Component<{ refetchSignal?: Accessor<number>; showHidden?: boole
   }
 
   return (
-    <div class={styles.canvas}>
-      <Show when={schema.loading}>
-        <div class={styles.status}>Loading schema…</div>
-      </Show>
-      <Show when={schema.error}>
-        <div class={styles.status}>{(schema.error as Error).message}</div>
-      </Show>
-      <Show when={schema()}>
-        <div class={styles.canvasInner} ref={canvasInnerEl}>
+    <div className={styles.canvas}>
+      {loading && <div className={styles.status}>Loading schema…</div>}
+      {schemaError && <div className={styles.status}>{schemaError.message}</div>}
+      {schema && (
+        <div className={styles.canvasInner} ref={canvasInnerEl}>
           {/* SVG overlay: relationship lines + drag indicator */}
-          <svg class={styles.svgOverlay}>
+          <svg className={styles.svgOverlay}>
             <defs>
-              <For each={lineData()}>
-                {(line, i) => (
-                  <linearGradient
-                    id={`rel-grad-${i()}`}
-                    gradientUnits="userSpaceOnUse"
-                    x1={line.x1} y1={line.y1}
-                    x2={line.x2} y2={line.y2}
-                  >
-                    {!line.bidirectional && (
-                      <>
-                        <stop offset="0%"   stop-color="#fab387" />
-                        <stop offset="50%"  stop-color="#89b4fa" />
-                      </>
-                    )}
-                    {line.bidirectional && (
-                      <>
-                        <stop offset="0%"   stop-color="#a6e3a1" />
-                        <stop offset="50%"  stop-color="#89b4fa" />
-                        <stop offset="100%" stop-color="#a6e3a1" />
-                      </>
-                    )}
-                  </linearGradient>
-                )}
-              </For>
+              {lineData.map((line, i) => (
+                <linearGradient
+                  key={line.key}
+                  id={`rel-grad-${i}`}
+                  gradientUnits="userSpaceOnUse"
+                  x1={line.x1} y1={line.y1}
+                  x2={line.x2} y2={line.y2}
+                >
+                  {!line.bidirectional && (
+                    <>
+                      <stop offset="0%"   stopColor="#fab387" />
+                      <stop offset="50%"  stopColor="#89b4fa" />
+                    </>
+                  )}
+                  {line.bidirectional && (
+                    <>
+                      <stop offset="0%"   stopColor="#a6e3a1" />
+                      <stop offset="50%"  stopColor="#89b4fa" />
+                      <stop offset="100%" stopColor="#a6e3a1" />
+                    </>
+                  )}
+                </linearGradient>
+              ))}
             </defs>
-            <For each={lineData()}>
-              {(line, i) => (
-                <path
-                  class={styles.relPath}
-                  classList={{ [styles.relPathHovered]: hoveredRel() === line.key }}
-                  d={line.d}
-                  stroke={`url(#rel-grad-${i()})`}
-                  onMouseEnter={() => setHoveredRel(line.key)}
-                  onMouseLeave={() => setHoveredRel((h) => h === line.key ? null : h)}
-                  onDblClick={() => {
-                    const [ft, fc, tt, tc] = line.key.split("\0");
-                    setRelEdit({ FromTable: ft, FromColumn: fc, ToTable: tt, ToColumn: tc, Bidirectional: line.bidirectional });
-                  }}
-                />
-              )}
-            </For>
-            <Show when={relDrag()}>
-              {(rd) => (
-                <line
-                  class={styles.dragLine}
-                  x1={rd().x1}
-                  y1={rd().y1}
-                  x2={rd().x2}
-                  y2={rd().y2}
-                />
-              )}
-            </Show>
+            {lineData.map((line, i) => (
+              <path
+                key={line.key}
+                className={`${styles.relPath}${hoveredRel === line.key ? ` ${styles.relPathHovered}` : ""}`}
+                d={line.d}
+                stroke={`url(#rel-grad-${i})`}
+                onMouseEnter={() => setHoveredRel(line.key)}
+                onMouseLeave={() => setHoveredRel((h) => (h === line.key ? null : h))}
+                onDoubleClick={() => {
+                  const [ft, fc, tt, tc] = line.key.split("\0");
+                  setRelEdit({ FromTable: ft, FromColumn: fc, ToTable: tt, ToColumn: tc, Bidirectional: line.bidirectional });
+                }}
+              />
+            ))}
+            {relDrag && (
+              <line
+                className={styles.dragLine}
+                x1={relDrag.x1}
+                y1={relDrag.y1}
+                x2={relDrag.x2}
+                y2={relDrag.y2}
+              />
+            )}
           </svg>
 
           {/* Table cards */}
-          <For each={tableNames()}>
-            {(name) => {
-              const pos = () => positions()[name] ?? { x: 0, y: 0 };
-              return (
-                <TableCard
-                  tableName={name}
-                  table={schema()!.Tables[name]}
-                  x={pos().x}
-                  y={pos().y}
-                  dateColumn={dateColumnOf(name)}
-                  showHidden={props.showHidden}
-                  onHeaderMouseDown={(e) => onHeaderMouseDown(name, e)}
-                  onColDotMouseDown={(e, col) => onColDotMouseDown(name, col, e)}
-                  onColumnsScroll={computeLines}
-                  onPreview={() => setPreviewTable(name)}
-                  onToggleDateTable={() => toggleDateTable(name)}
-                  onSetDateColumn={(col) => setDateColumn(name, col)}
-                  onToggleHidden={() => toggleHidden(name)}
-                  onToggleColumnHidden={(col) => toggleColumnHidden(name, col)}
-                />
-              );
-            }}
-          </For>
+          {tableNames.map((name) => {
+            const pos = positions[name] ?? { x: 0, y: 0 };
+            return (
+              <TableCard
+                key={name}
+                tableName={name}
+                table={schema.Tables[name]}
+                x={pos.x}
+                y={pos.y}
+                dateColumn={dateColumnOf(name)}
+                showHidden={props.showHidden}
+                onHeaderMouseDown={(e) => onHeaderMouseDown(name, e)}
+                onColDotMouseDown={(e, col) => onColDotMouseDown(name, col, e)}
+                onColumnsScroll={computeLines}
+                onPreview={() => setPreviewTable(name)}
+                onToggleDateTable={() => toggleDateTable(name)}
+                onSetDateColumn={(col) => setDateColumn(name, col)}
+                onToggleHidden={() => toggleHidden(name)}
+                onToggleColumnHidden={(col) => toggleColumnHidden(name, col)}
+              />
+            );
+          })}
         </div>
-      </Show>
+      )}
 
       {/* Relationship modal (pre-filled from drag or empty) */}
-      <Show when={relPrefill() !== null && schema()}>
+      {relPrefill !== null && schema && (
         <AddRelationshipModal
-          schema={schema()!}
-          prefill={relPrefill()!}
+          schema={schema}
+          prefill={relPrefill}
           onClose={() => setRelPrefill(null)}
           onSaved={() => {
             setRelPrefill(null);
             refetch();
           }}
         />
-      </Show>
+      )}
 
       {/* Relationship edit modal (from double-click on line) */}
-      <Show when={relEdit() !== null && schema()}>
+      {relEdit !== null && schema && (
         <AddRelationshipModal
-          schema={schema()!}
-          initial={relEdit()!}
+          schema={schema}
+          initial={relEdit}
           onClose={() => setRelEdit(null)}
           onSaved={() => {
             setRelEdit(null);
             refetch();
           }}
         />
-      </Show>
+      )}
 
       {/* Table preview modal */}
-      <Show when={previewTable()}>
+      {previewTable && (
         <PreviewModal
-          tableName={previewTable()!}
+          tableName={previewTable}
           onClose={() => setPreviewTable(null)}
         />
-      </Show>
+      )}
     </div>
   );
-};
-
-export default Explorer;
+}

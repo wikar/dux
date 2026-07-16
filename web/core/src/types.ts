@@ -20,6 +20,23 @@ export interface MeasureDef {
   Expression?: string;
 }
 
+/** Structured display format for a measure (see semantic.MeasureFormat). */
+export interface MeasureFormat {
+  kind: "number" | "decimal" | "percent" | "currency" | "compact";
+  /** Fraction digits (0–10); undefined = client default for the kind. */
+  decimals?: number;
+  /** ISO 4217 code; only set when kind is "currency". */
+  currency?: string;
+}
+
+/** One entry of GET /measures. */
+export interface MeasureListItem {
+  table: string;
+  name: string;
+  expression: string;
+  format?: MeasureFormat;
+}
+
 export interface Relationship {
   FromTable: string;
   FromColumn: string;
@@ -31,6 +48,8 @@ export interface Relationship {
 export interface Schema {
   Tables: Record<string, Table>;
   Measures: Record<string, Record<string, MeasureDef>> | null;
+  /** Optional display formats, keyed like Measures (table → measure name). */
+  MeasureFormats?: Record<string, Record<string, MeasureFormat>> | null;
   Relationships: Relationship[] | null;
   /** Lower-cased table key → designated date column ("mark as date table"). */
   DateTables?: Record<string, string> | null;

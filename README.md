@@ -60,7 +60,7 @@ curl -fsSL https://bun.sh/install | bash
 Build the UI first — `duxd` embeds the compiled assets at Go build time:
 
 ```sh
-cd ui
+cd web
 bun install
 bun run build
 cd ..

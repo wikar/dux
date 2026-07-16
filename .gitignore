@@ -32,10 +32,10 @@ go.work.sum
 .vscode/
 .claude/
 
-# UI
-ui/dist/*
-ui/node_modules/*
-ui/packages/dux-client/node_modules/*
+# Web frontend workspace
+web/node_modules/
+web/*/node_modules/
+web/*/dist/
 
 # Logs and databases
 db/*.duckdb

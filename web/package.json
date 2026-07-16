@@ -1,0 +1,10 @@
+{
+  "name": "dux-web",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["core", "builder"],
+  "scripts": {
+    "build": "bun run --cwd builder build",
+    "dev": "bun run --cwd builder dev"
+  }
+}

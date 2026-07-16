@@ -1,4 +1,3 @@
-import type { Component } from "solid-js";
 import styles from "./TypeIcon.module.css";
 
 const TYPE_MAP: Array<[RegExp, string]> = [
@@ -16,10 +15,10 @@ function iconFor(dataType: string): string {
   return "?";
 }
 
-const TypeIcon: Component<{ dataType: string }> = (props) => (
-  <span class={styles.icon} title={props.dataType}>
-    {iconFor(props.dataType)}
-  </span>
-);
-
-export default TypeIcon;
+export default function TypeIcon({ dataType }: { dataType: string }) {
+  return (
+    <span className={styles.icon} title={dataType}>
+      {iconFor(dataType)}
+    </span>
+  );
+}

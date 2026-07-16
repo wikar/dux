@@ -1,4 +1,4 @@
-import type { Schema, QueryResponse } from "./types";
+import type { Schema, QueryResponse, MeasureFormat, MeasureListItem } from "./types";
 
 export interface RelInput {
   from_table: string;
@@ -77,15 +77,25 @@ export class DuxClient {
     if (!res.ok) throw new Error(`refresh failed: ${res.status}`);
   }
 
+  /** List all measures with their display formats. */
+  async fetchMeasures(): Promise<MeasureListItem[]> {
+    const res = await fetch("/measures");
+    if (!res.ok) throw new Error(await res.text());
+    return res.json() as Promise<MeasureListItem[]>;
+  }
+
+  /** Add or replace a measure. Omitting format clears any stored format —
+   *  callers editing an existing measure must pass its current format through. */
   async addMeasure(
     table: string,
     name: string,
-    expression: string
+    expression: string,
+    format?: MeasureFormat
   ): Promise<void> {
     const res = await fetch("/measures", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ table, name, expression }),
+      body: JSON.stringify(format ? { table, name, expression, format } : { table, name, expression }),
     });
     if (!res.ok) throw new Error(await res.text());
   }

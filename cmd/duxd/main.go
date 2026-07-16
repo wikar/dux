@@ -42,7 +42,7 @@ import (
 	"github.com/danielwikar/dux/internal/bootstrap"
 	"github.com/danielwikar/dux/parser"
 	"github.com/danielwikar/dux/semantic"
-	"github.com/danielwikar/dux/ui"
+	"github.com/danielwikar/dux/web"
 )
 
 // version is overridden at build time via -ldflags="-X main.version=..."
@@ -496,7 +496,7 @@ func main() {
 	})
 
 	// Serve the query builder UI embedded at build time.
-	distFS, err := fs.Sub(ui.Dist, "dist")
+	distFS, err := fs.Sub(web.Builder, "builder/dist")
 	if err != nil {
 		log.Fatalf("ui embed: %v", err)
 	}
