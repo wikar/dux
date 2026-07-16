@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dashboard.schema.json",
+  "title": "DUX UI dashboard document (v1)",
+  "description": "A dashboard: a fixed-size canvas of positioned visual elements, each backed by a DUX query. Stored as one JSON file per dashboard; the file's path relative to the dashboards root is its identity.",
+  "type": "object",
+  "required": ["version", "canvas", "elements"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": 1, "description": "Document format version." },
+    "canvas": {
+      "type": "object",
+      "required": ["width", "height"],
+      "additionalProperties": false,
+      "properties": {
+        "width":  { "type": "integer", "minimum": 320, "maximum": 16384 },
+        "height": { "type": "integer", "minimum": 240, "maximum": 16384 },
+        "background": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "color": { "type": "string", "maxLength": 64 },
+            "asset": { "type": ["string", "null"], "description": "Asset path relative to the dashboards root (see POST /api/dash/assets)." },
+            "fit":   { "enum": ["cover", "contain", "fill", "tile"] }
+          }
+        }
+      }
+    },
+    "theme": {
+      "type": "object",
+      "description": "Sparse token overrides over the global theme (dashboards/theme.json)."
+    },
+    "refresh": {
+      "type": "object",
+      "required": ["enabled", "intervalSeconds"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "intervalSeconds": { "type": "integer", "minimum": 1, "maximum": 86400, "description": "The server additionally enforces a configurable floor (default 5s)." }
+      }
+    },
+    "elements": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/element" }
+    }
+  },
+  "$defs": {
+    "element": {
+      "type": "object",
+      "required": ["id", "type", "layout"],
+      "additionalProperties": false,
+      "properties": {
+        "id":   { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$", "description": "Unique within the document (server-enforced)." },
+        "type": { "enum": ["bar", "line", "area", "donut", "table", "pivot", "kpi", "slicer", "text"] },
+        "layout": {
+          "type": "object",
+          "required": ["x", "y", "w", "h"],
+          "additionalProperties": false,
+          "properties": {
+            "x": { "type": "number", "minimum": 0 },
+            "y": { "type": "number", "minimum": 0 },
+            "w": { "type": "number", "exclusiveMinimum": 0 },
+            "h": { "type": "number", "exclusiveMinimum": 0 },
+            "z": { "type": "integer" }
+          }
+        },
+        "title": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "text": { "type": "string", "maxLength": 512 },
+            "show": { "type": "boolean" }
+          }
+        },
+        "query": { "$ref": "#/$defs/query" },
+        "viz": {
+          "type": "object",
+          "description": "Per-element-type visual settings (axes, legend, labels, colors, format overrides). Deliberately open — owned by the element renderer."
+        },
+        "text": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "markdown": { "type": "string" }
+          }
+        },
+        "slicer": { "$ref": "#/$defs/slicer" },
+        "interactions": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ignoreSlicers": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Element ids of slicers this element opts out of."
+            }
+          }
+        }
+      }
+    },
+    "query": {
+      "type": "object",
+      "required": ["mode"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "enum": ["builder", "raw"] },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["table", "name"],
+            "properties": {
+              "table":     { "type": "string" },
+              "name":      { "type": "string" },
+              "kind":      { "enum": ["column", "measure"] },
+              "dataType":  { "type": "string" },
+              "aggregate": { "type": "string" }
+            }
+          }
+        },
+        "filters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["table", "name"],
+            "properties": {
+              "table":    { "type": "string" },
+              "name":     { "type": "string" },
+              "dataType": { "type": "string" },
+              "op":       { "type": "string" },
+              "value":    { "type": "string" }
+            }
+          }
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["field"],
+            "additionalProperties": false,
+            "properties": {
+              "field": { "type": "string" },
+              "dir":   { "enum": ["asc", "desc"] }
+            }
+          }
+        },
+        "topN": { "type": ["integer", "null"], "minimum": 1 },
+        "raw":  { "type": ["string", "null"], "description": "Hand-written DUX when mode is \"raw\"." }
+      }
+    },
+    "slicer": {
+      "type": "object",
+      "required": ["table", "column", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "table":  { "type": "string" },
+        "column": { "type": "string" },
+        "kind":   { "enum": ["list", "dropdown", "range", "daterange"] },
+        "multi":  { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -37,6 +37,9 @@ web/node_modules/
 web/*/node_modules/
 web/*/dist/
 
+# Test dashboards (real dashboards in dashboards/ are tracked; test ones are not)
+dashboards/**/*test.json
+
 # Logs and databases
 db/*.duckdb
 db/*.db

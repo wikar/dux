@@ -22,6 +22,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -38,6 +39,7 @@ import (
 
 	_ "github.com/duckdb/duckdb-go/v2"
 
+	"github.com/danielwikar/dux/dash"
 	"github.com/danielwikar/dux/executor"
 	"github.com/danielwikar/dux/internal/bootstrap"
 	"github.com/danielwikar/dux/parser"
@@ -47,6 +49,13 @@ import (
 
 // version is overridden at build time via -ldflags="-X main.version=..."
 var version = "dev"
+
+// Dashboards module flags (registered before bootstrap's flag.Parse).
+// Setting the env var DUX_DASH=0 disables the module entirely.
+var (
+	dashDir      = flag.String("dash-dir", "dashboards", "dashboard file store directory")
+	dashAssetMax = flag.Int64("dash-asset-max", 10<<20, "max dashboard asset upload size in bytes")
+)
 
 // openAPISpec is a minimal OpenAPI 3.1 document describing the HTTP API.
 const openAPISpec = `{
@@ -476,12 +485,28 @@ func main() {
 	mux.HandleFunc("DELETE /hidden", hiddenHandler(metaDB, schema, &schemaMu, false))
 	mux.HandleFunc("POST /refresh", refreshHandler(metaDB, db, schema, &schemaMu, tomlPath))
 
+	dashEnabled := os.Getenv("DUX_DASH") != "0"
+	if dashEnabled {
+		dash, err := dash.NewServer(dash.Config{
+			Root:          *dashDir,
+			MaxAssetBytes: *dashAssetMax,
+		})
+		if err != nil {
+			log.Fatalf("dashboards module: %v", err)
+		}
+		mux.Handle("/api/dash/", dash)
+		log.Printf("dashboards enabled at /api/dash/ (dir %q)", *dashDir)
+	} else {
+		log.Printf("dashboards disabled (DUX_DASH=0)")
+	}
+
 	mux.HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{
 			"version": version,
 			"capabilities": map[string]bool{
 				"externalFilters": true,
 				"measureFormats":  true,
+				"dashboards":      dashEnabled,
 			},
 		})
 	})
