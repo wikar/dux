@@ -20,8 +20,21 @@ export class QueryFailedError extends Error {
   }
 }
 
+/** GET /version response: server version plus API capability flags. */
+export interface VersionInfo {
+  version: string;
+  capabilities: Record<string, boolean>;
+}
+
 /** Typed client for the DUX backend API (same-origin). */
 export class DuxClient {
+  /** Server version and capabilities (feature-gates UI sections, e.g. dashboards). */
+  async fetchVersion(): Promise<VersionInfo> {
+    const res = await fetch("/version");
+    if (!res.ok) throw new Error(`version fetch failed: ${res.status}`);
+    return res.json() as Promise<VersionInfo>;
+  }
+
   async fetchSchema(): Promise<Schema> {
     const res = await fetch("/schema");
     if (!res.ok) throw new Error(`schema fetch failed: ${res.status}`);

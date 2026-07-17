@@ -1,10 +1,11 @@
-// Package web embeds the pre-built frontend apps served by duxd.
+// Package web embeds the pre-built frontend served by duxd.
 package web
 
 import "embed"
 
-// Builder embeds the compiled query builder SPA (web/builder/dist),
-// built with `bun run build` from the web/ workspace.
+// App embeds the compiled DUX UI SPA (web/app/dist) — query builder,
+// explorer, and dashboards in one app — built with `bun run build` from
+// the web/ workspace.
 //
-//go:embed builder/dist
-var Builder embed.FS
+//go:embed app/dist
+var App embed.FS

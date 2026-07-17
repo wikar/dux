@@ -1,5 +1,5 @@
 {
-  "name": "dux-builder",
+  "name": "dux-app",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -10,10 +10,15 @@
   },
   "dependencies": {
     "@dux/core": "workspace:*",
+    "@tanstack/react-query": "^5.62.0",
     "dagre": "^0.8.5",
     "highlight.js": "^11.11.1",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.0",
+    "zundo": "^2.3.0",
+    "zustand": "^5.0.3"
   },
   "devDependencies": {
     "@types/dagre": "^0.7.54",

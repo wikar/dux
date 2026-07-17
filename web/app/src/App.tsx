@@ -8,6 +8,15 @@ import QueryPreview from "./components/QueryPreview";
 import ResultTable from "./components/ResultTable";
 import TopBar from "./components/TopBar";
 import Explorer from "./components/Explorer";
+import { useFetch } from "./hooks";
+import { dashPathFromPathname, navigate, tabFromPathname, usePathname } from "./router";
+// The dash section is composed here and only here — src/components must never
+// import from src/dash, so a future dash-only duxuid build can ship
+// src/dash + src/components behind its own entry point.
+import DashApp from "./dash/DashApp";
+import DashActions from "./dash/components/DashActions";
+import { encodePath } from "./dash/api";
+import { useUiStore } from "./dash/store";
 import styles from "./App.module.css";
 
 // A field is a "metric" if it's a pre-defined measure or a numeric column.
@@ -16,7 +25,12 @@ const isMetric = (f: DropField) =>
   f.kind === "measure" || (f.kind === "column" && isNumeric(f.dataType) && f.aggregate !== "VALUES");
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState("home");
+  const pathname = usePathname();
+  const tab = tabFromPathname(pathname);
+  const dashPath = dashPathFromPathname(pathname);
+  const { data: version } = useFetch(() => client.fetchVersion());
+  const dashEnabled = version?.capabilities?.dashboards === true;
+
   const importInputRef = useRef<HTMLInputElement>(null);
   const [refreshCount, setRefreshCount] = useState(0);
   const [showHidden, setShowHidden] = useState(false);
@@ -178,6 +192,16 @@ export default function App() {
     setRefreshCount((c) => c + 1);
   }
 
+  function handleTabChange(id: string) {
+    if (id === "home") navigate("/");
+    else if (id === "explorer") navigate("/explorer");
+    // Dash returns to the dashboard that was last open in this session.
+    else if (id === "dash") {
+      const last = useUiStore.getState().path;
+      navigate(last ? `/dash/${encodePath(last)}` : "/dash/");
+    }
+  }
+
   const homeActions = (
     <>
       <button className={styles.actionBtn} onClick={handleRefresh}>Refresh Schema</button>
@@ -200,68 +224,85 @@ export default function App() {
   return (
     <div className={styles.appShell}>
       <TopBar
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
+        activeTab={tab}
+        onTabChange={handleTabChange}
+        showDash={dashEnabled}
         showHidden={showHidden}
         onToggleShowHidden={() => setShowHidden((v) => !v)}
-        actions={activeTab === "home" ? homeActions : activeTab === "explorer" ? explorerActions : undefined}
+        actions={
+          tab === "home" ? homeActions
+          : tab === "explorer" ? explorerActions
+          : dashEnabled ? <DashActions />
+          : undefined
+        }
       />
-      {activeTab === "home" && (
-        <div className={styles.layout}>
-          {/* Column 1 — Schema tree */}
-          <div className={styles.col1}>
-            <SchemaTree refreshCount={refreshCount} showHidden={showHidden} />
-          </div>
-
-          {/* Column 2 — Drop zones */}
-          <div className={styles.col2}>
-            <DropZone
-              label="Columns / Measures"
-              id="fields"
-              items={fields}
-              onDrop={addToFields}
-              onRemove={(i) => setFields((prev) => prev.filter((_, idx) => idx !== i))}
-              onAggChange={(i, agg) => handleAggChange(i, agg as Aggregate)}
-              onReorder={reorderFields}
-            />
-            <DropZone
-              label="Filters"
-              id="filters"
-              items={filters}
-              onDrop={addToFilters}
-              onRemove={(i) => setFilters((prev) => prev.filter((_, idx) => idx !== i))}
-              onValueChange={(i, val) =>
-                setFilters((prev) => prev.map((f, idx) => (idx === i ? { ...f, value: val } : f)))}
-              onOpChange={(i, op) =>
-                setFilters((prev) => prev.map((f, idx) => (idx === i ? { ...f, op: op as FilterOp } : f)))}
-              onReorder={reorderFilters}
-            />
-          </div>
-
-          {/* Column 3 — Query + results */}
-          <div className={styles.col3}>
-            <QueryPreview
-              query={activeQuery}
-              isDirty={isDirty}
-              onQueryChange={handleQueryChange}
-              onRun={commitQuery}
-              includeEmpty={includeEmpty}
-              onToggleIncludeEmpty={() => setIncludeEmpty((v) => !v)}
-              onCopyResults={copyResults}
-              error={queryError}
-            />
-            <ResultTable
-              query={committedQuery}
-              includeEmpty={includeEmpty}
-              registerCopyProvider={(fn) => (resultsTsv.current = fn)}
-              onQueryError={setQueryError}
-            />
-          </div>
+      {/* The Home workspace stays mounted so switching tabs never loses the
+          in-progress query; Explorer and Dash manage their own state. */}
+      <div
+        className={styles.layout}
+        style={tab === "home" ? undefined : { display: "none" }}
+      >
+        {/* Column 1 — Schema tree */}
+        <div className={styles.col1}>
+          <SchemaTree refreshCount={refreshCount} showHidden={showHidden} />
         </div>
-      )}
-      {activeTab === "explorer" && (
+
+        {/* Column 2 — Drop zones */}
+        <div className={styles.col2}>
+          <DropZone
+            label="Columns / Measures"
+            id="fields"
+            items={fields}
+            onDrop={addToFields}
+            onRemove={(i) => setFields((prev) => prev.filter((_, idx) => idx !== i))}
+            onAggChange={(i, agg) => handleAggChange(i, agg as Aggregate)}
+            onReorder={reorderFields}
+          />
+          <DropZone
+            label="Filters"
+            id="filters"
+            items={filters}
+            onDrop={addToFilters}
+            onRemove={(i) => setFilters((prev) => prev.filter((_, idx) => idx !== i))}
+            onValueChange={(i, val) =>
+              setFilters((prev) => prev.map((f, idx) => (idx === i ? { ...f, value: val } : f)))}
+            onOpChange={(i, op) =>
+              setFilters((prev) => prev.map((f, idx) => (idx === i ? { ...f, op: op as FilterOp } : f)))}
+            onReorder={reorderFilters}
+          />
+        </div>
+
+        {/* Column 3 — Query + results */}
+        <div className={styles.col3}>
+          <QueryPreview
+            query={activeQuery}
+            isDirty={isDirty}
+            onQueryChange={handleQueryChange}
+            onRun={commitQuery}
+            includeEmpty={includeEmpty}
+            onToggleIncludeEmpty={() => setIncludeEmpty((v) => !v)}
+            onCopyResults={copyResults}
+            error={queryError}
+          />
+          <ResultTable
+            query={committedQuery}
+            includeEmpty={includeEmpty}
+            registerCopyProvider={(fn) => (resultsTsv.current = fn)}
+            onQueryError={setQueryError}
+          />
+        </div>
+      </div>
+      {tab === "explorer" && (
         <Explorer refreshCount={refreshCount} showHidden={showHidden} />
       )}
+      {tab === "dash" &&
+        (dashEnabled || version === undefined ? (
+          <DashApp path={dashPath} refreshCount={refreshCount} showHidden={showHidden} />
+        ) : (
+          <div className={styles.dashDisabled}>
+            Dashboards are disabled on this server (DUX_DASH=0).
+          </div>
+        ))}
     </div>
   );
 }

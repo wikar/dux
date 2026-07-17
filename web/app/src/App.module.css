@@ -52,3 +52,12 @@
   background: var(--surface1);
   border-color: var(--surface2);
 }
+
+.dashDisabled {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--subtext0);
+  font-size: 13px;
+}

@@ -6,6 +6,14 @@
   border-right: 1px solid var(--surface1);
 }
 
+/* Hosted variant: the surrounding panel owns header and border. */
+.panelBare {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
 .panelHeader {
   padding: 8px 12px;
   font-size: 11px;

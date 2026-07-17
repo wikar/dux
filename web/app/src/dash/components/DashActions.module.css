@@ -1,0 +1,179 @@
+/* Dash controls in the shared top bar — builder actionBtn idiom throughout
+   (12px, surface0 bg, surface1 border, 4px radius). */
+
+.actionBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  background: var(--surface0);
+  color: var(--text);
+  border: 1px solid var(--surface1);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.actionBtn:hover:not(:disabled) {
+  background: var(--surface1);
+  border-color: var(--surface2);
+}
+
+.actionBtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.dirtyDot {
+  color: var(--peach);
+  font-size: 9px;
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--red);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dismiss {
+  background: none;
+  border: none;
+  color: var(--red);
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+/* ── Mode toggle (segmented actionBtn pair) ── */
+
+.modeToggle {
+  display: flex;
+  border: 1px solid var(--surface1);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.modeBtn {
+  padding: 4px 12px;
+  font-size: 12px;
+  background: var(--surface0);
+  color: var(--subtext0);
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.modeBtn:hover {
+  color: var(--text);
+}
+
+.modeBtnActive {
+  background: var(--surface1);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ── Picker ── */
+
+.picker {
+  position: relative;
+}
+
+.pickerBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 180px;
+  padding: 4px 10px;
+  font-size: 12px;
+  background: var(--surface0);
+  color: var(--text);
+  border: 1px solid var(--surface1);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.pickerBtn:hover {
+  background: var(--surface1);
+  border-color: var(--surface2);
+}
+
+.pickerLabel {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.caret {
+  color: var(--subtext0);
+}
+
+.dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 260px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--mantle);
+  border: 1px solid var(--surface1);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: 100;
+  padding: 4px 0;
+}
+
+.dim {
+  font-size: 12px;
+  color: var(--subtext0);
+  padding: 8px 12px;
+}
+
+.folder {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--subtext0);
+  padding: 5px 12px 3px;
+}
+
+.item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.item:hover:not(:disabled) {
+  background: var(--surface1);
+}
+
+.item:disabled {
+  color: var(--subtext0);
+  cursor: default;
+}
+
+.itemActive {
+  background: var(--surface0);
+  color: var(--blue);
+}
+
+.invalid {
+  color: var(--yellow);
+  font-size: 11px;
+}

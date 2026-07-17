@@ -1,0 +1,101 @@
+.markdown {
+  height: 100%;
+  overflow: auto;
+  padding: 10px 12px;
+  line-height: 1.5;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  margin: 0.4em 0 0.3em;
+  color: var(--lavender);
+}
+
+.markdown h1:first-child,
+.markdown h2:first-child,
+.markdown h3:first-child,
+.markdown p:first-child {
+  margin-top: 0;
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown table,
+.markdown blockquote,
+.markdown pre {
+  margin: 0.4em 0;
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 1.4em;
+}
+
+.markdown a {
+  color: var(--blue);
+}
+
+.markdown code {
+  background: var(--surface0);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.markdown pre {
+  background: var(--crust);
+  padding: 8px 10px;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
+.markdown pre code {
+  background: none;
+  padding: 0;
+}
+
+.markdown blockquote {
+  border-left: 3px solid var(--surface1);
+  padding-left: 10px;
+  color: var(--subtext0);
+}
+
+.markdown table {
+  border-collapse: collapse;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid var(--surface1);
+  padding: 3px 8px;
+}
+
+.markdown hr {
+  border: none;
+  border-top: 1px solid var(--surface1);
+  margin: 0.6em 0;
+}
+
+/* ── Placeholder for not-yet-implemented element types ── */
+
+.placeholder {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--subtext0);
+}
+
+.icon {
+  color: var(--surface2);
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--surface2);
+}

@@ -1,0 +1,31 @@
+.outer {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--crust);
+}
+
+.sizer {
+  position: relative;
+  flex-shrink: 0;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45);
+}
+
+.canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+}
+
+.grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(circle, var(--surface1) 1px, transparent 1px);
+  background-size: 16px 16px;
+  opacity: 0.3;
+}

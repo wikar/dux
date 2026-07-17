@@ -268,12 +268,12 @@ func TestPathValidation(t *testing.T) {
 	ts, root := newTestServer(t)
 
 	bad := []string{
-		"..%2Fescape",         // traversal
-		"a%2F..%2F..%2Fb",     // nested traversal
-		"con%3Aaux",           // invalid characters
-		"theme",               // reserved for the global theme
-		"x.json",              // extension must be implicit
-		"trailing.%20",        // segment ending in space
+		"..%2Fescape",     // traversal
+		"a%2F..%2F..%2Fb", // nested traversal
+		"con%3Aaux",       // invalid characters
+		"theme",           // reserved for the global theme
+		"x.json",          // extension must be implicit
+		"trailing.%20",    // segment ending in space
 	}
 	for _, p := range bad {
 		res := do(t, "PUT", ts.URL+"/api/dash/dashboards/"+p, validDoc(), nil)

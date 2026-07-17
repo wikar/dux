@@ -25,13 +25,13 @@ func TestMeasureFormatValidate(t *testing.T) {
 	}
 
 	invalid := []semantic.MeasureFormat{
-		{Kind: "money"},                            // unknown kind
-		{Kind: ""},                                 // missing kind
-		{Kind: "decimal", Decimals: intPtr(11)},    // out of range
-		{Kind: "decimal", Decimals: intPtr(-1)},    // out of range
-		{Kind: "currency"},                         // missing currency code
-		{Kind: "currency", Currency: "KRONOR"},     // not 3 letters
-		{Kind: "number", Currency: "SEK"},          // currency on non-currency kind
+		{Kind: "money"},                         // unknown kind
+		{Kind: ""},                              // missing kind
+		{Kind: "decimal", Decimals: intPtr(11)}, // out of range
+		{Kind: "decimal", Decimals: intPtr(-1)}, // out of range
+		{Kind: "currency"},                      // missing currency code
+		{Kind: "currency", Currency: "KRONOR"},  // not 3 letters
+		{Kind: "number", Currency: "SEK"},       // currency on non-currency kind
 	}
 	for _, f := range invalid {
 		if err := f.Validate(); err == nil {

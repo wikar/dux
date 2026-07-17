@@ -10,7 +10,8 @@
 //	POST /import  — imports a dux.toml body, updates the metadata DB
 //	POST /refresh — re-introspects attached databases and reloads metadata
 //	GET  /docs    — Scalar API reference UI
-//	GET  /        — query builder UI
+//	GET  /        — DUX UI (builder, explorer, dashboards at /dash/;
+//	                /api/dash/ backend, DUX_DASH=0 disables dashboards)
 //
 // Usage:
 //
@@ -29,6 +30,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -50,9 +52,10 @@ import (
 // version is overridden at build time via -ldflags="-X main.version=..."
 var version = "dev"
 
-// Dashboards module flags (registered before bootstrap's flag.Parse).
-// Setting the env var DUX_DASH=0 disables the module entirely.
+// Server flags (registered before bootstrap's flag.Parse).
+// Setting the env var DUX_DASH=0 disables the dashboards module entirely.
 var (
+	listenAddr   = flag.String("listen", ":8080", "HTTP listen address")
 	dashDir      = flag.String("dash-dir", "dashboards", "dashboard file store directory")
 	dashAssetMax = flag.Int64("dash-asset-max", 10<<20, "max dashboard asset upload size in bytes")
 )
@@ -425,6 +428,118 @@ const openAPISpec = `{
           "500": { "description": "Introspection or reload error" }
         }
       }
+    },
+    "/api/dash/dashboards": {
+      "get": {
+        "summary": "List dashboards",
+        "description": "All dashboard files under the store, recursively. Files that fail JSON parsing or schema validation are listed with valid=false and their error. Identities are lower-case slash-separated paths without the .json extension.",
+        "responses": {
+          "200": {
+            "description": "Array of dashboard entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path":     { "type": "string" },
+                      "name":     { "type": "string" },
+                      "modified": { "type": "string", "format": "date-time" },
+                      "etag":     { "type": "string" },
+                      "valid":    { "type": "boolean" },
+                      "error":    { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dash/dashboards/{path}": {
+      "get": {
+        "summary": "Get a dashboard",
+        "description": "Returns the listing entry plus the parsed document (or raw text for unparseable files). The ETag response header carries the version for If-Match on save.",
+        "parameters": [ { "name": "path", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Slash-separated identity without .json" } ],
+        "responses": {
+          "200": { "description": "Dashboard envelope {path, name, modified, etag, valid, error?, document?, raw?}" },
+          "404": { "description": "Not found" }
+        }
+      },
+      "put": {
+        "summary": "Create or update a dashboard",
+        "description": "Body is the dashboard document (validated against /api/dash/schema.json). Create: no If-Match header. Update: If-Match with the last seen etag; 428 without it, 409 with a stale one (response carries currentEtag and modified for the conflict dialog).",
+        "parameters": [
+          { "name": "path", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "If-Match", "in": "header", "required": false, "schema": { "type": "string" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": {
+          "200": { "description": "Updated — {etag, created:false}" },
+          "201": { "description": "Created — {etag, created:true}" },
+          "409": { "description": "Stale If-Match — {error, currentEtag, modified}" },
+          "412": { "description": "If-Match on a dashboard that no longer exists" },
+          "422": { "description": "Document fails schema validation" },
+          "428": { "description": "Update without If-Match" }
+        }
+      },
+      "delete": {
+        "summary": "Delete a dashboard",
+        "parameters": [
+          { "name": "path", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "If-Match", "in": "header", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Deleted" },
+          "404": { "description": "Not found" },
+          "409": { "description": "Stale If-Match" },
+          "428": { "description": "Missing If-Match" }
+        }
+      }
+    },
+    "/api/dash/assets/{path}": {
+      "post": {
+        "summary": "Upload an image asset",
+        "description": "Raw image bytes; the path's extension (.png/.jpg/.jpeg/.webp/.svg) decides the type. Size capped by --dash-asset-max (default 10 MiB).",
+        "responses": {
+          "201": { "description": "Stored — {path, type}" },
+          "413": { "description": "Too large" },
+          "415": { "description": "Unsupported extension" }
+        }
+      },
+      "get": {
+        "summary": "Fetch an asset",
+        "description": "SVG is served with a no-execute Content-Security-Policy.",
+        "responses": {
+          "200": { "description": "Image bytes" },
+          "404": { "description": "Not found" }
+        }
+      }
+    },
+    "/api/dash/theme": {
+      "get": {
+        "summary": "Global theme tokens",
+        "description": "Contents of dashboards/theme.json ({} when absent). ETag header when the file exists.",
+        "responses": { "200": { "description": "Theme JSON object" } }
+      },
+      "put": {
+        "summary": "Replace the global theme",
+        "description": "Same If-Match semantics as dashboards.",
+        "responses": {
+          "200": { "description": "Saved — {etag}" },
+          "409": { "description": "Stale If-Match" },
+          "428": { "description": "Update without If-Match" }
+        }
+      }
+    },
+    "/api/dash/schema.json": {
+      "get": {
+        "summary": "Dashboard document JSON Schema",
+        "description": "The JSON Schema (draft 2020-12) that PUT dashboards are validated against.",
+        "responses": { "200": { "description": "JSON Schema document" } }
+      }
     }
   }
 }`
@@ -454,7 +569,9 @@ Endpoints served on :80:
   DELETE /hidden       Clear a hidden designation
   POST /refresh        Refresh schema from attached databases
   GET  /docs           Scalar interactive API reference
-  GET  /               Query builder UI
+  GET  /               DUX UI (builder, explorer, and dashboards at /dash/)
+  *    /api/dash/      Dashboards API (documents, assets, theme, schema);
+                       disable dashboards with DUX_DASH=0
 
 Flags:
 `
@@ -495,8 +612,13 @@ func main() {
 			log.Fatalf("dashboards module: %v", err)
 		}
 		mux.Handle("/api/dash/", dash)
-		log.Printf("dashboards enabled at /api/dash/ (dir %q)", *dashDir)
+		log.Printf("dashboards enabled at /dash/ and /api/dash/ (dir %q)", *dashDir)
 	} else {
+		// Keep the API surface a hard 404 — without this the SPA catch-all
+		// would answer /api/dash/* with index.html.
+		mux.HandleFunc("/api/dash/", func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "dashboards disabled (DUX_DASH=0)", http.StatusNotFound)
+		})
 		log.Printf("dashboards disabled (DUX_DASH=0)")
 	}
 
@@ -520,18 +642,37 @@ func main() {
 		_, _ = io.WriteString(w, docsHTML)
 	})
 
-	// Serve the query builder UI embedded at build time.
-	distFS, err := fs.Sub(web.Builder, "builder/dist")
+	// Serve the DUX UI SPA embedded at build time. Client-side routes
+	// (/explorer, /dash/<dashboard path>) fall back to index.html; the app
+	// feature-gates its Dash tab via /version capabilities.
+	distFS, err := fs.Sub(web.App, "app/dist")
 	if err != nil {
 		log.Fatalf("ui embed: %v", err)
 	}
-	mux.Handle("/", http.FileServerFS(distFS))
+	mux.Handle("/", spaFileServer("/", distFS))
 
 	// Watch db-dir for new database files and auto-attach them.
 	go watchDBDir(dbDir, metaPath, metaDB, schema, &schemaMu)
 
-	log.Printf("duxd %s listening on :8080  (metadata: %s)", version, metaPath)
-	log.Fatal(http.ListenAndServe(":8080", mux))
+	log.Printf("duxd %s listening on %s  (metadata: %s)", version, *listenAddr, metaPath)
+	log.Fatal(http.ListenAndServe(*listenAddr, mux))
+}
+
+// spaFileServer serves a single-page app from fsys under prefix: real files
+// are served as-is, anything else (client-side routes) gets index.html.
+func spaFileServer(prefix string, fsys fs.FS) http.Handler {
+	files := http.StripPrefix(prefix, http.FileServerFS(fsys))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := path.Clean(strings.TrimPrefix(r.URL.Path, prefix))
+		if name != "" && name != "." && name != "/" {
+			if f, err := fsys.Open(strings.TrimPrefix(name, "/")); err == nil {
+				_ = f.Close()
+				files.ServeHTTP(w, r)
+				return
+			}
+		}
+		http.ServeFileFS(w, r, fsys, "index.html")
+	})
 }
 
 // watchDBDir monitors dir for new *.duckdb and *.db files, attaching them

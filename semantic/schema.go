@@ -14,8 +14,8 @@ import (
 // known to the system. It is populated at startup by introspecting DuckDB
 // and optionally merging metadata from dux.toml or the metadata database.
 type Schema struct {
-	Tables        map[string]*Table
-	Measures      map[string]map[string]*parser.MeasureDefinition // table → name → def
+	Tables   map[string]*Table
+	Measures map[string]map[string]*parser.MeasureDefinition // table → name → def
 	// MeasureFormats holds optional display formats, keyed identically to
 	// Measures (table → measure name). Parallel map because the measure
 	// definition itself is a parser type that cannot reference semantic types.

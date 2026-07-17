@@ -437,7 +437,12 @@ function MeasuresSection(props: {
 
 type ModalMode = "measure-add" | "measure-edit" | "relationship-add" | "relationship-edit";
 
-export default function SchemaTree(props: { refreshCount?: number; showHidden?: boolean }) {
+export default function SchemaTree(props: {
+  refreshCount?: number;
+  showHidden?: boolean;
+  /** Render without the panel chrome (host provides header/border, e.g. a CollapsiblePanel). */
+  bare?: boolean;
+}) {
   const { data: schema, error: schemaError, loading, refetch } =
     useFetch(() => client.fetchSchema(), [props.refreshCount]);
 
@@ -518,8 +523,8 @@ export default function SchemaTree(props: { refreshCount?: number; showHidden?: 
   function saved() { closeModal(); refetch(); }
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.panelHeader}>Schema</div>
+    <div className={props.bare ? styles.panelBare : styles.panel}>
+      {!props.bare && <div className={styles.panelHeader}>Schema</div>}
       <div className={styles.scrollArea}>
         {loading && <div className={styles.status}>Loading…</div>}
         {schemaError && (
