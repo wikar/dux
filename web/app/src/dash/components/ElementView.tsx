@@ -79,8 +79,6 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
       <div className={styles.body}>
         <ElementBody el={el} />
       </div>
-      {/* Query-state overlays; wired to live queries in M4. */}
-      <ElementOverlay />
       {editing && selected && (
         <>
           {HANDLES.map((dir) => (
@@ -98,23 +96,3 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
   );
 }
 
-/** Spinner and error overlays for the base container. Idle in M3 (text
- *  elements have no query); M4 drives these from the element's query state. */
-function ElementOverlay({ loading = false, error = null }: { loading?: boolean; error?: string | null }) {
-  if (error) {
-    return (
-      <div className={styles.overlayError} title={error}>
-        <span>⚠</span>
-        <span className={styles.overlayErrorText}>{error}</span>
-      </div>
-    );
-  }
-  if (loading) {
-    return (
-      <div className={styles.overlay}>
-        <div className={styles.spinner} />
-      </div>
-    );
-  }
-  return null;
-}

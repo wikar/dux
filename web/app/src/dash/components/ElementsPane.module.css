@@ -36,23 +36,28 @@
 
 .palette {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
 }
 
 .paletteBtn {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 8px 2px;
-  font-size: 10.5px;
+  gap: 2px;
+  padding: 4px 1px 3px;
+  font-size: 9px;
   background: var(--surface0);
   color: var(--subtext1);
   border: 1px solid var(--surface1);
   border-radius: 4px;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
+}
+
+.paletteBtn svg {
+  width: 14px;
+  height: 14px;
 }
 
 .paletteBtn:hover {
@@ -200,4 +205,138 @@
 .error {
   font-size: 12px;
   color: var(--red);
+  word-break: break-word;
+}
+
+/* ── Builder / raw mode toggle ── */
+
+.segmented {
+  display: flex;
+  border: 1px solid var(--surface1);
+  border-radius: 4px;
+  overflow: hidden;
+  align-self: flex-start;
+}
+
+.segBtn {
+  padding: 3px 12px;
+  font-size: 11px;
+  background: var(--surface0);
+  color: var(--subtext0);
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.segBtn:hover {
+  color: var(--text);
+}
+
+.segBtnActive {
+  background: var(--surface1);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ── Field wells ── */
+
+.well {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 34px;
+  padding: 4px;
+  background: var(--base);
+  border: 1px dashed var(--surface1);
+  border-radius: 4px;
+}
+
+.wellOver {
+  border-color: var(--blue);
+  background: var(--surface0);
+}
+
+.wellHint {
+  font-size: 11px;
+  color: var(--surface2);
+  padding: 4px 6px;
+}
+
+/* ── Raw DUX editor wrapper ── */
+
+.rawWrap {
+  border: 1px solid var(--surface1);
+  border-radius: 4px;
+  background: var(--base);
+  height: 150px;
+}
+
+.rawWrap:focus-within {
+  border-color: var(--blue);
+}
+
+/* ── Theme palette swatches ── */
+
+.swatchRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid var(--surface1);
+}
+
+.swatchEdit {
+  position: relative;
+  display: inline-flex;
+}
+
+.swatchInput {
+  width: 24px;
+  height: 24px;
+  padding: 1px;
+  background: var(--base);
+  border: 1px solid var(--surface1);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.swatchRemove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 13px;
+  height: 13px;
+  line-height: 1;
+  font-size: 9px;
+  border-radius: 50%;
+  border: 1px solid var(--surface1);
+  background: var(--mantle);
+  color: var(--subtext0);
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.swatchEdit:hover .swatchRemove {
+  display: inline-flex;
+}
+
+.swatchRemove:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+/* Theme editor inside the global modal — same controls, modal width. */
+.themeModalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
 }

@@ -1,7 +1,10 @@
 // Pure dashboard-document operations, applied through useDocStore.update so
 // each call is exactly one undo step.
+import { isNumeric } from "@dux/core";
+import type { Aggregate, DragPayload } from "@dux/core";
 import { useDocStore, useUiStore } from "./store";
-import type { Dashboard, DashElement, ElementType, Layout } from "./types";
+import type { BuilderFieldRef, Dashboard, DashElement, ElementType, Layout } from "./types";
+import { QUERY_TYPES } from "./types";
 
 export const SNAP = 8;
 export const MIN_W = 40;
@@ -18,6 +21,7 @@ export function clamp(v: number, lo: number, hi: number): number {
 const DEFAULT_SIZE: Record<ElementType, { w: number; h: number }> = {
   bar: { w: 360, h: 240 },
   line: { w: 360, h: 240 },
+  combo: { w: 420, h: 260 },
   area: { w: 360, h: 240 },
   donut: { w: 280, h: 240 },
   table: { w: 420, h: 280 },
@@ -25,11 +29,13 @@ const DEFAULT_SIZE: Record<ElementType, { w: number; h: number }> = {
   kpi: { w: 200, h: 112 },
   slicer: { w: 200, h: 240 },
   text: { w: 280, h: 160 },
+  image: { w: 200, h: 120 },
 };
 
 export const TYPE_LABEL: Record<ElementType, string> = {
   bar: "Bar chart",
   line: "Line chart",
+  combo: "Combo chart",
   area: "Area chart",
   donut: "Donut chart",
   table: "Table",
@@ -37,6 +43,22 @@ export const TYPE_LABEL: Record<ElementType, string> = {
   kpi: "KPI card",
   slicer: "Slicer",
   text: "Text",
+  image: "Image",
+};
+
+/** Compact palette-button labels ("chart"/"card" dropped for space). */
+export const SHORT_LABEL: Record<ElementType, string> = {
+  bar: "Bar",
+  line: "Line",
+  combo: "Combo",
+  area: "Area",
+  donut: "Donut",
+  table: "Table",
+  pivot: "Pivot",
+  kpi: "KPI",
+  slicer: "Slicer",
+  text: "Text",
+  image: "Image",
 };
 
 /** First free "type-N" id in the document. */
@@ -73,8 +95,11 @@ export function addElement(type: ElementType) {
     };
     if (type === "text") {
       el.text = { markdown: "## Text\n\nEdit the markdown in the settings pane." };
+    } else if (type === "image") {
+      el.image = { fit: "contain" };
     } else {
       el.title = { text: TYPE_LABEL[type], show: true };
+      if (QUERY_TYPES.has(type)) el.query = { mode: "builder", fields: [] };
     }
     return { ...doc, elements: [...doc.elements, el] };
   });
@@ -157,6 +182,131 @@ export function nudgeElement(id: string, dx: number, dy: number) {
 
 export function updateCanvas(fn: (doc: Dashboard) => Dashboard) {
   useDocStore.getState().update(fn);
+}
+
+// ─── Field wells ─────────────────────────────────────────────────────────────
+//
+// The element's query.fields is one flat ordered list (dims before metrics —
+// the DUX query derives from it alone). Wells are views over it: metric
+// membership in the line/combo secondary wells lives in viz.y2 / viz.lines.
+
+export type WellId = "axis" | "values" | "y2" | "bars" | "lines" | "fields";
+
+/** True when the field produces a metric output column. */
+export function isMetricRef(f: BuilderFieldRef): boolean {
+  return f.kind === "measure" || (isNumeric(f.dataType ?? "") && f.aggregate !== "VALUES");
+}
+
+/** Insert a dim before the first metric so dims lead the column order. */
+function insertDim(fields: BuilderFieldRef[], field: BuilderFieldRef) {
+  const at = fields.findIndex(isMetricRef);
+  if (at === -1) fields.push(field);
+  else fields.splice(at, 0, field);
+}
+
+/** Drop a schema field into a well. Incompatible drops are ignored:
+ *  measures can't be dims, non-numeric columns can't be metrics. */
+export function addFieldToWell(id: string, well: WellId, p: DragPayload) {
+  updateElement(id, (el) => {
+    const q = el.query ?? { mode: "builder" as const };
+    const fields = [...(q.fields ?? [])];
+    if (fields.some((f) => f.table === p.table && f.name === p.name)) return el;
+    const numeric = isNumeric(p.dataType);
+
+    const field: BuilderFieldRef = { table: p.table, name: p.name, kind: p.kind, dataType: p.dataType };
+    if (well === "axis") {
+      if (p.kind === "measure") return el;
+      if (numeric) field.aggregate = "VALUES"; // numeric column as a dim
+      insertDim(fields, field);
+    } else if (well === "fields") {
+      if (p.kind === "column" && numeric) field.aggregate = "SUM";
+      if (isMetricRef(field)) fields.push(field);
+      else insertDim(fields, field);
+    } else {
+      if (p.kind !== "measure" && !numeric) return el;
+      if (p.kind === "column") field.aggregate = "SUM";
+      fields.push(field);
+    }
+
+    const viz = { ...el.viz };
+    if (well === "y2") viz.y2 = [...(viz.y2 ?? []), p.name];
+    if (well === "lines") viz.lines = [...(viz.lines ?? []), p.name];
+    return { ...el, query: { ...q, fields }, viz };
+  });
+}
+
+/** Remove a field everywhere: list, well memberships, and sort keys. */
+export function removeFieldFromElement(id: string, name: string) {
+  updateElement(id, (el) => {
+    const q = el.query ?? { mode: "builder" as const };
+    const viz = { ...el.viz };
+    if (viz.y2) viz.y2 = viz.y2.filter((n) => n !== name);
+    if (viz.lines) viz.lines = viz.lines.filter((n) => n !== name);
+    return {
+      ...el,
+      query: {
+        ...q,
+        fields: (q.fields ?? []).filter((f) => f.name !== name),
+        sort: (q.sort ?? []).filter((s) => s.field !== name),
+      },
+      viz,
+    };
+  });
+}
+
+export function setFieldAggregate(id: string, name: string, aggregate: Aggregate) {
+  updateElement(id, (el) => {
+    const q = el.query ?? { mode: "builder" as const };
+    const viz = { ...el.viz };
+    if (aggregate === "VALUES") {
+      // Became a dim — drop any metric-well membership.
+      if (viz.y2) viz.y2 = viz.y2.filter((n) => n !== name);
+      if (viz.lines) viz.lines = viz.lines.filter((n) => n !== name);
+    }
+    return {
+      ...el,
+      query: {
+        ...q,
+        fields: (q.fields ?? []).map((f) => (f.name === name ? { ...f, aggregate } : f)),
+      },
+      viz,
+    };
+  });
+}
+
+export function addFilterToElement(id: string, p: DragPayload) {
+  updateElement(id, (el) => {
+    const q = el.query ?? { mode: "builder" as const };
+    const filters = q.filters ?? [];
+    if (filters.some((f) => f.table === p.table && f.name === p.name)) return el;
+    return {
+      ...el,
+      query: {
+        ...q,
+        filters: [...filters, { table: p.table, name: p.name, dataType: p.dataType, op: "=", value: "" }],
+      },
+    };
+  });
+}
+
+export function updateFilter(id: string, index: number, patch: { op?: string; value?: string }) {
+  updateElement(id, (el) => {
+    const q = el.query ?? { mode: "builder" as const };
+    return {
+      ...el,
+      query: {
+        ...q,
+        filters: (q.filters ?? []).map((f, i) => (i === index ? { ...f, ...patch } : f)),
+      },
+    };
+  });
+}
+
+export function removeFilter(id: string, index: number) {
+  updateElement(id, (el) => {
+    const q = el.query ?? { mode: "builder" as const };
+    return { ...el, query: { ...q, filters: (q.filters ?? []).filter((_, i) => i !== index) } };
+  });
 }
 
 // ─── Drag/resize gesture math ────────────────────────────────────────────────

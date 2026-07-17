@@ -111,3 +111,39 @@ export async function uploadAsset(
 export function assetUrl(path: string): string {
   return `/api/dash/assets/${encodePath(path)}`;
 }
+
+/** Resolve an image reference: absolute/data URLs pass through, anything
+ *  else is treated as an asset path under /api/dash/assets/. */
+export function imageUrl(ref: string): string {
+  if (/^(https?:|data:|\/)/i.test(ref)) return ref;
+  return assetUrl(ref);
+}
+
+// ─── Theme ───────────────────────────────────────────────────────────────────
+
+export interface ThemeDoc {
+  tokens: Record<string, unknown>;
+  etag: string | null;
+}
+
+export async function getTheme(): Promise<ThemeDoc> {
+  const res = await fetch("/api/dash/theme");
+  if (!res.ok) throw new Error(await errText(res));
+  return { tokens: (await res.json()) ?? {}, etag: res.headers.get("ETag") };
+}
+
+/** Replace the global theme (etag = If-Match; null when creating). */
+export async function putTheme(
+  tokens: Record<string, unknown>,
+  etag: string | null
+): Promise<{ etag: string }> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (etag) headers["If-Match"] = etag;
+  const res = await fetch("/api/dash/theme", {
+    method: "PUT",
+    headers,
+    body: JSON.stringify(tokens),
+  });
+  if (!res.ok) throw new Error(await errText(res));
+  return res.json();
+}

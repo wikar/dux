@@ -2,10 +2,11 @@
   position: absolute;
   display: flex;
   flex-direction: column;
-  background: color-mix(in srgb, var(--mantle) 82%, transparent);
-  border: 1px solid var(--surface1);
+  background: var(--th-el-bg, color-mix(in srgb, var(--mantle) 82%, transparent));
+  border: 1px solid var(--th-border, var(--surface1));
   border-radius: 6px;
   overflow: hidden;
+  color: var(--th-text, var(--text));
 }
 
 .editing {
@@ -23,8 +24,9 @@
   padding: 5px 10px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--subtext1);
-  border-bottom: 1px solid var(--surface1);
+  background: var(--th-title-bg, transparent);
+  color: var(--th-text, var(--subtext1));
+  border-bottom: 1px solid var(--th-border, var(--surface1));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

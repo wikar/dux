@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -163,6 +164,83 @@ func TestDashboardCRUD(t *testing.T) {
 	res = do(t, "GET", url, "", nil)
 	if res.StatusCode != http.StatusNotFound {
 		t.Fatalf("get after delete: expected 404, got %d", res.StatusCode)
+	}
+}
+
+// If-Match: * is the deliberate-overwrite escape hatch for agents/tooling:
+// create-or-replace without knowing the current etag.
+func TestOverwriteWithStar(t *testing.T) {
+	ts, _ := newTestServer(t)
+	url := ts.URL + "/api/dash/dashboards/star"
+
+	// Create via * (file absent).
+	res := do(t, "PUT", url, validDoc(), map[string]string{"If-Match": "*"})
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("create with *: expected 201, got %d", res.StatusCode)
+	}
+
+	// Overwrite via * (file present, no etag known) — a plain update without
+	// If-Match must still be rejected.
+	res = do(t, "PUT", url, validDoc(), nil)
+	if res.StatusCode != http.StatusPreconditionRequired {
+		t.Fatalf("update without If-Match: expected 428, got %d", res.StatusCode)
+	}
+	res = do(t, "PUT", url, validDoc(), map[string]string{"If-Match": "*"})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("overwrite with *: expected 200, got %d", res.StatusCode)
+	}
+
+	// Invalid documents are still rejected on the * path.
+	res = do(t, "PUT", url, `{"version": 2}`, map[string]string{"If-Match": "*"})
+	if res.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid doc with *: expected 422, got %d", res.StatusCode)
+	}
+
+	// Delete with * ignores the etag too.
+	res = do(t, "DELETE", url, "", map[string]string{"If-Match": "*"})
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete with *: expected 204, got %d", res.StatusCode)
+	}
+}
+
+// GET ?raw=1 downloads the stored file verbatim; PUT If-Match: * restores it.
+func TestRawDownloadUploadRoundTrip(t *testing.T) {
+	ts, _ := newTestServer(t)
+	url := ts.URL + "/api/dash/dashboards/roundtrip"
+
+	res := do(t, "PUT", url, validDoc(), nil)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d", res.StatusCode)
+	}
+
+	res = do(t, "GET", url+"?raw=1", "", nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("raw get: expected 200, got %d", res.StatusCode)
+	}
+	if ct := res.Header.Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("raw get: expected application/json, got %q", ct)
+	}
+	rawEtag := res.Header.Get("ETag")
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read raw body: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("raw body is not the bare document: %v", err)
+	}
+	if _, isEnvelope := doc["document"]; isEnvelope {
+		t.Fatalf("raw body must be the file itself, not the envelope")
+	}
+
+	// Upload the downloaded bytes to a new path (restore/copy).
+	res = do(t, "PUT", ts.URL+"/api/dash/dashboards/restored", string(raw), map[string]string{"If-Match": "*"})
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("restore: expected 201, got %d", res.StatusCode)
+	}
+	res = do(t, "GET", ts.URL+"/api/dash/dashboards/restored?raw=1", "", nil)
+	if got := res.Header.Get("ETag"); got != rawEtag {
+		t.Fatalf("restored etag mismatch: %q vs %q", got, rawEtag)
 	}
 }
 
@@ -369,6 +447,16 @@ func TestTheme(t *testing.T) {
 	res = do(t, "GET", ts.URL+"/api/dash/theme", "", nil)
 	if m := bodyJSON(t, res); fmt.Sprint(m["palette"]) != "[]" {
 		t.Errorf("theme round trip failed: %+v", m)
+	}
+
+	// If-Match: * imports over whatever is there (no etag needed).
+	res = do(t, "PUT", ts.URL+"/api/dash/theme", `{"palette":["#a6e3a1"],"text":"#cdd6f4"}`, map[string]string{"If-Match": "*"})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("theme import with *: expected 200, got %d", res.StatusCode)
+	}
+	res = do(t, "GET", ts.URL+"/api/dash/theme", "", nil)
+	if m := bodyJSON(t, res); m["text"] != "#cdd6f4" {
+		t.Errorf("theme import round trip failed: %+v", m)
 	}
 }
 

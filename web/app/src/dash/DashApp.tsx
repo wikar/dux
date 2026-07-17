@@ -13,8 +13,8 @@ import CollapsiblePanel from "../components/CollapsiblePanel";
 import SchemaTree from "../components/SchemaTree";
 import Canvas from "./components/Canvas";
 import ConflictDialog from "./components/ConflictDialog";
+import ElementsPane from "./components/ElementsPane";
 import Home from "./components/Home";
-import RightPane from "./components/RightPane";
 
 interface Props {
   /** Dashboard identity from the URL ("" = landing list). */
@@ -104,6 +104,11 @@ export default function DashApp({ path, refreshCount, showHidden }: Props) {
           <SchemaTree bare refreshCount={refreshCount} showHidden={showHidden} />
         </CollapsiblePanel>
       )}
+      {mode === "edit" && doc && (
+        <CollapsiblePanel title="Elements" side="left" width={280} storageKey="dux.dash.elements">
+          <ElementsPane />
+        </CollapsiblePanel>
+      )}
       <div className={styles.center}>
         {loadError ? (
           <div className={styles.loadError}>
@@ -116,11 +121,6 @@ export default function DashApp({ path, refreshCount, showHidden }: Props) {
           <div className={styles.loading}>Loading…</div>
         )}
       </div>
-      {mode === "edit" && doc && (
-        <CollapsiblePanel title="Elements" side="right" width={280} storageKey="dux.dash.elements">
-          <RightPane />
-        </CollapsiblePanel>
-      )}
       {conflict && <ConflictDialog />}
     </div>
   );

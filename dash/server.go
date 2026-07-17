@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path"
 	"strings"
 )
 
@@ -83,6 +84,21 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
+	// ?raw=1 downloads the document file verbatim (no envelope) — pairs with
+	// PUT If-Match: * for backup/restore and agent tooling.
+	if r.URL.Query().Get("raw") == "1" {
+		data, etag, err := s.store.GetRaw(r.PathValue("path"))
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition",
+			fmt.Sprintf("attachment; filename=%q", path.Base(r.PathValue("path"))+".json"))
+		_, _ = w.Write(data)
+		return
+	}
 	doc, err := s.store.Get(r.PathValue("path"))
 	if err != nil {
 		writeStoreError(w, err)

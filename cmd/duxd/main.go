@@ -461,16 +461,19 @@ const openAPISpec = `{
     "/api/dash/dashboards/{path}": {
       "get": {
         "summary": "Get a dashboard",
-        "description": "Returns the listing entry plus the parsed document (or raw text for unparseable files). The ETag response header carries the version for If-Match on save.",
-        "parameters": [ { "name": "path", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Slash-separated identity without .json" } ],
+        "description": "Returns the listing entry plus the parsed document (or raw text for unparseable files). The ETag response header carries the version for If-Match on save. With ?raw=1 the response is the stored file verbatim (no envelope) — the download half of backup/restore.",
+        "parameters": [
+          { "name": "path", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Slash-separated identity without .json" },
+          { "name": "raw", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Download the file bytes instead of the envelope" }
+        ],
         "responses": {
-          "200": { "description": "Dashboard envelope {path, name, modified, etag, valid, error?, document?, raw?}" },
+          "200": { "description": "Dashboard envelope {path, name, modified, etag, valid, error?, document?, raw?} — or the bare document with ?raw=1" },
           "404": { "description": "Not found" }
         }
       },
       "put": {
         "summary": "Create or update a dashboard",
-        "description": "Body is the dashboard document (validated against /api/dash/schema.json). Create: no If-Match header. Update: If-Match with the last seen etag; 428 without it, 409 with a stale one (response carries currentEtag and modified for the conflict dialog).",
+        "description": "Body is the dashboard document (validated against /api/dash/schema.json). Create: no If-Match header. Update: If-Match with the last seen etag; 428 without it, 409 with a stale one (response carries currentEtag and modified for the conflict dialog). If-Match: * is the deliberate-overwrite escape hatch — create-or-replace unconditionally (upload/restore).",
         "parameters": [
           { "name": "path", "in": "path", "required": true, "schema": { "type": "string" } },
           { "name": "If-Match", "in": "header", "required": false, "schema": { "type": "string" } }

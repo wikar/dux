@@ -14,14 +14,15 @@
       "required": ["width", "height"],
       "additionalProperties": false,
       "properties": {
-        "width":  { "type": "integer", "minimum": 320, "maximum": 16384 },
-        "height": { "type": "integer", "minimum": 240, "maximum": 16384 },
+        "width":  { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 16384 },
         "background": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
             "color": { "type": "string", "maxLength": 64 },
-            "asset": { "type": ["string", "null"], "description": "Asset path relative to the dashboards root (see POST /api/dash/assets)." },
+            "url":   { "type": ["string", "null"], "maxLength": 2048, "description": "Background image URL (external, or an /api/dash/assets/... path)." },
+            "asset": { "type": ["string", "null"], "description": "Legacy asset path relative to the dashboards root; url wins when both are set." },
             "fit":   { "enum": ["cover", "contain", "fill", "tile"] }
           }
         }
@@ -52,7 +53,7 @@
       "additionalProperties": false,
       "properties": {
         "id":   { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$", "description": "Unique within the document (server-enforced)." },
-        "type": { "enum": ["bar", "line", "area", "donut", "table", "pivot", "kpi", "slicer", "text"] },
+        "type": { "enum": ["bar", "line", "combo", "area", "donut", "table", "pivot", "kpi", "slicer", "text", "image"] },
         "layout": {
           "type": "object",
           "required": ["x", "y", "w", "h"],
@@ -83,6 +84,14 @@
           "additionalProperties": false,
           "properties": {
             "markdown": { "type": "string" }
+          }
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": { "type": ["string", "null"], "maxLength": 2048, "description": "Image URL (external, or an /api/dash/assets/... path)." },
+            "fit": { "enum": ["contain", "cover", "fill"] }
           }
         },
         "slicer": { "$ref": "#/$defs/slicer" },
@@ -156,7 +165,7 @@
       "properties": {
         "table":  { "type": "string" },
         "column": { "type": "string" },
-        "kind":   { "enum": ["list", "dropdown", "range", "daterange"] },
+        "kind":   { "enum": ["buttons", "list", "dropdown", "range", "daterange"] },
         "multi":  { "type": "boolean" }
       }
     }

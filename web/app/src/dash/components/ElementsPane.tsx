@@ -1,13 +1,15 @@
-import styles from "./RightPane.module.css";
-import { addElement, TYPE_LABEL } from "../docOps";
+import styles from "./ElementsPane.module.css";
+import { addElement, SHORT_LABEL, TYPE_LABEL } from "../docOps";
 import { useDocStore, useUiStore } from "../store";
 import type { ElementType } from "../types";
 import Settings from "./Settings";
 import { typeIcon } from "./typeIcons";
 
-const TYPES: ElementType[] = ["bar", "line", "area", "donut", "table", "pivot", "kpi", "slicer", "text"];
+const TYPES: ElementType[] = [
+  "bar", "line", "combo", "area", "donut", "table", "pivot", "kpi", "slicer", "text", "image",
+];
 
-export default function RightPane() {
+export default function ElementsPane() {
   const selectedId = useUiStore((s) => s.selectedId);
   const selected = useDocStore((s) =>
     selectedId ? s.doc?.elements.find((e) => e.id === selectedId) ?? null : null
@@ -20,7 +22,7 @@ export default function RightPane() {
           {TYPES.map((t) => (
             <button key={t} className={styles.paletteBtn} title={TYPE_LABEL[t]} onClick={() => addElement(t)}>
               {typeIcon(t)}
-              <span>{TYPE_LABEL[t]}</span>
+              <span>{SHORT_LABEL[t]}</span>
             </button>
           ))}
         </div>

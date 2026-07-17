@@ -62,6 +62,21 @@ const ICONS: Record<ElementType, JSX.Element> = {
       </text>
     </svg>
   ),
+  combo: (
+    <svg {...S}>
+      <rect x="2.5" y="9" width="3" height="7" fill="currentColor" opacity="0.7" />
+      <rect x="7.5" y="6" width="3" height="10" fill="currentColor" opacity="0.7" />
+      <rect x="12.5" y="11" width="3" height="5" fill="currentColor" opacity="0.7" />
+      <polyline points="2,8 8,3 15,6" {...stroke} />
+    </svg>
+  ),
+  image: (
+    <svg {...S}>
+      <rect x="2" y="3.5" width="14" height="11" rx="1.5" {...stroke} />
+      <circle cx="6.2" cy="7.2" r="1.4" fill="currentColor" />
+      <path d="M4 13 L8.5 9 L11 11.5 L13 9.8 L16 12.5" {...stroke} />
+    </svg>
+  ),
 };
 
 export function typeIcon(type: ElementType): JSX.Element {

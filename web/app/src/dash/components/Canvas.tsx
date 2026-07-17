@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import styles from "./Canvas.module.css";
-import { assetUrl } from "../api";
+import { imageUrl } from "../api";
+import { useResolvedTheme } from "../data";
 import { useDocStore, useUiStore } from "../store";
 import type { BackgroundFit } from "../types";
 import ContextMenu, { type MenuState } from "./ContextMenu";
@@ -39,18 +40,28 @@ export default function Canvas() {
     return () => ro.disconnect();
   }, [width, height]);
 
+  // Theme cascade: the dashboard's own canvas.background wins over theme
+  // tokens; element chrome tokens flow down as CSS variables.
+  const theme = useResolvedTheme(doc);
   const bg = doc.canvas.background;
   const canvasStyle: React.CSSProperties = {
     width,
     height,
     transform: `scale(${scale})`,
     transformOrigin: "0 0",
-    background: bg?.color || "var(--base)",
+    background: bg?.color || theme.background,
+    color: theme.text,
+    fontFamily: theme.fontFamily,
+    ["--th-el-bg" as string]: theme.elementBackground,
+    ["--th-title-bg" as string]: theme.titleBackground,
+    ["--th-border" as string]: theme.border,
+    ["--th-text" as string]: theme.text,
   };
-  if (bg?.asset) {
-    Object.assign(canvasStyle, FIT_CSS[bg.fit ?? "cover"]);
-    canvasStyle.backgroundImage = `url(${assetUrl(bg.asset)})`;
-    if (bg.color) canvasStyle.backgroundColor = bg.color;
+  const bgImage = bg?.url ?? bg?.asset ?? theme.backgroundImage;
+  if (bgImage) {
+    Object.assign(canvasStyle, FIT_CSS[bg?.fit ?? theme.backgroundFit]);
+    canvasStyle.backgroundImage = `url(${imageUrl(bgImage)})`;
+    canvasStyle.backgroundColor = bg?.color || theme.background;
   }
 
   // Stable z-sort: by z, ties by document order.

@@ -321,12 +321,31 @@ func (s *Store) Get(rawPath string) (*Document, error) {
 	return doc, nil
 }
 
+// GetRaw returns a dashboard's file bytes verbatim with their ETag — the
+// download form of Get (round-trips through PUT with If-Match: *).
+func (s *Store) GetRaw(rawPath string) (data []byte, etag string, err error) {
+	clean, err := cleanDashboardPath(rawPath)
+	if err != nil {
+		return nil, "", err
+	}
+	abs, exists := s.resolvePath(clean + ".json")
+	if !exists {
+		return nil, "", ErrNotFound
+	}
+	data, err = os.ReadFile(abs)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, etagOf(data), nil
+}
+
 // Put creates or replaces a dashboard with optimistic concurrency:
 //
 //	file absent  + no If-Match → create
 //	file absent  + If-Match    → ErrPreconditionFailed (client expected an existing doc)
 //	file present + no If-Match → ErrPreconditionRequired (no blind overwrites)
 //	file present + stale match → *ConflictError
+//	If-Match: *                → unconditional create-or-overwrite (agent/tooling upload)
 //
 // The document is validated before anything touches disk, normalised to
 // pretty-printed form (files are a git-diff surface), and written atomically
@@ -350,12 +369,16 @@ func (s *Store) Put(rawPath string, body []byte, ifMatch string) (etag string, c
 	// Resolve case-insensitively: an externally created mixed-case file is
 	// updated in place (its casing is git's business, not ours).
 	target, exists := s.resolvePath(clean + ".json")
-	if !exists {
+	switch {
+	case ifMatch == "*":
+		// Deliberate overwrite: skip all precondition checks.
+		created = !exists
+	case !exists:
 		if ifMatch != "" {
 			return "", false, ErrPreconditionFailed
 		}
 		created = true
-	} else {
+	default:
 		existing, readErr := os.ReadFile(target)
 		if readErr != nil {
 			return "", false, readErr
@@ -398,7 +421,7 @@ func (s *Store) Delete(rawPath string, ifMatch string) error {
 	if readErr != nil {
 		return readErr
 	}
-	if ifMatch != "" && !etagsEqual(ifMatch, etagOf(existing)) {
+	if ifMatch != "" && ifMatch != "*" && !etagsEqual(ifMatch, etagOf(existing)) {
 		return &ConflictError{CurrentETag: etagOf(existing)}
 	}
 	if err := os.Remove(target); err != nil {
@@ -424,7 +447,8 @@ func (s *Store) GetTheme() (json.RawMessage, string, error) {
 }
 
 // PutTheme replaces the global theme with the same optimistic-concurrency
-// rules as Put (a missing file counts as absent).
+// rules as Put (a missing file counts as absent; If-Match: * overwrites
+// unconditionally — the import path).
 func (s *Store) PutTheme(body []byte, ifMatch string) (string, error) {
 	var obj map[string]any
 	if err := json.Unmarshal(body, &obj); err != nil {
@@ -441,6 +465,10 @@ func (s *Store) PutTheme(body []byte, ifMatch string) (string, error) {
 	target := filepath.Join(s.root, themeFile)
 	existing, readErr := os.ReadFile(target)
 	switch {
+	case ifMatch == "*":
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return "", readErr
+		}
 	case os.IsNotExist(readErr):
 		if ifMatch != "" {
 			return "", ErrPreconditionFailed

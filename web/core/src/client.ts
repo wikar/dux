@@ -20,6 +20,35 @@ export class QueryFailedError extends Error {
   }
 }
 
+/** External filter injected into a query's outermost filter context
+ *  (mirrors executor.ExternalFilter; ops: in, between, =, !=, <, <=, >, >=, contains). */
+export interface ExternalFilter {
+  table: string;
+  column: string;
+  op: string;
+  values?: (string | number)[];
+  value?: string | number;
+  from?: string | number;
+  to?: string | number;
+}
+
+async function parseQueryResponse(res: Response): Promise<QueryResponse> {
+  const text = await res.text();
+  if (!res.ok) {
+    // Pipeline errors arrive as {error, stage, line, column} JSON.
+    try {
+      const j = JSON.parse(text);
+      if (j && typeof j.error === "string") {
+        throw new QueryFailedError(j.error, j.stage ?? "", j.line ?? 0, j.column ?? 0);
+      }
+    } catch (e) {
+      if (e instanceof QueryFailedError) throw e;
+    }
+    throw new Error(text || `query failed: ${res.status}`);
+  }
+  return JSON.parse(text) as QueryResponse;
+}
+
 /** GET /version response: server version plus API capability flags. */
 export interface VersionInfo {
   version: string;
@@ -50,26 +79,31 @@ export class DuxClient {
     return res.json() as Promise<string[]>;
   }
 
-  async executeQuery(query: string): Promise<QueryResponse> {
+  async executeQuery(query: string, opts?: { signal?: AbortSignal }): Promise<QueryResponse> {
     const res = await fetch("/query", {
       method: "POST",
       headers: { "Content-Type": "text/plain" },
       body: query,
+      signal: opts?.signal,
     });
-    const text = await res.text();
-    if (!res.ok) {
-      // Pipeline errors arrive as {error, stage, line, column} JSON.
-      try {
-        const j = JSON.parse(text);
-        if (j && typeof j.error === "string") {
-          throw new QueryFailedError(j.error, j.stage ?? "", j.line ?? 0, j.column ?? 0);
-        }
-      } catch (e) {
-        if (e instanceof QueryFailedError) throw e;
-      }
-      throw new Error(text || `query failed: ${res.status}`);
-    }
-    return JSON.parse(text) as QueryResponse;
+    return parseQueryResponse(res);
+  }
+
+  /** Execute a query with external filters (dashboard slicers) applied to its
+   *  outermost filter context via the JSON envelope of POST /query. */
+  async executeQueryFiltered(
+    query: string,
+    filters: ExternalFilter[],
+    opts?: { signal?: AbortSignal }
+  ): Promise<QueryResponse> {
+    if (filters.length === 0) return this.executeQuery(query, opts);
+    const res = await fetch("/query", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, filters }),
+      signal: opts?.signal,
+    });
+    return parseQueryResponse(res);
   }
 
   async importToml(text: string): Promise<void> {
