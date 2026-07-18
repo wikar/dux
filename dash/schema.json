@@ -163,10 +163,25 @@
       "required": ["table", "column", "kind"],
       "additionalProperties": false,
       "properties": {
-        "table":  { "type": "string" },
-        "column": { "type": "string" },
-        "kind":   { "enum": ["buttons", "list", "dropdown", "range", "daterange"] },
-        "multi":  { "type": "boolean" }
+        "table":    { "type": "string" },
+        "column":   { "type": "string" },
+        "dataType": { "type": "string", "description": "DuckDB column type; numeric/date types shape filter values and the range kinds." },
+        "kind":     { "enum": ["buttons", "list", "dropdown", "range", "daterange"] },
+        "multi":    { "type": "boolean" },
+        "limit":    { "type": "integer", "minimum": 1, "description": "Max value pills shown by the buttons kind (default 20)." },
+        "measure": {
+          "type": "object",
+          "required": ["table", "name"],
+          "additionalProperties": false,
+          "description": "Optional metric that trims the option list to values where it is non-null: a measure, or a numeric column with an aggregate.",
+          "properties": {
+            "table":     { "type": "string" },
+            "name":      { "type": "string" },
+            "kind":      { "enum": ["column", "measure"] },
+            "dataType":  { "type": "string" },
+            "aggregate": { "type": "string" }
+          }
+        }
       }
     }
   }

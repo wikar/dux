@@ -340,3 +340,51 @@
   gap: 6px;
   font-size: 12px;
 }
+
+/* ── Single-field chip (slicer field / trim-measure wells) ── */
+
+.fieldChip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+  background: var(--surface0);
+  border: 1px solid var(--surface1);
+  border-radius: 4px;
+}
+
+.fieldChipName {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.fieldChipMeasure {
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--mauve);
+  color: var(--base);
+  padding: 1px 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.fieldChipRemove {
+  background: none;
+  border: none;
+  color: var(--subtext0);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.fieldChipRemove:hover {
+  color: var(--red);
+  background: var(--surface1);
+}

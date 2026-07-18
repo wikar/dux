@@ -35,11 +35,14 @@ import type {
   DashElement,
   ElementType,
   ImageFit,
+  SlicerConfig,
+  SlicerKind,
   ThemeTokens,
 } from "../types";
 import { QUERY_TYPES } from "../types";
-import { QueryFailedError } from "@dux/core";
-import type { Aggregate, DropField, FilterField, FilterOp } from "@dux/core";
+import { applySlicerSelection } from "../actions";
+import { isNumeric, QueryFailedError } from "@dux/core";
+import type { Aggregate, DragPayload, DropField, FilterField, FilterOp } from "@dux/core";
 
 /** Settings for the selected element, or the dashboard when none selected.
  *  Text fields commit on blur (one undo step per edit); everything else
@@ -122,6 +125,7 @@ function ElementSettings({ el }: { el: DashElement }) {
 
       {QUERY_TYPES.has(el.type) && <DataSection el={el} />}
       {QUERY_TYPES.has(el.type) && <VizSection el={el} />}
+      {el.type === "slicer" && <SlicerSection el={el} />}
       {el.type === "text" && <TextSection el={el} />}
       {el.type === "image" && <ImageSection el={el} />}
     </>
@@ -275,6 +279,231 @@ function DataSection({ el }: { el: DashElement }) {
         </button>
       </div>
       {mode === "raw" ? <RawSection el={el} /> : <BuilderSection el={el} />}
+      <IgnoreSlicers el={el} />
+    </div>
+  );
+}
+
+/** Opt an element out of specific slicers (interactions.ignoreSlicers). */
+function IgnoreSlicers({ el }: { el: DashElement }) {
+  const doc = useDocStore((s) => s.doc);
+  const slicers = (doc?.elements ?? []).filter((e) => e.type === "slicer" && e.id !== el.id);
+  if (slicers.length === 0) return null;
+  const ignored = el.interactions?.ignoreSlicers ?? [];
+
+  const toggle = (id: string) =>
+    updateElement(el.id, (x) => {
+      const cur = new Set(x.interactions?.ignoreSlicers ?? []);
+      if (cur.has(id)) cur.delete(id);
+      else cur.add(id);
+      const arr = [...cur];
+      const next = { ...x };
+      if (arr.length > 0) next.interactions = { ...x.interactions, ignoreSlicers: arr };
+      else delete next.interactions;
+      return next;
+    });
+
+  return (
+    <>
+      <label className={styles.label}>Ignore slicers</label>
+      {slicers.map((sl) => (
+        <label key={sl.id} className={styles.check}>
+          <input type="checkbox" checked={ignored.includes(sl.id)} onChange={() => toggle(sl.id)} />
+          {sl.title?.text || sl.id} <span className={styles.id}>{sl.id}</span>
+        </label>
+      ))}
+    </>
+  );
+}
+
+// ─── Slicer settings ─────────────────────────────────────────────────────────
+
+const SLICER_KINDS: { v: SlicerKind; label: string }[] = [
+  { v: "buttons", label: "Buttons (value pills)" },
+  { v: "dropdown", label: "Dropdown (multi-select, search)" },
+  { v: "range", label: "Range" },
+  { v: "daterange", label: "Date range" },
+];
+
+/** Generic single-purpose drop target in the well idiom. */
+function DropTarget({
+  label,
+  hint,
+  onDrop,
+  children,
+}: {
+  label: string;
+  hint: string;
+  onDrop: (p: DragPayload) => void;
+  children?: React.ReactNode;
+}) {
+  const [over, setOver] = useState(false);
+  return (
+    <div>
+      <label className={styles.label}>{label}</label>
+      <div
+        className={`${styles.well}${over ? ` ${styles.wellOver}` : ""}`}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes("application/dux")) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+            setOver(true);
+          }
+        }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setOver(false);
+          const raw = e.dataTransfer.getData("application/dux");
+          if (raw) onDrop(JSON.parse(raw) as DragPayload);
+        }}
+      >
+        {children ?? <span className={styles.wellHint}>{hint}</span>}
+      </div>
+    </div>
+  );
+}
+
+function SlicerSection({ el }: { el: DashElement }) {
+  const s = el.slicer;
+
+  const setSlicer = (patch: Partial<SlicerConfig>) =>
+    updateElement(el.id, (x) => ({
+      ...x,
+      slicer: { table: "", column: "", kind: "buttons" as SlicerKind, ...x.slicer, ...patch },
+    }));
+
+  const rangeKind = s?.kind === "range" || s?.kind === "daterange";
+
+  return (
+    <div className={styles.section}>
+      <div className={styles.heading}>Slicer</div>
+
+      <DropTarget
+        label="Field"
+        hint="Drop a column from Schema"
+        onDrop={(p) => {
+          if (p.kind !== "column") return;
+          updateElement(el.id, (x) => ({
+            ...x,
+            slicer: { kind: "buttons" as SlicerKind, ...x.slicer, table: p.table, column: p.name, dataType: p.dataType },
+            // The column names the slicer — still manually renameable after.
+            title: { ...x.title, text: p.name, show: x.title?.show ?? true },
+          }));
+          // The old selection filtered a different column — drop it.
+          applySlicerSelection(el.id, null);
+        }}
+      >
+        {s?.column ? (
+          <div className={styles.fieldChip}>
+            <span className={styles.fieldChipName}>
+              {s.table}[{s.column}]
+            </span>
+            <button
+              className={styles.fieldChipRemove}
+              title="Remove"
+              onClick={() => {
+                updateElement(el.id, (x) => ({
+                  ...x,
+                  slicer: { kind: "buttons" as SlicerKind, ...x.slicer, table: "", column: "", dataType: undefined },
+                  title: { ...x.title, text: TYPE_LABEL.slicer, show: x.title?.show ?? true },
+                }));
+                applySlicerSelection(el.id, null);
+              }}
+            >
+              ×
+            </button>
+          </div>
+        ) : undefined}
+      </DropTarget>
+
+      <DropTarget
+        label="Trim by"
+        hint="Drop a measure or numeric column — Hides values where it is null"
+        onDrop={(p) => {
+          if (p.kind === "measure") {
+            setSlicer({ measure: { table: p.table, name: p.name, kind: "measure" } });
+          } else if (isNumeric(p.dataType)) {
+            setSlicer({
+              measure: { table: p.table, name: p.name, kind: "column", dataType: p.dataType, aggregate: "SUM" },
+            });
+          }
+        }}
+      >
+        {s?.measure ? (
+          <FieldPill
+            field={{
+              table: s.measure.table,
+              name: s.measure.name,
+              kind: s.measure.kind ?? "measure",
+              dataType: s.measure.dataType ?? "",
+              aggregate: s.measure.aggregate as Aggregate | undefined,
+            }}
+            zone="fields"
+            index={0}
+            onRemove={() =>
+              updateElement(el.id, (x) => {
+                if (!x.slicer) return x;
+                const { measure: _drop, ...rest } = x.slicer;
+                return { ...x, slicer: rest };
+              })
+            }
+            onReorder={() => {}}
+            onAggChange={(agg) =>
+              updateElement(el.id, (x) =>
+                x.slicer?.measure
+                  ? { ...x, slicer: { ...x.slicer, measure: { ...x.slicer.measure, aggregate: agg } } }
+                  : x
+              )
+            }
+          />
+        ) : undefined}
+      </DropTarget>
+
+      <label className={styles.label}>Style</label>
+      <select
+        className={styles.input}
+        value={s?.kind ?? "buttons"}
+        onChange={(e) => {
+          setSlicer({ kind: e.target.value as SlicerKind });
+          applySlicerSelection(el.id, null);
+        }}
+      >
+        {SLICER_KINDS.map((k) => (
+          <option key={k.v} value={k.v}>
+            {k.label}
+          </option>
+        ))}
+      </select>
+
+      {!rangeKind && (
+        <label className={styles.check}>
+          <input
+            type="checkbox"
+            checked={s?.multi ?? true}
+            onChange={(e) => setSlicer({ multi: e.target.checked })}
+          />
+          Multi-select
+        </label>
+      )}
+
+      {(s?.kind ?? "buttons") === "buttons" && (
+        <label className={styles.numField}>
+          <span style={{ minWidth: 56 }}>Max pills</span>
+          <input
+            type="number"
+            className={styles.input}
+            min={1}
+            value={s?.limit ?? 20}
+            onChange={(e) => {
+              const v = Math.round(Number(e.target.value));
+              if (Number.isFinite(v) && v >= 1) setSlicer({ limit: v });
+            }}
+          />
+        </label>
+      )}
+
+      <IgnoreSlicers el={el} />
     </div>
   );
 }
@@ -370,7 +599,7 @@ function Well({ el, well, label }: { el: DashElement; well: WellId; label: strin
           if (raw) addFieldToWell(el.id, well, JSON.parse(raw));
         }}
       >
-        {members.length === 0 && <span className={styles.wellHint}>drop a field from Schema</span>}
+        {members.length === 0 && <span className={styles.wellHint}>Drop a field from Schema</span>}
         {members.map((f, i) => (
           <FieldPill
             key={`${f.table}.${f.name}`}
@@ -411,7 +640,7 @@ function FiltersWell({ el }: { el: DashElement }) {
           if (raw) addFilterToElement(el.id, JSON.parse(raw));
         }}
       >
-        {filters.length === 0 && <span className={styles.wellHint}>drop a field to filter on</span>}
+        {filters.length === 0 && <span className={styles.wellHint}>Drop a field to filter on</span>}
         {filters.map((f, i) => (
           <FieldPill
             key={`${f.table}.${f.name}`}

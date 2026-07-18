@@ -31,6 +31,7 @@ export default function App() {
   const { data: version } = useFetch(() => client.fetchVersion());
   const dashEnabled = version?.capabilities?.dashboards === true;
 
+  const dashFullscreen = useUiStore((s) => s.fullscreen);
   const importInputRef = useRef<HTMLInputElement>(null);
   const [refreshCount, setRefreshCount] = useState(0);
   const [showHidden, setShowHidden] = useState(false);
@@ -221,21 +222,26 @@ export default function App() {
     <button className={styles.actionBtn} onClick={handleRefresh}>Refresh Schema</button>
   );
 
+  // Chrome-less full-screen dash view: no top bar, canvas only.
+  const chromeless = tab === "dash" && dashFullscreen;
+
   return (
     <div className={styles.appShell}>
-      <TopBar
-        activeTab={tab}
-        onTabChange={handleTabChange}
-        showDash={dashEnabled}
-        showHidden={showHidden}
-        onToggleShowHidden={() => setShowHidden((v) => !v)}
-        actions={
-          tab === "home" ? homeActions
-          : tab === "explorer" ? explorerActions
-          : dashEnabled ? <DashActions />
-          : undefined
-        }
-      />
+      {!chromeless && (
+        <TopBar
+          activeTab={tab}
+          onTabChange={handleTabChange}
+          showDash={dashEnabled}
+          showHidden={showHidden}
+          onToggleShowHidden={() => setShowHidden((v) => !v)}
+          actions={
+            tab === "home" ? homeActions
+            : tab === "explorer" ? explorerActions
+            : dashEnabled ? <DashActions />
+            : undefined
+          }
+        />
+      )}
       {/* The Home workspace stays mounted so switching tabs never loses the
           in-progress query; Explorer and Dash manage their own state. */}
       <div

@@ -3,9 +3,10 @@
 // aborted via the query's AbortSignal (stale cancellation).
 import { useMemo } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { duxClient, generateQuery, isMetricField } from "@dux/core";
+import { duxClient, generateQuery, isMetricField, isNumeric } from "@dux/core";
 import type {
   DropField,
+  ExternalFilter,
   FilterField,
   FilterOp,
   MeasureFormat,
@@ -13,7 +14,8 @@ import type {
   Schema,
 } from "@dux/core";
 import { getTheme } from "./api";
-import type { Dashboard, DashElement, ThemeTokens } from "./types";
+import { useDocStore, useUiStore } from "./store";
+import type { Dashboard, DashElement, SlicerSelection, ThemeTokens } from "./types";
 
 // ─── Schema / formats ────────────────────────────────────────────────────────
 
@@ -93,6 +95,81 @@ export function dropEmptyRows(res: QueryResponse, metricCols: string[], showEmpt
   return { ...res, rows: res.rows.filter((r) => idx.some((i) => r[i] !== null && r[i] !== undefined)) };
 }
 
+// ─── External filter fan-out (slicers → every other element) ─────────────────
+
+/** Translate one slicer's selection into an external filter. Numeric columns
+ *  get numeric values so the injected predicates type-match. */
+function slicerFilter(el: DashElement, sel: SlicerSelection): ExternalFilter | null {
+  const s = el.slicer;
+  if (!s?.table || !s?.column) return null;
+  const numeric = isNumeric(s.dataType ?? "");
+  const conv = (v: string): string | number => (numeric ? Number(v) : v);
+
+  if (sel.kind === "values" && sel.values.length > 0) {
+    return { table: s.table, column: s.column, op: "in", values: sel.values.map(conv) };
+  }
+  if (sel.kind === "range") {
+    const from = sel.from !== undefined && sel.from !== "" ? conv(sel.from) : undefined;
+    const to = sel.to !== undefined && sel.to !== "" ? conv(sel.to) : undefined;
+    if (from !== undefined && to !== undefined)
+      return { table: s.table, column: s.column, op: "between", from, to };
+    if (from !== undefined) return { table: s.table, column: s.column, op: ">=", value: from };
+    if (to !== undefined) return { table: s.table, column: s.column, op: "<=", value: to };
+  }
+  return null;
+}
+
+/** Active filters for an element: every other slicer's selection, minus the
+ *  ones it opts out of. AND semantics — one filter per slicer. */
+export function buildExternalFilters(
+  forId: string | null,
+  doc: Dashboard | null,
+  selections: Record<string, SlicerSelection>,
+  ignore: readonly string[]
+): ExternalFilter[] {
+  if (!doc) return [];
+  const out: ExternalFilter[] = [];
+  for (const el of doc.elements) {
+    if (el.type !== "slicer" || el.id === forId || ignore.includes(el.id)) continue;
+    const sel = selections[el.id];
+    if (!sel) continue;
+    const f = slicerFilter(el, sel);
+    if (f) out.push(f);
+  }
+  return out;
+}
+
+/** The external filters that apply to this element right now. Slicers get
+ *  the other slicers' filters — that's what makes their lists cascade. */
+export function useExternalFilters(el: DashElement): ExternalFilter[] {
+  const doc = useDocStore((s) => s.doc);
+  const selections = useUiStore((s) => s.slicerSelections);
+  return useMemo(
+    () => buildExternalFilters(el.id, doc, selections, el.interactions?.ignoreSlicers ?? []),
+    [el.id, el.interactions, doc, selections]
+  );
+}
+
+// ─── Live refresh ────────────────────────────────────────────────────────────
+
+/** Client-side floor matching the server default (dash.Config). */
+export const REFRESH_FLOOR_S = 5;
+
+/** Per-element refetch interval: dashboard interval with a deterministic
+ *  ±10% jitter seeded by the element id, so refreshes stagger instead of
+ *  thundering in together. false = refresh disabled. */
+export function useRefreshInterval(seed: string): number | false {
+  const refresh = useDocStore((s) => s.doc?.refresh);
+  return useMemo(() => {
+    if (!refresh?.enabled) return false;
+    const base = Math.max(REFRESH_FLOOR_S, refresh.intervalSeconds) * 1000;
+    let h = 0;
+    for (const c of seed) h = (h * 31 + c.charCodeAt(0)) | 0;
+    const jitter = ((Math.abs(h) % 2001) / 2000 - 0.5) * 0.2; // -10% … +10%
+    return Math.round(base * (1 + jitter));
+  }, [refresh, seed]);
+}
+
 // ─── Element data hook ───────────────────────────────────────────────────────
 
 export interface ElementDataState {
@@ -102,16 +179,22 @@ export interface ElementDataState {
   loading: boolean;
 }
 
-/** Run an element's query. External filters (slicers) join the key in M5. */
+/** Run an element's query with the active slicer filters applied. */
 export function useElementData(el: DashElement): ElementDataState {
   const dux = useMemo(() => buildElementDux(el), [el.query]);
+  const filters = useExternalFilters(el);
+  const filterKey = JSON.stringify(filters);
+  const refetchInterval = useRefreshInterval(el.id);
   const q = useQuery({
-    queryKey: ["eldata", dux],
+    queryKey: ["eldata", dux, filterKey],
     enabled: dux !== "",
-    queryFn: ({ signal }) => duxClient.executeQueryFiltered(dux, [], { signal }),
+    queryFn: ({ signal }) => duxClient.executeQueryFiltered(dux, filters, { signal }),
     placeholderData: keepPreviousData,
     retry: 0,
     staleTime: 15_000,
+    refetchInterval,
+    // Wall-display dashboards refresh even when the window isn't focused.
+    refetchIntervalInBackground: true,
   });
   return {
     dux,
@@ -119,6 +202,78 @@ export function useElementData(el: DashElement): ElementDataState {
     error: (q.error as Error | null) ?? null,
     loading: q.isFetching,
   };
+}
+
+// ─── Slicer options ──────────────────────────────────────────────────────────
+
+export interface SlicerOptionsState {
+  options: string[];
+  loading: boolean;
+  error: Error | null;
+}
+
+/** Distinct values for a slicer, cascaded by the other slicers' filters and
+ *  optionally trimmed to rows where the configured measure is non-null. */
+export function useSlicerOptions(el: DashElement): SlicerOptionsState {
+  const s = el.slicer;
+  const filters = useExternalFilters(el);
+  const filterKey = JSON.stringify(filters);
+  const refetchInterval = useRefreshInterval(el.id);
+
+  const dux = useMemo(() => {
+    if (!s?.table || !s?.column) return "";
+    const fields: DropField[] = [
+      {
+        table: s.table,
+        name: s.column,
+        kind: "column",
+        dataType: s.dataType ?? "",
+        aggregate: isNumeric(s.dataType ?? "") ? "VALUES" : undefined,
+      },
+    ];
+    if (s.measure) {
+      // Trim metric: a measure, or a numeric column with an aggregate.
+      const m = s.measure;
+      fields.push({
+        table: m.table,
+        name: m.name,
+        kind: m.kind ?? "measure",
+        dataType: m.dataType ?? "",
+        aggregate: (m.kind === "column" ? (m.aggregate as DropField["aggregate"]) ?? "SUM" : undefined),
+      });
+    }
+    return generateQuery(fields, [], { sort: [{ field: s.column, dir: "asc" }] });
+  }, [s]);
+
+  const q = useQuery({
+    queryKey: ["slicer-options", dux, filterKey],
+    enabled: dux !== "",
+    queryFn: ({ signal }) => duxClient.executeQueryFiltered(dux, filters, { signal }),
+    placeholderData: keepPreviousData,
+    retry: 0,
+    staleTime: 15_000,
+    refetchInterval,
+    refetchIntervalInBackground: true,
+  });
+
+  const options = useMemo(() => {
+    if (!q.data) return [];
+    const mIdx = s?.measure ? q.data.columns.indexOf(s.measure.name) : -1;
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of q.data.rows) {
+      if (mIdx >= 0 && (r[mIdx] === null || r[mIdx] === undefined)) continue;
+      if (r[0] === null || r[0] === undefined) continue;
+      const v = String(r[0]);
+      if (!seen.has(v)) {
+        seen.add(v);
+        out.push(v);
+      }
+    }
+    return out;
+  }, [q.data, s?.measure]);
+
+  return { options, loading: q.isFetching, error: (q.error as Error | null) ?? null };
 }
 
 // ─── Theme cascade (defaults ← theme.json ← dashboard.theme, per token) ──────

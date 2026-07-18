@@ -6,7 +6,7 @@
 // matter of adding a second Vite entry over src/dash + src/components.
 import { useEffect } from "react";
 import styles from "./DashApp.module.css";
-import { openDashboard, save } from "./actions";
+import { fullscreenFromUrl, openDashboard, save, setFullscreen } from "./actions";
 import { nudgeElement, removeElement } from "./docOps";
 import { redo, undo, useDocStore, useUiStore } from "./store";
 import CollapsiblePanel from "../components/CollapsiblePanel";
@@ -27,6 +27,7 @@ export default function DashApp({ path, refreshCount, showHidden }: Props) {
   const loadedPath = useUiStore((s) => s.loadedPath);
   const loadError = useUiStore((s) => s.loadError);
   const mode = useUiStore((s) => s.mode);
+  const fullscreen = useUiStore((s) => s.fullscreen);
   const conflict = useUiStore((s) => s.conflict);
   const doc = useDocStore((s) => s.doc);
   const setPath = useUiStore((s) => s.setPath);
@@ -35,6 +36,11 @@ export default function DashApp({ path, refreshCount, showHidden }: Props) {
   useEffect(() => {
     setPath(path);
   }, [path, setPath]);
+
+  // ?fullscreen deep link → chrome-less view.
+  useEffect(() => {
+    if (fullscreenFromUrl()) setFullscreen(true);
+  }, [path]);
 
   // Load the dashboard whenever the URL points somewhere new. A freshly
   // created (unsaved) dashboard already has loadedPath set, so no fetch.
@@ -69,7 +75,8 @@ export default function DashApp({ path, refreshCount, showHidden }: Props) {
         return;
       }
       if (e.key === "Escape") {
-        ui.select(null);
+        if (ui.fullscreen) setFullscreen(false);
+        else ui.select(null);
         return;
       }
       if (ui.mode !== "edit" || !ui.selectedId) return;
@@ -108,6 +115,15 @@ export default function DashApp({ path, refreshCount, showHidden }: Props) {
         <CollapsiblePanel title="Elements" side="left" width={280} storageKey="dux.dash.elements">
           <ElementsPane />
         </CollapsiblePanel>
+      )}
+      {fullscreen && (
+        <button
+          className={styles.exitFullscreen}
+          title="Exit full screen (Esc)"
+          onClick={() => setFullscreen(false)}
+        >
+          ✕
+        </button>
       )}
       <div className={styles.center}>
         {loadError ? (

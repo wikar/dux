@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { useStore } from "zustand";
 import { temporal } from "zundo";
-import type { Dashboard } from "./types";
+import type { Dashboard, SlicerSelection } from "./types";
 
 // ─── Document store (undo/redo via zundo) ────────────────────────────────────
 
@@ -68,6 +68,10 @@ interface UiState {
   conflict: ConflictInfo | null;
   saveError: string | null;
   saving: boolean;
+  /** Runtime slicer selections by element id (deep-linked via ?f=, not saved). */
+  slicerSelections: Record<string, SlicerSelection>;
+  /** Chrome-less full-screen view (?fullscreen deep link). */
+  fullscreen: boolean;
 
   setPath: (path: string) => void;
   opened: (path: string, etag: string | null, savedJson: string | null, loadError?: string | null) => void;
@@ -77,6 +81,9 @@ interface UiState {
   setConflict: (c: ConflictInfo | null) => void;
   setSaveError: (msg: string | null) => void;
   setSaving: (saving: boolean) => void;
+  setSlicerSelection: (id: string, sel: SlicerSelection | null) => void;
+  setSlicerSelections: (all: Record<string, SlicerSelection>) => void;
+  setFullscreen: (on: boolean) => void;
 }
 
 export const useUiStore = create<UiState>()((set) => ({
@@ -90,10 +97,21 @@ export const useUiStore = create<UiState>()((set) => ({
   conflict: null,
   saveError: null,
   saving: false,
+  slicerSelections: {},
+  fullscreen: false,
 
   setPath: (path) => set({ path }),
   opened: (path, etag, savedJson, loadError = null) =>
     set({ loadedPath: path, etag, savedJson, loadError, selectedId: null, conflict: null, saveError: null }),
+  setSlicerSelection: (id, sel) =>
+    set((s) => {
+      const slicerSelections = { ...s.slicerSelections };
+      if (sel === null) delete slicerSelections[id];
+      else slicerSelections[id] = sel;
+      return { slicerSelections };
+    }),
+  setSlicerSelections: (slicerSelections) => set({ slicerSelections }),
+  setFullscreen: (on) => set(on ? { fullscreen: true, mode: "view", selectedId: null } : { fullscreen: false }),
   markSaved: (etag, savedJson) => set({ etag, savedJson, conflict: null, saveError: null }),
   setMode: (mode) => set({ mode, selectedId: null }),
   select: (id) => set({ selectedId: id }),

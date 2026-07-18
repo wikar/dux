@@ -16,6 +16,7 @@ import { QUERY_TYPES } from "../types";
 import { formatValue, QueryFailedError } from "@dux/core";
 import type { MeasureFormat, QueryResponse } from "@dux/core";
 import { BarChartViz, ComboChartViz, LineChartViz, toChartData } from "../charts/ChartKit";
+import SlicerBody from "./SlicerBody";
 import { typeIcon } from "./typeIcons";
 
 /** Per-type element body. Query-backed types render live data (M4); area,
@@ -29,8 +30,9 @@ export default function ElementBody({ el }: { el: DashElement }) {
     );
   }
   if (el.type === "image") return <ImageBody el={el} />;
-  if (el.type === "area" || el.type === "donut" || el.type === "pivot" || el.type === "slicer") {
-    return <Placeholder el={el} note={el.type === "slicer" ? "arrives in M5" : "arrives in M6"} />;
+  if (el.type === "slicer") return <SlicerBody el={el} />;
+  if (el.type === "area" || el.type === "donut" || el.type === "pivot") {
+    return <Placeholder el={el} note="arrives in M6" />;
   }
   if (QUERY_TYPES.has(el.type)) return <DataBody el={el} />;
   return <Placeholder el={el} note="unknown type" />;

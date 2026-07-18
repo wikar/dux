@@ -1,0 +1,270 @@
+.root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--surface2);
+  padding: 4px;
+}
+
+.error {
+  font-size: 11px;
+  color: var(--red);
+  padding: 2px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.loading {
+  color: var(--subtext0);
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 4px;
+  flex-shrink: 0;
+}
+
+.clear {
+  background: none;
+  border: none;
+  color: var(--th-text, var(--subtext0));
+  opacity: 0.75;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.clear:hover {
+  opacity: 1;
+  background: var(--surface1);
+}
+
+/* ── Buttons (value pills) ── */
+
+.buttonsWrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 4px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.pill {
+  padding: 3px 10px;
+  font-size: 11px;
+  border-radius: 999px;
+  border: 1px solid var(--th-border, var(--surface1));
+  background: transparent;
+  color: var(--th-text, var(--text));
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.pill:hover {
+  border-color: var(--blue);
+}
+
+.pillActive {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: var(--base);
+  font-weight: 600;
+}
+
+.morePill {
+  padding: 3px 10px;
+  font-size: 11px;
+  border-radius: 999px;
+  border: 1px dashed var(--th-border, var(--surface1));
+  color: var(--th-text, var(--subtext0));
+  opacity: 0.7;
+}
+
+/* ── Dropdown ── */
+
+.dropdownWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dropdownBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: transparent;
+  color: var(--th-text, var(--text));
+  border: 1px solid var(--th-border, var(--surface1));
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.dropdownBtn:hover {
+  border-color: var(--blue);
+}
+
+.dropdownLabel {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdownClear {
+  color: inherit;
+  opacity: 0.7;
+  font-size: 10px;
+  padding: 0 2px;
+}
+
+.dropdownClear:hover {
+  opacity: 1;
+}
+
+.caret {
+  opacity: 0.7;
+}
+
+.popup {
+  position: fixed;
+  z-index: 300;
+  background: var(--mantle);
+  border: 1px solid var(--surface1);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text);
+}
+
+.search {
+  width: 100%;
+  background: var(--base);
+  border: 1px solid var(--surface1);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 4px 8px;
+  outline: none;
+}
+
+.search:focus {
+  border-color: var(--blue);
+}
+
+.optionList {
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.option:hover {
+  background: var(--surface1);
+}
+
+.checkbox {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border: 1px solid var(--surface2);
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 12px;
+  text-align: center;
+  color: var(--base);
+}
+
+.checkboxOn {
+  background: var(--blue);
+  border-color: var(--blue);
+}
+
+.optionText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Range / date range ── */
+
+.rangeWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rangeField {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rangeField span {
+  font-size: 11px;
+  color: var(--th-text, var(--subtext0));
+  opacity: 0.8;
+  min-width: 30px;
+}
+
+.rangeInput {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 1px solid var(--th-border, var(--surface1));
+  border-radius: 4px;
+  color: var(--th-text, var(--text));
+  font-size: 12px;
+  padding: 3px 6px;
+  outline: none;
+}
+
+.rangeInput:focus {
+  border-color: var(--blue);
+}
+
+.rangeInput::-webkit-calendar-picker-indicator {
+  filter: invert(0.8);
+}

@@ -2,6 +2,7 @@
 // each call is exactly one undo step.
 import { isNumeric } from "@dux/core";
 import type { Aggregate, DragPayload } from "@dux/core";
+import { applySlicerSelection } from "./actions";
 import { useDocStore, useUiStore } from "./store";
 import type { BuilderFieldRef, Dashboard, DashElement, ElementType, Layout } from "./types";
 import { QUERY_TYPES } from "./types";
@@ -97,6 +98,9 @@ export function addElement(type: ElementType) {
       el.text = { markdown: "## Text\n\nEdit the markdown in the settings pane." };
     } else if (type === "image") {
       el.image = { fit: "contain" };
+    } else if (type === "slicer") {
+      el.title = { text: TYPE_LABEL[type], show: true };
+      el.slicer = { table: "", column: "", kind: "buttons", multi: true };
     } else {
       el.title = { text: TYPE_LABEL[type], show: true };
       if (QUERY_TYPES.has(type)) el.query = { mode: "builder", fields: [] };
@@ -120,6 +124,8 @@ export function removeElement(id: string) {
   }));
   const ui = useUiStore.getState();
   if (ui.selectedId === id) ui.select(null);
+  // A removed slicer's selection must stop filtering (and leave the URL).
+  if (ui.slicerSelections[id]) applySlicerSelection(id, null);
 }
 
 export function duplicateElement(id: string) {

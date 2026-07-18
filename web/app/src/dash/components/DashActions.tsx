@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import styles from "./DashActions.module.css";
 import Modal, { modalStyles } from "../../components/Modal";
 import { listDashboards, type DashEntry } from "../api";
-import { createDashboard, gotoDashboard, save } from "../actions";
+import { createDashboard, gotoDashboard, save, setFullscreen } from "../actions";
 import { redo, undo, useDirty, useTemporal, useUiStore } from "../store";
 
 /** Top-bar actions while the Dash tab is active: dashboard picker, new,
@@ -75,6 +75,13 @@ export default function DashActions() {
               View
             </button>
           </div>
+          <button
+            className={styles.actionBtn}
+            title="Full screen — chrome-less view (Esc to exit); shareable via ?fullscreen"
+            onClick={() => setFullscreen(true)}
+          >
+            ⛶
+          </button>
         </>
       )}
       {newOpen && <NewDashboardModal onClose={() => setNewOpen(false)} />}

@@ -65,12 +65,33 @@ export interface ElementQuery {
   raw?: string | null;
 }
 
+export type SlicerKind = "buttons" | "list" | "dropdown" | "range" | "daterange";
+
 export interface SlicerConfig {
   table: string;
   column: string;
-  kind: "buttons" | "list" | "dropdown" | "range" | "daterange";
+  /** DuckDB column type — shapes filter value types and the range kinds. */
+  dataType?: string;
+  kind: SlicerKind;
   multi?: boolean;
+  /** Max value pills shown by the buttons kind (default 20). */
+  limit?: number;
+  /** Optional metric that trims the option list to non-null rows: a measure,
+   *  or a numeric column with an aggregate. */
+  measure?: {
+    table: string;
+    name: string;
+    kind?: "column" | "measure";
+    dataType?: string;
+    aggregate?: string;
+  };
 }
+
+/** A slicer's runtime selection (never stored in the document; shared via
+ *  the ?f= deep-link parameter). */
+export type SlicerSelection =
+  | { kind: "values"; values: string[] }
+  | { kind: "range"; from?: string; to?: string };
 
 export type ImageFit = "contain" | "cover" | "fill";
 
