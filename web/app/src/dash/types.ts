@@ -35,7 +35,7 @@ export interface BuilderFieldRef {
 export interface VizSettings {
   /** bar: horizontal renders category on the y axis. */
   orientation?: "vertical" | "horizontal";
-  /** bar: stack series instead of clustering. */
+  /** bar / area: stack series instead of clustering/overlapping. */
   stacked?: boolean;
   /** line: metric names plotted on the secondary (right) y axis. */
   y2?: string[];
@@ -46,6 +46,17 @@ export interface VizSettings {
   legend?: boolean;
   /** Show axis items whose metrics are all null (hidden by default). */
   showEmpty?: boolean;
+  /** bar / line / area: dim whose values split the first Values measure
+   *  into one series each (PBI's "Legend" well). */
+  series?: string;
+  /** pivot: dim names pivoted to columns (the rest are rows). */
+  cols?: string[];
+  /** pivot: subtotal rows per row-group level (default true). */
+  subtotals?: boolean;
+  /** pivot: grand-total row (default true). */
+  grandTotal?: boolean;
+  /** pivot: total column across the column dims (default true). */
+  totalCol?: boolean;
 }
 
 export interface BuilderFilterRef {

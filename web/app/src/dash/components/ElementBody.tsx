@@ -1,7 +1,17 @@
+import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import {
+  getCoreRowModel,
+  getSortedRowModel,
+  useReactTable,
+  type ColumnDef,
+  type SortingState,
+} from "@tanstack/react-table";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import styles from "./ElementBody.module.css";
 import { imageUrl } from "../api";
+import { downloadCsv } from "../csv";
 import {
   dropEmptyRows,
   splitElementFields,
@@ -15,12 +25,38 @@ import type { DashElement, ImageFit } from "../types";
 import { QUERY_TYPES } from "../types";
 import { formatValue, QueryFailedError } from "@dux/core";
 import type { MeasureFormat, QueryResponse } from "@dux/core";
-import { BarChartViz, ComboChartViz, LineChartViz, toChartData } from "../charts/ChartKit";
+import {
+  AreaChartViz,
+  BarChartViz,
+  ComboChartViz,
+  DonutChartViz,
+  LineChartViz,
+  toChartData,
+  toSeriesData,
+} from "../charts/ChartKit";
+import PivotBody from "./PivotBody";
 import SlicerBody from "./SlicerBody";
 import { typeIcon } from "./typeIcons";
 
-/** Per-type element body. Query-backed types render live data (M4); area,
- *  donut, and pivot arrive in M6; slicers in M5. */
+/** CSV download in the title bar (rendered by ElementView for query types).
+ *  useElementData hits the cache — the body already runs the same query. */
+export function TitleCsvButton({ el, className }: { el: DashElement; className: string }) {
+  const { data } = useElementData(el);
+  if (!data) return null;
+  return (
+    <button
+      className={className}
+      title="Download CSV"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={() => downloadCsv(data, el.title?.text || el.id)}
+    >
+      ⤓
+    </button>
+  );
+}
+
+/** Per-type element body: query-backed types render live data, the rest are
+ *  static content (text/image) or controls (slicer). */
 export default function ElementBody({ el }: { el: DashElement }) {
   if (el.type === "text") {
     return (
@@ -31,9 +67,6 @@ export default function ElementBody({ el }: { el: DashElement }) {
   }
   if (el.type === "image") return <ImageBody el={el} />;
   if (el.type === "slicer") return <SlicerBody el={el} />;
-  if (el.type === "area" || el.type === "donut" || el.type === "pivot") {
-    return <Placeholder el={el} note="arrives in M6" />;
-  }
   if (QUERY_TYPES.has(el.type)) return <DataBody el={el} />;
   return <Placeholder el={el} note="unknown type" />;
 }
@@ -94,9 +127,23 @@ function DataBody({ el }: { el: DashElement }) {
     );
   }
 
+  // The CSV button lives in the title bar; elements without one keep a
+  // floating hover button so export stays reachable.
+  const titleShown = el.title?.show !== false && !!el.title?.text;
+
   return (
     <div className={styles.dataWrap}>
       {data && <DataViz el={el} data={data} formats={formats} palette={palette} />}
+      {data && !titleShown && (
+        <button
+          className={styles.exportBtn}
+          title="Download CSV"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => downloadCsv(data, el.title?.text || el.id)}
+        >
+          ⤓
+        </button>
+      )}
       {loading && (
         <div className={styles.overlay}>
           <div className={styles.spinner} />
@@ -149,6 +196,53 @@ function DataViz({ el, data: rawData, formats, palette }: VizProps) {
   const data = dropEmptyRows(rawData, metricCols, viz.showEmpty ?? false);
 
   if (el.type === "table") return <TableBody data={data} formats={formats} />;
+  if (el.type === "pivot") return <PivotBody el={el} data={data} formats={formats} />;
+
+  // Series split (the "Series by" well): the first Values measure fans out
+  // into one series per value of the chosen dim (bar / line / area).
+  const splitBy =
+    !raw && (el.type === "bar" || el.type === "line" || el.type === "area")
+      ? dims.find((f) => f.name === viz.series)?.name
+      : undefined;
+  if (splitBy && metricCols.length > 0) {
+    const metric = metricCols[0];
+    const { data: sData, series } = toSeriesData(
+      data,
+      dimCols.filter((c) => c !== splitBy),
+      splitBy,
+      metric
+    );
+    // Every series carries the split measure — its format applies to all.
+    const sFormats: Record<string, MeasureFormat> = {};
+    if (formats[metric]) for (const s of series) sFormats[s] = formats[metric];
+    const legend = viz.legend ?? series.length > 1;
+    if (el.type === "bar") {
+      return (
+        <BarChartViz
+          data={sData}
+          series={series}
+          palette={palette}
+          formats={sFormats}
+          orientation={viz.orientation}
+          stacked={viz.stacked}
+          legend={legend}
+        />
+      );
+    }
+    if (el.type === "line") {
+      return <LineChartViz data={sData} left={series} right={[]} palette={palette} formats={sFormats} legend={legend} />;
+    }
+    return (
+      <AreaChartViz
+        data={sData}
+        series={series}
+        stacked={viz.stacked}
+        palette={palette}
+        formats={sFormats}
+        legend={legend}
+      />
+    );
+  }
 
   const chartData = toChartData(data, dimCols, metricCols);
   if (el.type === "bar") {
@@ -193,6 +287,32 @@ function DataViz({ el, data: rawData, formats, palette }: VizProps) {
       />
     );
   }
+  if (el.type === "area") {
+    return (
+      <AreaChartViz
+        data={chartData}
+        series={metricCols}
+        stacked={viz.stacked}
+        palette={palette}
+        formats={formats}
+        legend={viz.legend ?? metricCols.length > 1}
+      />
+    );
+  }
+  if (el.type === "donut") {
+    // A donut slices its first metric across the axis categories.
+    const metric = metricCols[0];
+    if (!metric) return null;
+    return (
+      <DonutChartViz
+        data={chartData}
+        metric={metric}
+        palette={palette}
+        formats={formats}
+        legend={viz.legend ?? true}
+      />
+    );
+  }
   return null;
 }
 
@@ -220,11 +340,19 @@ function KpiBody({
   );
 }
 
-// ─── Table ───────────────────────────────────────────────────────────────────
+// ─── Table (TanStack Table for sorting + Virtual for unbounded rows) ─────────
 
-// Plain table capped at 500 rows for M4; TanStack Table + Virtual arrives
-// with the pivot in M6.
-const TABLE_ROW_CAP = 500;
+type ResultRow = readonly (string | number | null)[];
+
+const TABLE_ROW_H = 25;
+
+/** Nulls last; numbers numerically; everything else as locale strings. */
+function cmpCell(a: unknown, b: unknown): number {
+  if (a === null || a === undefined) return b === null || b === undefined ? 0 : 1;
+  if (b === null || b === undefined) return -1;
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  return String(a).localeCompare(String(b));
+}
 
 function TableBody({
   data,
@@ -233,40 +361,81 @@ function TableBody({
   data: QueryResponse;
   formats: Record<string, MeasureFormat>;
 }) {
-  const rows = data.rows.slice(0, TABLE_ROW_CAP);
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const columns: ColumnDef<ResultRow>[] = data.columns.map((c, i) => ({
+    id: c,
+    accessorFn: (row: ResultRow) => row[i],
+    header: c,
+    sortingFn: (a, b) => cmpCell(a.getValue(c), b.getValue(c)),
+  }));
+  const table = useReactTable({
+    data: data.rows as ResultRow[],
+    columns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  });
+  const rows = table.getRowModel().rows;
+
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => wrapRef.current,
+    estimateSize: () => TABLE_ROW_H,
+    overscan: 12,
+  });
+  const items = virtualizer.getVirtualItems();
+  const padTop = items.length > 0 ? items[0].start : 0;
+  const padBottom = items.length > 0 ? virtualizer.getTotalSize() - items[items.length - 1].end : 0;
+
   return (
-    <div className={styles.tableWrap}>
+    <div className={styles.tableWrap} ref={wrapRef}>
       <table className={styles.table}>
         <thead>
           <tr>
-            {data.columns.map((c) => (
-              <th key={c} className={formats[c] ? styles.num : undefined}>
-                {c}
+            {table.getFlatHeaders().map((h) => (
+              <th
+                key={h.id}
+                className={formats[h.id] ? styles.num : undefined}
+                onClick={h.column.getToggleSortingHandler()}
+                title="Sort"
+              >
+                {h.id}
+                {{ asc: " ▲", desc: " ▼" }[h.column.getIsSorted() as string] ?? ""}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => (
-            <tr key={i}>
-              {r.map((v, j) => {
-                const col = data.columns[j];
-                const fmt = formats[col];
-                return (
-                  <td key={j} className={fmt || typeof v === "number" ? styles.num : undefined}>
-                    {v === null || v === undefined ? "" : fmt ? formatValue(v, fmt) : String(v)}
-                  </td>
-                );
-              })}
+          {padTop > 0 && (
+            <tr>
+              <td style={{ height: padTop, padding: 0, border: "none" }} />
             </tr>
-          ))}
+          )}
+          {items.map((vi) => {
+            const r = rows[vi.index];
+            return (
+              <tr key={r.id} style={{ height: TABLE_ROW_H }}>
+                {r.original.map((v, j) => {
+                  const col = data.columns[j];
+                  const fmt = formats[col];
+                  return (
+                    <td key={j} className={fmt || typeof v === "number" ? styles.num : undefined}>
+                      {v === null || v === undefined ? "" : fmt ? formatValue(v, fmt) : String(v)}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+          {padBottom > 0 && (
+            <tr>
+              <td style={{ height: padBottom, padding: 0, border: "none" }} />
+            </tr>
+          )}
         </tbody>
       </table>
-      {data.rows.length > TABLE_ROW_CAP && (
-        <div className={styles.tableCap}>
-          showing {TABLE_ROW_CAP} of {data.rows.length} rows
-        </div>
-      )}
     </div>
   );
 }

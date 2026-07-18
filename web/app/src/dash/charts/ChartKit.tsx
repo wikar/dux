@@ -2,11 +2,15 @@
 // theme palette into Recharts components. Persisted documents never
 // reference Recharts — swapping engines means new adapters, not migrations.
 import {
+  Area,
   Bar,
   CartesianGrid,
+  Cell,
   ComposedChart,
   Legend,
   Line,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -42,6 +46,37 @@ export function toChartData(res: QueryResponse, dimCols: string[], metricCols: s
     }
     return row;
   });
+}
+
+/** Series-split ("Legend") pivot: one row per axis value, one numeric key per
+ *  distinct value of the series dim, all carrying metricCol's measure. Series
+ *  are sorted; x keeps the server's row order. NULL series label as (blank). */
+export function toSeriesData(
+  res: QueryResponse,
+  dimCols: string[],
+  seriesCol: string,
+  metricCol: string
+): { data: ChartRow[]; series: string[] } {
+  const dimIdx = dimCols.map((c) => res.columns.indexOf(c)).filter((i) => i >= 0);
+  const sIdx = res.columns.indexOf(seriesCol);
+  const mIdx = res.columns.indexOf(metricCol);
+  if (sIdx < 0 || mIdx < 0) return { data: [], series: [] };
+  const byX = new Map<string, ChartRow>();
+  const series = new Set<string>();
+  for (const r of res.rows) {
+    const x = dimIdx.map((i) => String(r[i] ?? "")).join(" · ");
+    const raw = r[sIdx];
+    const s = raw === null || raw === undefined || raw === "" ? "(blank)" : String(raw);
+    series.add(s);
+    let row = byX.get(x);
+    if (!row) {
+      row = { __x: x };
+      byX.set(x, row);
+    }
+    const v = r[mIdx];
+    row[s] = v === null || v === undefined ? null : Number(v);
+  }
+  return { data: [...byX.values()], series: [...series].sort((a, b) => a.localeCompare(b)) };
 }
 
 type Formats = Record<string, MeasureFormat>;
@@ -158,6 +193,83 @@ export function LineChartViz({ data, left, right, palette, formats, legend }: Li
           />
         ))}
       </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+// ─── Area (overlapping / stacked) ────────────────────────────────────────────
+
+interface AreaProps extends BaseProps {
+  series: string[];
+  stacked?: boolean;
+}
+
+export function AreaChartViz({ data, series, palette, formats, stacked, legend }: AreaProps) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+        <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+        <XAxis type="category" dataKey="__x" {...commonAxis} />
+        <YAxis type="number" {...commonAxis} tickFormatter={tickFormatter(formats, series)} width={48} />
+        <Tooltip formatter={tooltipFormatter(formats)} contentStyle={TOOLTIP_STYLE} />
+        {legend && <Legend wrapperStyle={{ fontSize: 11 }} />}
+        {series.map((s, i) => (
+          <Area
+            key={s}
+            dataKey={s}
+            stackId={stacked ? "stack" : undefined}
+            stroke={palette[i % palette.length]}
+            fill={palette[i % palette.length]}
+            fillOpacity={stacked ? 0.7 : 0.3}
+            strokeWidth={2}
+            isAnimationActive={false}
+          />
+        ))}
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+// ─── Donut (one metric across the axis categories) ───────────────────────────
+
+interface DonutProps extends BaseProps {
+  /** Metric sliced across the categories (first Values field). */
+  metric: string;
+}
+
+export function DonutChartViz({ data, metric, palette, formats, legend }: DonutProps) {
+  const fmt = formats[metric];
+  const total = data.reduce((sum, r) => sum + (typeof r[metric] === "number" ? (r[metric] as number) : 0), 0);
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <PieChart margin={{ top: 8, right: 8, bottom: 4, left: 8 }}>
+        <Pie
+          data={data}
+          dataKey={metric}
+          nameKey="__x"
+          innerRadius="55%"
+          outerRadius="85%"
+          paddingAngle={1}
+          stroke="none"
+          isAnimationActive={false}
+        >
+          {data.map((_, i) => (
+            <Cell key={i} fill={palette[i % palette.length]} />
+          ))}
+        </Pie>
+        {/* Category values format like the sliced metric. */}
+        <Tooltip
+          formatter={(value: unknown, name: unknown): [string, string] => {
+            const v = typeof value === "number" ? value : String(value ?? "");
+            return [formatValue(v, fmt) || String(v), String(name ?? "")];
+          }}
+          contentStyle={TOOLTIP_STYLE}
+        />
+        {legend && <Legend wrapperStyle={{ fontSize: 11 }} />}
+        <text x="50%" y="50%" textAnchor="middle" dominantBaseline="middle" fill={AXIS} fontSize={13} fontWeight={600}>
+          {fmt ? formatValue(total, fmt) : compact.format(total)}
+        </text>
+      </PieChart>
     </ResponsiveContainer>
   );
 }

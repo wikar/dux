@@ -19,9 +19,11 @@ import {
   duplicateElement,
   isMetricRef,
   removeElement,
+  replaceFieldInWell,
   removeFieldFromElement,
   removeFilter,
   setFieldAggregate,
+  swapElementType,
   updateCanvas,
   updateElement,
   updateFilter,
@@ -65,6 +67,23 @@ function ElementSettings({ el }: { el: DashElement }) {
         <div className={styles.heading}>
           {TYPE_LABEL[el.type]} <span className={styles.id}>{el.id}</span>
         </div>
+
+        {QUERY_TYPES.has(el.type) && (
+          <>
+            <label className={styles.label}>Type</label>
+            <select
+              className={styles.input}
+              value={el.type}
+              onChange={(e) => swapElementType(el.id, e.target.value as ElementType)}
+            >
+              {[...QUERY_TYPES].map((t) => (
+                <option key={t} value={t}>
+                  {TYPE_LABEL[t]}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
 
         <label className={styles.label}>Title</label>
         <input
@@ -189,15 +208,22 @@ function ImageSection({ el }: { el: DashElement }) {
 
 // ─── Data section (wells / filters / sort / raw) ─────────────────────────────
 
-const WELLS: Partial<Record<ElementType, { id: WellId; label: string }[]>> = {
+const SERIES_HINT = "Drop a column — Splits the first Values measure into one series per value";
+
+// max marks single-slot wells: dropping onto a full one replaces the member.
+const WELLS: Partial<
+  Record<ElementType, { id: WellId; label: string; max?: number; hint?: string }[]>
+> = {
   bar: [
     { id: "axis", label: "Axis" },
     { id: "values", label: "Values" },
+    { id: "series", label: "Series by", max: 1, hint: SERIES_HINT },
   ],
   line: [
     { id: "axis", label: "Axis" },
     { id: "values", label: "Values" },
     { id: "y2", label: "Values · right axis" },
+    { id: "series", label: "Series by", max: 1, hint: SERIES_HINT },
   ],
   combo: [
     { id: "axis", label: "Axis" },
@@ -205,16 +231,21 @@ const WELLS: Partial<Record<ElementType, { id: WellId; label: string }[]>> = {
     { id: "lines", label: "Lines" },
   ],
   area: [
-    { id: "axis", label: "Axis" },
+    { id: "axis", label: "Category" },
     { id: "values", label: "Values" },
+    { id: "series", label: "Series by", max: 1, hint: SERIES_HINT },
   ],
   donut: [
-    { id: "axis", label: "Axis" },
+    { id: "axis", label: "Category", max: 1 },
+    { id: "values", label: "Value", max: 1 },
+  ],
+  kpi: [{ id: "values", label: "Value", max: 1 }],
+  table: [{ id: "fields", label: "Columns" }],
+  pivot: [
+    { id: "rows", label: "Rows" },
+    { id: "cols", label: "Columns" },
     { id: "values", label: "Values" },
   ],
-  kpi: [{ id: "values", label: "Value" }],
-  table: [{ id: "fields", label: "Columns" }],
-  pivot: [{ id: "fields", label: "Fields" }],
 };
 
 function wellMembers(el: DashElement, well: WellId): BuilderFieldRef[] {
@@ -222,9 +253,13 @@ function wellMembers(el: DashElement, well: WellId): BuilderFieldRef[] {
   const metrics = fields.filter(isMetricRef);
   const y2 = new Set(el.viz?.y2 ?? []);
   const lines = new Set(el.viz?.lines ?? []);
+  const cols = new Set(el.viz?.cols ?? []);
+  const series = el.viz?.series;
   switch (well) {
     case "axis":
-      return fields.filter((f) => !isMetricRef(f));
+      return fields.filter((f) => !isMetricRef(f) && f.name !== series);
+    case "series":
+      return fields.filter((f) => !isMetricRef(f) && f.name === series);
     case "fields":
       return fields;
     case "values":
@@ -235,6 +270,10 @@ function wellMembers(el: DashElement, well: WellId): BuilderFieldRef[] {
       return metrics.filter((f) => !lines.has(f.name));
     case "lines":
       return metrics.filter((f) => lines.has(f.name));
+    case "rows":
+      return fields.filter((f) => !isMetricRef(f) && !cols.has(f.name));
+    case "cols":
+      return fields.filter((f) => !isMetricRef(f) && cols.has(f.name));
   }
 }
 
@@ -528,7 +567,7 @@ function BuilderSection({ el }: { el: DashElement }) {
   return (
     <>
       {wells.map((w) => (
-        <Well key={w.id} el={el} well={w.id} label={w.label} />
+        <Well key={w.id} el={el} well={w.id} label={w.label} max={w.max} hint={w.hint} />
       ))}
       <FiltersWell el={el} />
 
@@ -575,7 +614,19 @@ function BuilderSection({ el }: { el: DashElement }) {
   );
 }
 
-function Well({ el, well, label }: { el: DashElement; well: WellId; label: string }) {
+function Well({
+  el,
+  well,
+  label,
+  max,
+  hint,
+}: {
+  el: DashElement;
+  well: WellId;
+  label: string;
+  max?: number;
+  hint?: string;
+}) {
   const members = wellMembers(el, well);
   const [over, setOver] = useState(false);
 
@@ -596,10 +647,19 @@ function Well({ el, well, label }: { el: DashElement; well: WellId; label: strin
           e.preventDefault();
           setOver(false);
           const raw = e.dataTransfer.getData("application/dux");
-          if (raw) addFieldToWell(el.id, well, JSON.parse(raw));
+          if (!raw) return;
+          const p = JSON.parse(raw) as DragPayload;
+          // A full single-slot well swaps its member for the dropped field.
+          if (max !== undefined && members.length >= max) {
+            replaceFieldInWell(el.id, well, members.map((m) => m.name), p);
+          } else {
+            addFieldToWell(el.id, well, p);
+          }
         }}
       >
-        {members.length === 0 && <span className={styles.wellHint}>Drop a field from Schema</span>}
+        {members.length === 0 && (
+          <span className={styles.wellHint}>{hint ?? "Drop a field from Schema"}</span>
+        )}
         {members.map((f, i) => (
           <FieldPill
             key={`${f.table}.${f.name}`}
@@ -712,7 +772,9 @@ function VizSection({ el }: { el: DashElement }) {
   const setViz = (patch: Record<string, unknown>) =>
     updateElement(el.id, (x) => ({ ...x, viz: { ...x.viz, ...patch } }));
 
-  const isChart = el.type === "bar" || el.type === "line" || el.type === "combo";
+  const isChart =
+    el.type === "bar" || el.type === "line" || el.type === "combo" ||
+    el.type === "area" || el.type === "donut";
   // Everything with an axis/rows can hide no-data items; KPI has no axis.
   const hasEmptyToggle = el.type !== "kpi";
   if (!isChart && !hasEmptyToggle) return null;
@@ -743,13 +805,45 @@ function VizSection({ el }: { el: DashElement }) {
             <option value="vertical">Vertical</option>
             <option value="horizontal">Horizontal</option>
           </select>
+        </>
+      )}
+
+      {(el.type === "bar" || el.type === "area") && (
+        <label className={styles.check}>
+          <input
+            type="checkbox"
+            checked={viz.stacked ?? false}
+            onChange={(e) => setViz({ stacked: e.target.checked })}
+          />
+          Stacked
+        </label>
+      )}
+
+      {el.type === "pivot" && (
+        <>
           <label className={styles.check}>
             <input
               type="checkbox"
-              checked={viz.stacked ?? false}
-              onChange={(e) => setViz({ stacked: e.target.checked })}
+              checked={viz.subtotals ?? true}
+              onChange={(e) => setViz({ subtotals: e.target.checked })}
             />
-            Stacked
+            Subtotals
+          </label>
+          <label className={styles.check}>
+            <input
+              type="checkbox"
+              checked={viz.grandTotal ?? true}
+              onChange={(e) => setViz({ grandTotal: e.target.checked })}
+            />
+            Grand total
+          </label>
+          <label className={styles.check}>
+            <input
+              type="checkbox"
+              checked={viz.totalCol ?? true}
+              onChange={(e) => setViz({ totalCol: e.target.checked })}
+            />
+            Total column
           </label>
         </>
       )}
@@ -864,7 +958,7 @@ function DashboardSettings() {
             />
           </label>
         )}
-        <div className={styles.hint}>The refresh timer itself arrives in M5; the setting is saved now.</div>
+        <div className={styles.hint}>Elements refetch on this interval, staggered ±10% (5s floor).</div>
       </div>
 
       <ThemeSection />

@@ -188,13 +188,19 @@
 .table th {
   position: sticky;
   top: 0;
-  background: var(--mantle);
+  /* Frosted glass: the sticky header stays transparent (the element
+     background shows through per its alpha) and rows scrolling underneath
+     blur behind a faint tint of the element background. */
+  background: color-mix(in srgb, var(--th-el-bg, var(--mantle)) 55%, transparent);
+  backdrop-filter: blur(8px);
   text-align: left;
   font-weight: 600;
-  color: var(--subtext1);
+  color: var(--th-text, var(--subtext1));
   padding: 5px 10px;
-  border-bottom: 1px solid var(--surface1);
+  border-bottom: 1px solid var(--th-border, var(--surface1));
   white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
 }
 
 .table td {
@@ -217,6 +223,117 @@
   padding: 4px 10px;
   font-size: 11px;
   color: var(--subtext0);
+}
+
+/* ── CSV export (appears when hovering a query-backed element) ── */
+
+.exportBtn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 3;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid var(--surface1);
+  background: var(--mantle);
+  color: var(--subtext0);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.dataWrap:hover .exportBtn {
+  opacity: 0.75;
+}
+
+.exportBtn:hover {
+  opacity: 1 !important;
+  color: var(--text);
+}
+
+/* ── Pivot / matrix ── */
+
+.pvHeader {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  /* See .table th — frosted-glass sticky header. */
+  background: color-mix(in srgb, var(--th-el-bg, var(--mantle)) 55%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--th-border, var(--surface1));
+}
+
+.pvRow {
+  display: flex;
+  font-size: 12px;
+}
+
+.pvCorner,
+.pvColHead,
+.pvMetricHead {
+  flex: none;
+  padding: 4px 8px;
+  font-weight: 600;
+  color: var(--th-text, var(--subtext1));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pvColHead {
+  text-align: center;
+  border-left: 1px solid var(--surface0);
+}
+
+.pvMetricHead {
+  text-align: right;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--th-text, var(--subtext0));
+  opacity: 0.75;
+}
+
+.pvRowHead {
+  flex: none;
+  padding: 4px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pvCell {
+  flex: none;
+  padding: 4px 8px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pvTotalCol {
+  border-left: 1px solid var(--surface0);
+  font-weight: 600;
+}
+
+.pvGroup .pvRowHead {
+  font-weight: 600;
+  color: var(--subtext1);
+}
+
+.pvSubtotal {
+  color: var(--subtext1);
+  font-weight: 600;
+  background: rgba(49, 50, 68, 0.35);
+}
+
+.pvGrand {
+  font-weight: 700;
+  border-top: 1px solid var(--surface1);
+  background: rgba(49, 50, 68, 0.5);
 }
 
 /* ── Placeholder for not-yet-implemented element types ── */

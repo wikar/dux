@@ -110,6 +110,30 @@ export function addElement(type: ElementType) {
   if (newId) useUiStore.getState().select(newId);
 }
 
+/** Swap a query element to another query type, remapping well memberships
+ *  instead of resetting them. Non-destructive: viz keys the new type ignores
+ *  stay in the document so swapping back restores the old look. */
+export function swapElementType(id: string, type: ElementType) {
+  updateElement(id, (el) => {
+    if (el.type === type || !QUERY_TYPES.has(el.type) || !QUERY_TYPES.has(type)) return el;
+    const next: DashElement = { ...el, type };
+    // A default title follows the type; a custom one is kept.
+    if ((el.title?.text ?? "") === TYPE_LABEL[el.type]) {
+      next.title = { ...el.title, text: TYPE_LABEL[type] };
+    }
+    // The right-axis series of a line map to the combo's lines and back.
+    const viz = { ...el.viz };
+    if (type === "combo" && el.type === "line" && !viz.lines?.length && viz.y2?.length) {
+      viz.lines = viz.y2;
+    }
+    if (type === "line" && el.type === "combo" && !viz.y2?.length && viz.lines?.length) {
+      viz.y2 = viz.lines;
+    }
+    next.viz = viz;
+    return next;
+  });
+}
+
 export function updateElement(id: string, fn: (el: DashElement) => DashElement) {
   useDocStore.getState().update((doc) => ({
     ...doc,
@@ -196,7 +220,8 @@ export function updateCanvas(fn: (doc: Dashboard) => Dashboard) {
 // the DUX query derives from it alone). Wells are views over it: metric
 // membership in the line/combo secondary wells lives in viz.y2 / viz.lines.
 
-export type WellId = "axis" | "values" | "y2" | "bars" | "lines" | "fields";
+export type WellId =
+  | "axis" | "values" | "y2" | "bars" | "lines" | "fields" | "rows" | "cols" | "series";
 
 /** True when the field produces a metric output column. */
 export function isMetricRef(f: BuilderFieldRef): boolean {
@@ -210,54 +235,68 @@ function insertDim(fields: BuilderFieldRef[], field: BuilderFieldRef) {
   else fields.splice(at, 0, field);
 }
 
-/** Drop a schema field into a well. Incompatible drops are ignored:
+/** Pure add: drop a schema field into a well. Incompatible drops are ignored:
  *  measures can't be dims, non-numeric columns can't be metrics. */
-export function addFieldToWell(id: string, well: WellId, p: DragPayload) {
-  updateElement(id, (el) => {
-    const q = el.query ?? { mode: "builder" as const };
-    const fields = [...(q.fields ?? [])];
-    if (fields.some((f) => f.table === p.table && f.name === p.name)) return el;
-    const numeric = isNumeric(p.dataType);
+function addFieldPure(el: DashElement, well: WellId, p: DragPayload): DashElement {
+  const q = el.query ?? { mode: "builder" as const };
+  const fields = [...(q.fields ?? [])];
+  if (fields.some((f) => f.table === p.table && f.name === p.name)) return el;
+  const numeric = isNumeric(p.dataType);
 
-    const field: BuilderFieldRef = { table: p.table, name: p.name, kind: p.kind, dataType: p.dataType };
-    if (well === "axis") {
-      if (p.kind === "measure") return el;
-      if (numeric) field.aggregate = "VALUES"; // numeric column as a dim
-      insertDim(fields, field);
-    } else if (well === "fields") {
-      if (p.kind === "column" && numeric) field.aggregate = "SUM";
-      if (isMetricRef(field)) fields.push(field);
-      else insertDim(fields, field);
-    } else {
-      if (p.kind !== "measure" && !numeric) return el;
-      if (p.kind === "column") field.aggregate = "SUM";
-      fields.push(field);
-    }
+  const field: BuilderFieldRef = { table: p.table, name: p.name, kind: p.kind, dataType: p.dataType };
+  if (well === "axis" || well === "rows" || well === "cols" || well === "series") {
+    if (p.kind === "measure") return el;
+    if (numeric) field.aggregate = "VALUES"; // numeric column as a dim
+    insertDim(fields, field);
+  } else if (well === "fields") {
+    if (p.kind === "column" && numeric) field.aggregate = "SUM";
+    if (isMetricRef(field)) fields.push(field);
+    else insertDim(fields, field);
+  } else {
+    if (p.kind !== "measure" && !numeric) return el;
+    if (p.kind === "column") field.aggregate = "SUM";
+    fields.push(field);
+  }
 
-    const viz = { ...el.viz };
-    if (well === "y2") viz.y2 = [...(viz.y2 ?? []), p.name];
-    if (well === "lines") viz.lines = [...(viz.lines ?? []), p.name];
-    return { ...el, query: { ...q, fields }, viz };
-  });
+  const viz = { ...el.viz };
+  if (well === "y2") viz.y2 = [...(viz.y2 ?? []), p.name];
+  if (well === "lines") viz.lines = [...(viz.lines ?? []), p.name];
+  if (well === "cols") viz.cols = [...(viz.cols ?? []), p.name];
+  if (well === "series") viz.series = p.name;
+  return { ...el, query: { ...q, fields }, viz };
 }
 
-/** Remove a field everywhere: list, well memberships, and sort keys. */
+/** Pure remove: a field leaves the list, well memberships, and sort keys. */
+function removeFieldPure(el: DashElement, name: string): DashElement {
+  const q = el.query ?? { mode: "builder" as const };
+  const viz = { ...el.viz };
+  if (viz.y2) viz.y2 = viz.y2.filter((n) => n !== name);
+  if (viz.lines) viz.lines = viz.lines.filter((n) => n !== name);
+  if (viz.cols) viz.cols = viz.cols.filter((n) => n !== name);
+  if (viz.series === name) delete viz.series;
+  return {
+    ...el,
+    query: {
+      ...q,
+      fields: (q.fields ?? []).filter((f) => f.name !== name),
+      sort: (q.sort ?? []).filter((s) => s.field !== name),
+    },
+    viz,
+  };
+}
+
+export function addFieldToWell(id: string, well: WellId, p: DragPayload) {
+  updateElement(id, (el) => addFieldPure(el, well, p));
+}
+
+/** Drop into a single-slot well: the current member(s) are replaced by the
+ *  new field in one undo step. */
+export function replaceFieldInWell(id: string, well: WellId, names: string[], p: DragPayload) {
+  updateElement(id, (el) => addFieldPure(names.reduce(removeFieldPure, el), well, p));
+}
+
 export function removeFieldFromElement(id: string, name: string) {
-  updateElement(id, (el) => {
-    const q = el.query ?? { mode: "builder" as const };
-    const viz = { ...el.viz };
-    if (viz.y2) viz.y2 = viz.y2.filter((n) => n !== name);
-    if (viz.lines) viz.lines = viz.lines.filter((n) => n !== name);
-    return {
-      ...el,
-      query: {
-        ...q,
-        fields: (q.fields ?? []).filter((f) => f.name !== name),
-        sort: (q.sort ?? []).filter((s) => s.field !== name),
-      },
-      viz,
-    };
-  });
+  updateElement(id, (el) => removeFieldPure(el, name));
 }
 
 export function setFieldAggregate(id: string, name: string, aggregate: Aggregate) {
@@ -268,6 +307,10 @@ export function setFieldAggregate(id: string, name: string, aggregate: Aggregate
       // Became a dim — drop any metric-well membership.
       if (viz.y2) viz.y2 = viz.y2.filter((n) => n !== name);
       if (viz.lines) viz.lines = viz.lines.filter((n) => n !== name);
+    } else {
+      // Became a metric — dim-well memberships can't stay.
+      if (viz.cols) viz.cols = viz.cols.filter((n) => n !== name);
+      if (viz.series === name) delete viz.series;
     }
     return {
       ...el,

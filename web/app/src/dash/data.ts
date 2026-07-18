@@ -2,7 +2,7 @@
 // Identical queries share one cache entry (dedupe); superseded fetches are
 // aborted via the query's AbortSignal (stale cancellation).
 import { useMemo } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQueries, useQuery } from "@tanstack/react-query";
 import { duxClient, generateQuery, isMetricField, isNumeric } from "@dux/core";
 import type {
   DropField,
@@ -75,7 +75,7 @@ export function buildElementDux(el: DashElement): string {
   let sort = q.sort;
   // Line-shaped charts default to ordering by their axis columns ascending
   // (first axis column, then the second, …) so series connect sensibly.
-  if ((!sort || sort.length === 0) && (el.type === "line" || el.type === "combo")) {
+  if ((!sort || sort.length === 0) && (el.type === "line" || el.type === "combo" || el.type === "area")) {
     sort = elementFields(el)
       .filter((f) => !isMetricField(f))
       .map((f) => ({ field: f.name, dir: "asc" as const }));
@@ -202,6 +202,99 @@ export function useElementData(el: DashElement): ElementDataState {
     error: (q.error as Error | null) ?? null,
     loading: q.isFetching,
   };
+}
+
+// ─── Pivot totals ────────────────────────────────────────────────────────────
+//
+// The pivot's main data is the flat query over all dims (rows + cols) that
+// useElementData already runs. Subtotals and grand totals are separate
+// queries per grouping level — measures aren't additive, so totals can never
+// be summed client-side. All share the "eldata" cache namespace (dedupe with
+// the main fetch) and reflect the element's filters and the slicer fan-out;
+// topN deliberately doesn't apply to totals.
+
+/** Row dims, column dims (viz.cols membership), and metrics of a pivot. */
+export function pivotParts(el: DashElement): { rowDims: DropField[]; colDims: DropField[]; metrics: DropField[] } {
+  const { dims, metrics } = splitElementFields(el);
+  const cols = new Set(el.viz?.cols ?? []);
+  return {
+    rowDims: dims.filter((f) => !cols.has(f.name)),
+    colDims: dims.filter((f) => cols.has(f.name)),
+    metrics,
+  };
+}
+
+/** Key of one totals query: row-group level + whether the column dims are in.
+ *  Level l groups by the first l row dims (0 = grand total). */
+export function totalsKey(level: number, withCols: boolean): string {
+  return `${level}|${withCols ? "c" : "t"}`;
+}
+
+interface TotalsSpec {
+  key: string;
+  dux: string;
+}
+
+/** The totals queries a pivot needs beside its main flat query. */
+export function buildPivotTotalQueries(el: DashElement): TotalsSpec[] {
+  if (el.query?.mode === "raw") return [];
+  const { rowDims, colDims, metrics } = pivotParts(el);
+  if (metrics.length === 0) return [];
+  const viz = el.viz ?? {};
+  const subtotals = viz.subtotals ?? true;
+  const grandTotal = viz.grandTotal ?? true;
+  const totalCol = (viz.totalCol ?? true) && colDims.length > 0;
+  const filters = elementFilters(el);
+
+  const levels: number[] = [];
+  if (subtotals) for (let l = 1; l < rowDims.length; l++) levels.push(l);
+  if (grandTotal) levels.push(0);
+
+  const out: TotalsSpec[] = [];
+  for (const l of levels) {
+    out.push({
+      key: totalsKey(l, true),
+      dux: generateQuery([...rowDims.slice(0, l), ...colDims, ...metrics], filters),
+    });
+  }
+  if (totalCol) {
+    // The total column needs every row's cross-column total too (level R).
+    for (const l of [...levels, rowDims.length]) {
+      out.push({ key: totalsKey(l, false), dux: generateQuery([...rowDims.slice(0, l), ...metrics], filters) });
+    }
+  }
+  // Dedupe (level R with no cols equals level R with cols when cols is empty …).
+  const seen = new Set<string>();
+  return out.filter((s) => !seen.has(s.key) && (seen.add(s.key), s.dux !== ""));
+}
+
+export interface PivotTotalsState {
+  /** Query results keyed by totalsKey(level, withCols). */
+  byKey: Record<string, QueryResponse | undefined>;
+  loading: boolean;
+}
+
+/** Fetch a pivot's subtotal/grand-total queries alongside the main fetch. */
+export function usePivotTotals(el: DashElement): PivotTotalsState {
+  const specs = useMemo(() => buildPivotTotalQueries(el), [el.query, el.viz]);
+  const filters = useExternalFilters(el);
+  const filterKey = JSON.stringify(filters);
+  const refetchInterval = useRefreshInterval(el.id);
+  const results = useQueries({
+    queries: specs.map((s) => ({
+      queryKey: ["eldata", s.dux, filterKey],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        duxClient.executeQueryFiltered(s.dux, filters, { signal }),
+      placeholderData: keepPreviousData,
+      retry: 0,
+      staleTime: 15_000,
+      refetchInterval,
+      refetchIntervalInBackground: true,
+    })),
+  });
+  const byKey: Record<string, QueryResponse | undefined> = {};
+  specs.forEach((s, i) => (byKey[s.key] = results[i]?.data));
+  return { byKey, loading: results.some((r) => r.isFetching) };
 }
 
 // ─── Slicer options ──────────────────────────────────────────────────────────
