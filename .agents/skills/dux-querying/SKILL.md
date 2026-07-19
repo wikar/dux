@@ -123,6 +123,10 @@ the DUX), POST a JSON envelope instead — see
 There is also a CLI: `dux query.dux` runs a file; bare `dux` opens a REPL
 (finish a multi-line query with a blank line).
 
+The running server documents its full HTTP API at `GET /openapi.json`
+(OpenAPI 3.1; browsable Scalar UI at `/docs`) — consult it when this skill
+and the server disagree; the server is newer.
+
 ## Errors and debugging
 
 Query errors return HTTP 4xx/5xx JSON:

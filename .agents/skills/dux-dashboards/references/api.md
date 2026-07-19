@@ -4,6 +4,11 @@ Dashboards are files under the server's `dashboards/` directory; the path
 (without `.json`) is the identity. Disable the whole module with
 `DUX_DASH=0` (the endpoints then return 404).
 
+The running server documents its full HTTP API at `GET /openapi.json`
+(OpenAPI 3.1, includes these endpoints; browsable Scalar UI at `/docs`) —
+consult it when this reference and the server disagree; the server is
+newer.
+
 ## Documents
 
 ```

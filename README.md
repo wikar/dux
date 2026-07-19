@@ -304,9 +304,10 @@ DELETE /hidden               (unhide — same body shapes)
 ### Reference UI
 
 ```
-GET /docs/*       Interactive API reference (Scalar)
-GET /             DUX UI — query builder, Explorer, and dashboards (/dash/)
-*   /api/dash/*   Dashboards API (see Dashboards above)
+GET /docs/*         Interactive API reference (Scalar)
+GET /openapi.json   The OpenAPI 3.1 spec behind it (machine-readable)
+GET /               DUX UI — query builder, Explorer, and dashboards (/dash/)
+*   /api/dash/*     Dashboards API (see Dashboards above)
 ```
 
 ## Measures and relationships

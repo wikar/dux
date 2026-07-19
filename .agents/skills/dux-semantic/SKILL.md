@@ -36,6 +36,10 @@ formats), hidden designations, and the date table. Always fetch it before
 modifying a model — names must match exactly (dot-qualified, case
 preserved).
 
+The running server documents its full HTTP API at `GET /openapi.json`
+(OpenAPI 3.1; browsable Scalar UI at `/docs`) — consult it when this skill
+and the server disagree; the server is newer.
+
 ## Measures
 
 A measure is a named DUX expression bound to a home table:

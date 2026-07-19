@@ -57,10 +57,14 @@ export default function FieldPill(props: FieldPillProps) {
   }
 
   function handleDrop(e: DragEvent) {
+    // Only intercept pill-reorder drops. A schema-field drop that lands on a
+    // pill must bubble to the containing well/zone and add the field there —
+    // a populated well is mostly pill surface.
+    if (!e.dataTransfer.types.includes("application/dux-index")) return;
     e.preventDefault();
     e.stopPropagation();
     const fromStr = e.dataTransfer.getData("application/dux-index");
-    if (fromStr === undefined || fromStr === "") return;
+    if (fromStr === "") return;
     const from = Number(fromStr);
     if (!isNaN(from) && from !== props.index) {
       props.onReorder(from);

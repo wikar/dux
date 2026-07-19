@@ -306,7 +306,7 @@ export default function PivotBody({ el, data, formats }: Props) {
                       onPointerDown={(e) => e.stopPropagation()}
                       onClick={() => toggle(dr.key)}
                     >
-                      {dr.collapsed ? "▸" : "▾"}
+                      {dr.collapsed ? "+" : "−"}
                     </button>
                   )}
                   {dr.label}
