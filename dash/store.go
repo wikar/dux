@@ -500,25 +500,9 @@ var assetMIME = map[string]string{
 	".svg":  "image/svg+xml",
 }
 
-// PutAsset stores an image asset at the given path. The extension decides the
-// type; only assetMIME extensions are allowed. Size limits are enforced by
-// the HTTP layer.
-func (s *Store) PutAsset(rawPath string, data []byte) (mime string, err error) {
-	clean, err := CleanPath(rawPath)
-	if err != nil {
-		return "", err
-	}
-	mime, ok := assetMIME[path.Ext(clean)]
-	if !ok {
-		return "", fmt.Errorf("unsupported asset type %q (allowed: png, jpg, jpeg, webp, svg)", path.Ext(clean))
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	target, _ := s.resolvePath(clean)
-	return mime, writeAtomic(target, data)
-}
-
-// GetAsset reads an asset and its content type.
+// GetAsset reads an asset and its content type. Assets are image files kept
+// on disk under the dashboards root (deployed alongside the documents) —
+// there is no upload path; only assetMIME extensions are served.
 func (s *Store) GetAsset(rawPath string) (data []byte, mime string, err error) {
 	clean, err := CleanPath(rawPath)
 	if err != nil {

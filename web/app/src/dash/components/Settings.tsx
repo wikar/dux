@@ -845,6 +845,14 @@ function VizSection({ el }: { el: DashElement }) {
             />
             Total column
           </label>
+          <label className={styles.check}>
+            <input
+              type="checkbox"
+              checked={viz.collapsed ?? true}
+              onChange={(e) => setViz({ collapsed: e.target.checked })}
+            />
+            Start collapsed
+          </label>
         </>
       )}
 

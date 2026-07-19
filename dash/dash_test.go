@@ -20,7 +20,7 @@ import (
 func newTestServer(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "dashboards")
-	srv, err := dash.NewServer(dash.Config{Root: root, MaxAssetBytes: 1 << 20})
+	srv, err := dash.NewServer(dash.Config{Root: root})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -372,46 +372,51 @@ func TestPathValidation(t *testing.T) {
 	}
 }
 
+// Assets are read-only over HTTP: image files placed on disk under the
+// dashboards root are served, nothing else — there is no upload endpoint.
 func TestAssets(t *testing.T) {
-	ts, _ := newTestServer(t)
+	ts, root := newTestServer(t)
 
 	png := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0}, 64)...)
+	mustWriteFile(t, filepath.Join(root, "Sales", "assets", "bg.png"), png)
 
-	// Upload + fetch a PNG.
-	res := do(t, "POST", ts.URL+"/api/dash/assets/Sales/assets/bg.png", string(png), nil)
-	if res.StatusCode != http.StatusCreated {
-		t.Fatalf("upload png: expected 201, got %d", res.StatusCode)
-	}
-	res = do(t, "GET", ts.URL+"/api/dash/assets/Sales/assets/bg.png", "", nil)
+	res := do(t, "GET", ts.URL+"/api/dash/assets/Sales/assets/bg.png", "", nil)
 	if res.StatusCode != http.StatusOK || res.Header.Get("Content-Type") != "image/png" {
 		t.Fatalf("get png: got %d / %s", res.StatusCode, res.Header.Get("Content-Type"))
 	}
 
-	// Disallowed extension → 415.
-	res = do(t, "POST", ts.URL+"/api/dash/assets/evil.html", "<script>", nil)
-	if res.StatusCode != http.StatusUnsupportedMediaType {
-		t.Fatalf("html asset: expected 415, got %d", res.StatusCode)
+	// The upload path is gone: POST is a 405 on the GET-only route.
+	res = do(t, "POST", ts.URL+"/api/dash/assets/new.png", string(png), nil)
+	if res.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("asset upload: expected 405, got %d", res.StatusCode)
 	}
 
-	// Oversize → 413 (test server caps at 1 MiB).
-	big := strings.Repeat("x", (1<<20)+1)
-	res = do(t, "POST", ts.URL+"/api/dash/assets/big.png", big, nil)
-	if res.StatusCode != http.StatusRequestEntityTooLarge {
-		t.Fatalf("oversize: expected 413, got %d", res.StatusCode)
+	// Non-image extensions on disk are never served.
+	mustWriteFile(t, filepath.Join(root, "evil.html"), []byte("<script>"))
+	res = do(t, "GET", ts.URL+"/api/dash/assets/evil.html", "", nil)
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("html asset: expected 404, got %d", res.StatusCode)
 	}
 
 	// SVG is served with a no-execute CSP.
-	svg := `<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`
-	res = do(t, "POST", ts.URL+"/api/dash/assets/logo.svg", svg, nil)
-	if res.StatusCode != http.StatusCreated {
-		t.Fatalf("upload svg: expected 201, got %d", res.StatusCode)
-	}
+	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`)
+	mustWriteFile(t, filepath.Join(root, "logo.svg"), svg)
 	res = do(t, "GET", ts.URL+"/api/dash/assets/logo.svg", "", nil)
 	if csp := res.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'none'") {
 		t.Errorf("svg should carry a no-execute CSP, got %q", csp)
 	}
 	if res.Header.Get("X-Content-Type-Options") != "nosniff" {
 		t.Error("assets should be served with nosniff")
+	}
+}
+
+func mustWriteFile(t *testing.T, target string, data []byte) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, data, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

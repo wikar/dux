@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "canvas": { "width": 1280, "height": 720 },
+  "refresh": { "enabled": false, "intervalSeconds": 60 },
+  "elements": [
+    {
+      "id": "kpi-1",
+      "type": "kpi",
+      "layout": { "x": 16, "y": 16, "w": 200, "h": 104, "z": 1 },
+      "title": { "text": "Total", "show": true },
+      "query": {
+        "mode": "builder",
+        "fields": [{ "table": "atp.matches", "name": "Matches", "kind": "measure" }]
+      }
+    },
+    {
+      "id": "bar-1",
+      "type": "bar",
+      "layout": { "x": 232, "y": 16, "w": 400, "h": 240, "z": 2 },
+      "title": { "text": "Matches by surface", "show": true },
+      "query": {
+        "mode": "builder",
+        "fields": [
+          { "table": "atp.matches", "name": "surface", "kind": "column", "dataType": "VARCHAR" },
+          { "table": "atp.matches", "name": "Matches", "kind": "measure" }
+        ],
+        "sort": [{ "field": "Matches", "dir": "desc" }]
+      }
+    },
+    {
+      "id": "area-1",
+      "type": "area",
+      "layout": { "x": 648, "y": 16, "w": 480, "h": 240, "z": 3 },
+      "title": { "text": "Matches by round, split by surface", "show": true },
+      "query": {
+        "mode": "builder",
+        "fields": [
+          { "table": "atp.matches", "name": "round", "kind": "column", "dataType": "VARCHAR" },
+          { "table": "atp.matches", "name": "surface", "kind": "column", "dataType": "VARCHAR" },
+          { "table": "atp.matches", "name": "Matches", "kind": "measure" }
+        ]
+      },
+      "viz": { "series": "surface", "stacked": true }
+    },
+    {
+      "id": "pivot-1",
+      "type": "pivot",
+      "layout": { "x": 232, "y": 272, "w": 640, "h": 320, "z": 4 },
+      "title": { "text": "Level × surface", "show": true },
+      "query": {
+        "mode": "builder",
+        "fields": [
+          { "table": "atp.matches", "name": "tourney_level", "kind": "column", "dataType": "VARCHAR" },
+          { "table": "atp.matches", "name": "surface", "kind": "column", "dataType": "VARCHAR" },
+          { "table": "atp.matches", "name": "best_of", "kind": "column", "dataType": "BIGINT", "aggregate": "VALUES" },
+          { "table": "atp.matches", "name": "Matches", "kind": "measure" }
+        ]
+      },
+      "viz": { "cols": ["best_of"] }
+    },
+    {
+      "id": "slicer-1",
+      "type": "slicer",
+      "layout": { "x": 16, "y": 136, "w": 200, "h": 240, "z": 5 },
+      "title": { "text": "tourney_level", "show": true },
+      "slicer": {
+        "table": "atp.matches",
+        "column": "tourney_level",
+        "dataType": "VARCHAR",
+        "kind": "buttons",
+        "multi": true
+      }
+    },
+    {
+      "id": "text-1",
+      "type": "text",
+      "layout": { "x": 888, "y": 272, "w": 240, "h": 160, "z": 6 },
+      "text": { "markdown": "## Notes\n\nEdit any element's query, then share a filtered view via the `?f=` link." }
+    }
+  ]
+}

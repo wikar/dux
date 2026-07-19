@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"path"
-	"strings"
 )
 
 // maxDocumentBytes caps dashboard document uploads (documents are hand-sized
@@ -18,8 +17,6 @@ const maxDocumentBytes = 4 << 20
 type Config struct {
 	// Root is the dashboards directory (created lazily on first write).
 	Root string
-	// MaxAssetBytes caps asset uploads. Default 10 MiB.
-	MaxAssetBytes int64
 	// RefreshFloorSeconds is the minimum allowed live-refresh interval.
 	// Default 5; 0 keeps the default (use -1 to disable the check).
 	RefreshFloorSeconds int
@@ -36,9 +33,6 @@ type Server struct {
 func NewServer(cfg Config) (*Server, error) {
 	if cfg.Root == "" {
 		cfg.Root = "dashboards"
-	}
-	if cfg.MaxAssetBytes <= 0 {
-		cfg.MaxAssetBytes = 10 << 20
 	}
 	if cfg.RefreshFloorSeconds == 0 {
 		cfg.RefreshFloorSeconds = 5
@@ -58,7 +52,6 @@ func NewServer(cfg Config) (*Server, error) {
 	m.HandleFunc("GET /api/dash/dashboards/{path...}", s.handleGet)
 	m.HandleFunc("PUT /api/dash/dashboards/{path...}", s.handlePut)
 	m.HandleFunc("DELETE /api/dash/dashboards/{path...}", s.handleDelete)
-	m.HandleFunc("POST /api/dash/assets/{path...}", s.handlePutAsset)
 	m.HandleFunc("GET /api/dash/assets/{path...}", s.handleGetAsset)
 	m.HandleFunc("GET /api/dash/theme", s.handleGetTheme)
 	m.HandleFunc("PUT /api/dash/theme", s.handlePutTheme)
@@ -135,29 +128,10 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) handlePutAsset(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.cfg.MaxAssetBytes))
-	if err != nil {
-		jsonError(w, http.StatusRequestEntityTooLarge,
-			fmt.Sprintf("asset exceeds the %d byte limit", s.cfg.MaxAssetBytes))
-		return
-	}
-	if len(body) == 0 {
-		jsonError(w, http.StatusBadRequest, "empty asset body")
-		return
-	}
-	mime, err := s.store.PutAsset(r.PathValue("path"), body)
-	if err != nil {
-		if strings.Contains(err.Error(), "unsupported asset type") {
-			jsonError(w, http.StatusUnsupportedMediaType, err.Error())
-			return
-		}
-		jsonError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{"path": r.PathValue("path"), "type": mime})
-}
-
+// Assets are read-only over HTTP: image files live on disk under the
+// dashboards root (versioned and deployed alongside the documents) and are
+// only served here. There is deliberately no upload endpoint — uploaded
+// blobs would need their own lifecycle management.
 func (s *Server) handleGetAsset(w http.ResponseWriter, r *http.Request) {
 	data, mime, err := s.store.GetAsset(r.PathValue("path"))
 	if err != nil {

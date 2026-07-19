@@ -1,0 +1,38 @@
+name: Package Skills
+
+# Zips each agent skill under .agents/skills/ into <name>.zip and attaches
+# them to the GitHub release for the pushed tag (created if it doesn't
+# exist). A zip unpacks to the skill directory itself (SKILL.md at
+# <name>/SKILL.md), matching the agentskills.io layout.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Zip each skill
+        run: |
+          set -euo pipefail
+          mkdir -p dist/skills
+          cd .agents/skills
+          for dir in */; do
+            name="${dir%/}"
+            [ -f "$name/SKILL.md" ] || { echo "skipping $name (no SKILL.md)"; continue; }
+            zip -r "../../dist/skills/$name.zip" "$name"
+            echo "packaged $name"
+          done
+          ls -l ../../dist/skills
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/skills/*.zip

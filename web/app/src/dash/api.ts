@@ -95,19 +95,8 @@ export async function deleteDashboard(path: string, etag: string): Promise<void>
   if (!res.ok && res.status !== 204) throw new Error(await errText(res));
 }
 
-/** Upload an image asset; the path's extension decides the MIME type. */
-export async function uploadAsset(
-  path: string,
-  data: Blob
-): Promise<{ path: string; type: string }> {
-  const res = await fetch(`/api/dash/assets/${encodePath(path)}`, {
-    method: "POST",
-    body: data,
-  });
-  if (!res.ok) throw new Error(await errText(res));
-  return res.json();
-}
-
+// Assets are read-only: image files live on disk under the dashboards root
+// and are only served (no upload endpoint).
 export function assetUrl(path: string): string {
   return `/api/dash/assets/${encodePath(path)}`;
 }

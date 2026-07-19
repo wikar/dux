@@ -5,16 +5,18 @@ An analytical query language and semantic modelling platform built on top of Duc
 DUX is more than a query interpreter. It ships with:
 
 - **A semantic model** — tables, relationships, and named measures are declared once in `dux.toml` or managed at runtime, and are automatically applied to every query.
-- **An HTTP server (`duxd`)** — exposes a REST API for executing queries, inspecting the schema, and managing measures and relationships. Embeds an interactive query builder UI and Scalar API reference.
+- **An HTTP server (`duxd`)** — exposes a REST API for executing queries, inspecting the schema, and managing measures and relationships. Embeds the DUX UI (query builder, model explorer, and dashboards) and a Scalar API reference.
+- **Dashboards (Dash)** — canvas dashboards built from DUX-backed elements, stored as plain JSON files and editable in the UI or through the API. See [Dashboards](#dashboards-dash).
 - **A CLI (`dux`)** — run one-off queries against the DUX semantic model directly from the terminal.
+- **Agent skills** — packaged instructions for AI agents (querying, modelling, dashboard building) under [`.agents/skills/`](.agents/skills/), zipped onto every release.
 
 ## Quick start with Docker
 
 ```sh
-docker run -d -v /db:/app/db ghcr.io/wikar/dux:latest
+docker run -d -v /db:/app/db -v /dashboards:/app/dashboards ghcr.io/wikar/dux:latest
 ```
 
-Mount your database directory to `/app/db` — the container runs `duxd` and listens on port 8080.
+Mount your database directory to `/app/db` — the container runs `duxd` and listens on port 8080. Mount `/app/dashboards` to persist dashboards (omit it — or set `DUX_DASH=0` — if you don't use them).
 
 ## Requirements
 
@@ -79,8 +81,10 @@ go build ./cmd/duxd    # query server
 db/                  Data and metadata databases
   dux.duckdb         Created automatically on first startup (measures, relationships)
   *.duckdb / *.db    Your data files — attached read-only
+dashboards/          Dashboard documents (one JSON file each) + theme.json
 dux.toml             Portable export of measures and relationships
 samples/             Example .dux queries
+.agents/skills/      Agent skills (packaged per release)
 ```
 
 Both `dux` and `duxd` share the same database model: `db/dux.duckdb` is the read-write metadata store, and every other `*.duckdb` / `*.db` file in the directory is attached read-only. Tables inside an attachment are referenced with a dot-qualified name (e.g. `atp.matches`).
@@ -117,17 +121,46 @@ Starts a long-running query server. Uses the same `db/` directory convention as 
 duxd
 ```
 
-Listens on `:8080`.
+Listens on `:8080` (`--listen`).
 
 **Flags**
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--listen` | `:8080` | HTTP listen address |
 | `--db-dir` | `db` | Directory containing data and metadata databases |
 | `--dux` | `<db-dir>/dux.duckdb` | Path to the metadata database |
 | `--toml` | `dux.toml` | Load measures and relationships from a `dux.toml` file |
 | `--import` | — | Import a `dux.toml` into the metadata DB on startup |
 | `--export` | — | Export current schema to a `dux.toml` file and exit |
+| `--dash-dir` | `dashboards` | Dashboard file store directory |
+| `--version` | — | Print version and exit |
+
+Set `DUX_DASH=0` to disable the dashboards module (`/dash/` and `/api/dash/` return 404).
+
+## Dashboards (Dash)
+
+`duxd` serves a dashboard designer and viewer at `/dash/`. Each dashboard is **one JSON file** under `dashboards/` — the path is its identity (`dashboards/sales/overview.json` ↔ `/dash/sales/overview`) — so dashboards diff, version, and deploy like code.
+
+Capabilities:
+
+- **Elements**: bar / line / combo / area / donut charts (with stacking, dual axes, and a series-split "Series by" well), tables (virtualized, sortable), pivot/matrix with query-backed subtotals (correct for non-additive measures), KPI cards, markdown text, and images. Element types hot-swap with their field wells remapped.
+- **Slicers & cross-filtering**: buttons / dropdown / range / date-range slicers filter every element (AND semantics) and cascade each other's option lists. Selections live in the URL's `?f=` parameter — a shareable deep link — and `?fullscreen` gives a chrome-less wall-display view. Per-element CSV export.
+- **Themes**: all styling flows from theme tokens (palette, backgrounds, borders, text, font — every color with alpha) cascading defaults ← `dashboards/theme.json` ← per-dashboard overrides.
+- **Live refresh**: per-dashboard interval with a server-side floor and per-element stagger.
+- **API-first**: everything the UI does goes through `/api/dash` — list/get/put/delete documents with ETag concurrency (`If-Match: *` for unconditional agent writes, `?raw=1` for verbatim download), theme, and the document JSON schema at `GET /api/dash/schema.json`. Every PUT is schema-validated server-side. Images are referenced by URL; image files placed in the `dashboards/` directory are served read-only at `/api/dash/assets/...` (no uploads — assets are versioned and deployed like the documents).
+
+```sh
+# Publish a dashboard from a file (create-or-overwrite)
+curl -X PUT http://localhost:8080/api/dash/dashboards/sales/overview \
+  -H 'If-Match: *' --data-binary @overview.json
+```
+
+The [`dux-dashboards`](.agents/skills/dux-dashboards/) agent skill documents the document format and API in full.
+
+## Agent skills
+
+[`.agents/skills/`](.agents/skills/) contains three [Agent Skills](https://agentskills.io) for AI agents working against a DUX server: **dux-querying** (the query language), **dux-semantic** (measures, relationships, model management), and **dux-dashboards** (building dashboards via JSON + API). Each release attaches them as individual `.zip` files.
 
 ## Multi-database queries
 
@@ -179,6 +212,26 @@ EVALUATE SUMMARIZECOLUMNS(atp.matches[surface], "Matches", COUNT(atp.matches[mat
     ["Hard", 3105]
   ]
 }
+```
+
+A JSON body injects **external filters** without touching the query text (this is what dashboard slicers use):
+
+```
+POST /query
+Content-Type: application/json
+
+{"query": "EVALUATE ...", "filters": [
+  {"table": "atp.matches", "column": "tourney_level", "op": "in", "values": ["G", "M"]}
+]}
+```
+
+Ops: `in`, `between` (`from`/`to`), `=`, `!=`, `<`, `<=`, `>`, `>=`, `contains` (single `value`). Filters propagate through relationships like `TREATAS` arguments.
+
+### Version
+
+```
+GET /version
+→ {"version": "v0.4.0", "capabilities": {"dashboards": true, "externalFilters": true, "measureFormats": true}}
 ```
 
 ### Schema
@@ -251,8 +304,9 @@ DELETE /hidden               (unhide — same body shapes)
 ### Reference UI
 
 ```
-GET /docs/*     Interactive API reference (Scalar)
-GET /           Query builder UI
+GET /docs/*       Interactive API reference (Scalar)
+GET /             DUX UI — query builder, Explorer, and dashboards (/dash/)
+*   /api/dash/*   Dashboards API (see Dashboards above)
 ```
 
 ## Measures and relationships
@@ -283,6 +337,11 @@ expression = "COUNT(atp.matches[match_num])"
 table      = "atp.matches"
 name       = "Avg Winner Age"
 expression = "AVERAGE(atp.matches[winner_age])"
+
+# Optional display format — structured enum, rendered locale-aware by the UI
+[measure.format]
+kind     = "decimal"    # number | decimal | percent | currency | compact
+decimals = 1
 ```
 
 Export the current state, edit offline, re-import:

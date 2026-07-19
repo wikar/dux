@@ -241,13 +241,14 @@ export function buildPivotTotalQueries(el: DashElement): TotalsSpec[] {
   const { rowDims, colDims, metrics } = pivotParts(el);
   if (metrics.length === 0) return [];
   const viz = el.viz ?? {};
-  const subtotals = viz.subtotals ?? true;
   const grandTotal = viz.grandTotal ?? true;
   const totalCol = (viz.totalCol ?? true) && colDims.length > 0;
   const filters = elementFilters(el);
 
+  // Intermediate levels feed both subtotal rows and collapsed group rows —
+  // they're fetched whenever the pivot nests, regardless of the toggles.
   const levels: number[] = [];
-  if (subtotals) for (let l = 1; l < rowDims.length; l++) levels.push(l);
+  for (let l = 1; l < rowDims.length; l++) levels.push(l);
   if (grandTotal) levels.push(0);
 
   const out: TotalsSpec[] = [];

@@ -2,7 +2,7 @@
 // dims is the main fetch (passed in); subtotal and grand-total rows come from
 // the extra per-level queries in usePivotTotals — measures aren't additive,
 // so totals can never be summed client-side. Row rendering is virtualized.
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import styles from "./ElementBody.module.css";
 import { pivotParts, totalsKey, usePivotTotals } from "../data";
@@ -68,6 +68,8 @@ interface DisplayRow {
   key: string;
   /** Row-dim prefix length — selects the totals query for subtotal/grand rows. */
   len: number;
+  /** Group rows: subtree hidden; the row shows the group's totals inline. */
+  collapsed?: boolean;
 }
 
 interface Props {
@@ -81,6 +83,19 @@ export default function PivotBody({ el, data, formats }: Props) {
   const raw = el.query?.mode === "raw";
   const viz = el.viz ?? {};
   const { byKey, loading: totalsLoading } = usePivotTotals(el);
+
+  // Expand/collapse: per-group keys whose state differs from the default
+  // (viz.collapsed = start collapsed). Session state — never in the document.
+  const startCollapsed = viz.collapsed ?? true;
+  const [toggled, setToggled] = useState<Set<string>>(new Set());
+  const isCollapsed = (key: string) => toggled.has(key) !== startCollapsed;
+  const toggle = (key: string) =>
+    setToggled((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   // Raw mode can't know the row/col split — first column becomes the row dim,
   // the rest are values; totals are off (no queries to derive them from).
@@ -120,8 +135,9 @@ export default function PivotBody({ el, data, formats }: Props) {
   const colAxis = colAxisFull.slice(0, COL_CAP);
   const colsDropped = colAxisFull.length - colAxis.length;
 
-  // Row structure: sorted unique row tuples → group headers, leaves,
-  // subtotal rows on group close, one grand-total row at the end.
+  // Row structure: sorted unique row tuples → group headers (expandable),
+  // leaves, subtotal rows on group close, one grand-total row at the end.
+  // Collapsed groups skip their subtree and show their totals inline.
   const displayRows = useMemo(() => {
     const rIdx = rowNames.map((n) => data.columns.indexOf(n));
     const seen = new Map<string, string[]>();
@@ -136,28 +152,36 @@ export default function PivotBody({ el, data, formats }: Props) {
       out.push({ kind: "leaf", indent: 0, label: "Total", key: "", len: 0 });
       return out;
     }
-    const subtotal = (l: number, t: string[]): DisplayRow => ({
-      kind: "subtotal",
-      indent: l - 1,
-      label: `${lbl(t[l - 1])} Total`,
-      key: t.slice(0, l).join(SEP),
-      len: l,
-    });
-    let prev: string[] | null = null;
-    for (const t of tuples) {
-      let common = 0;
-      if (prev) while (common < R - 1 && prev[common] === t[common]) common++;
-      if (prev && subtotalsOn) for (let l = R - 1; l > common; l--) out.push(subtotal(l, prev));
-      for (let l = common + 1; l <= R - 1; l++) {
-        out.push({ kind: "group", indent: l - 1, label: lbl(t[l - 1]), key: t.slice(0, l).join(SEP), len: l });
+    const walk = (slice: string[][], level: number) => {
+      if (level === R - 1) {
+        for (const t of slice) {
+          out.push({ kind: "leaf", indent: R > 1 ? R - 1 : 0, label: lbl(t[R - 1] ?? ""), key: t.join(SEP), len: R });
+        }
+        return;
       }
-      out.push({ kind: "leaf", indent: R > 1 ? R - 1 : 0, label: lbl(t[R - 1] ?? ""), key: t.join(SEP), len: R });
-      prev = t;
-    }
-    if (prev && subtotalsOn) for (let l = R - 1; l >= 1; l--) out.push(subtotal(l, prev));
+      // slice is sorted — groups of equal t[level] are consecutive.
+      let i = 0;
+      while (i < slice.length) {
+        let j = i;
+        while (j < slice.length && slice[j][level] === slice[i][level]) j++;
+        const t = slice[i];
+        const key = t.slice(0, level + 1).join(SEP);
+        const collapsed = isCollapsed(key);
+        out.push({ kind: "group", indent: level, label: lbl(t[level]), key, len: level + 1, collapsed });
+        if (!collapsed) {
+          walk(slice.slice(i, j), level + 1);
+          if (subtotalsOn) {
+            out.push({ kind: "subtotal", indent: level, label: `${lbl(t[level])} Total`, key, len: level + 1 });
+          }
+        }
+        i = j;
+      }
+    };
+    walk(tuples, 0);
     if (grandOn) out.push({ kind: "grand", indent: 0, label: "Total", key: "", len: 0 });
     return out;
-  }, [data, rowNames, R, subtotalsOn, grandOn]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, rowNames, R, subtotalsOn, grandOn, toggled, startCollapsed]);
 
   // One lookup per result: main + each totals level (with/without cols).
   const lookups = useMemo(() => {
@@ -171,10 +195,14 @@ export default function PivotBody({ el, data, formats }: Props) {
     return m;
   }, [data, byKey, rowNames, colNames, metricNames]);
 
+  // Expanded groups are label-only; collapsed groups read the same per-level
+  // totals queries as subtotal rows.
   const cellsFor = (dr: DisplayRow): Map<string, CellValues> | undefined =>
-    dr.kind === "leaf" ? lookups.get("main") : lookups.get(totalsKey(dr.len, true));
+    dr.kind === "leaf" ? lookups.get("main")
+    : dr.kind === "group" && !dr.collapsed ? undefined
+    : lookups.get(totalsKey(dr.len, true));
   const totalColFor = (dr: DisplayRow): Map<string, CellValues> | undefined =>
-    lookups.get(totalsKey(dr.len, false));
+    dr.kind === "group" && !dr.collapsed ? undefined : lookups.get(totalsKey(dr.len, false));
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -258,8 +286,8 @@ export default function PivotBody({ el, data, formats }: Props) {
         <div style={{ position: "relative", height: virtualizer.getTotalSize() }}>
           {virtualizer.getVirtualItems().map((vi) => {
             const dr = displayRows[vi.index];
-            const cells = dr.kind === "group" ? undefined : cellsFor(dr);
-            const totals = dr.kind === "group" ? undefined : totalColFor(dr);
+            const cells = cellsFor(dr);
+            const totals = totalColFor(dr);
             return (
               <div
                 key={vi.key}
@@ -271,6 +299,16 @@ export default function PivotBody({ el, data, formats }: Props) {
                   style={{ width: HEADER_W, paddingLeft: 8 + dr.indent * 14 }}
                   title={dr.label}
                 >
+                  {dr.kind === "group" && (
+                    <button
+                      className={styles.pvCaret}
+                      title={dr.collapsed ? "Expand" : "Collapse"}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={() => toggle(dr.key)}
+                    >
+                      {dr.collapsed ? "▸" : "▾"}
+                    </button>
+                  )}
                   {dr.label}
                 </div>
                 {colAxis.map((t, i) => {

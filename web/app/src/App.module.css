@@ -53,7 +53,8 @@
   border-color: var(--surface2);
 }
 
-.dashDisabled {
+.dashDisabled,
+.chunkLoading {
   flex: 1;
   display: flex;
   align-items: center;

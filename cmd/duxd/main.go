@@ -55,9 +55,8 @@ var version = "dev"
 // Server flags (registered before bootstrap's flag.Parse).
 // Setting the env var DUX_DASH=0 disables the dashboards module entirely.
 var (
-	listenAddr   = flag.String("listen", ":8080", "HTTP listen address")
-	dashDir      = flag.String("dash-dir", "dashboards", "dashboard file store directory")
-	dashAssetMax = flag.Int64("dash-asset-max", 10<<20, "max dashboard asset upload size in bytes")
+	listenAddr = flag.String("listen", ":8080", "HTTP listen address")
+	dashDir    = flag.String("dash-dir", "dashboards", "dashboard file store directory")
 )
 
 // openAPISpec is a minimal OpenAPI 3.1 document describing the HTTP API.
@@ -503,18 +502,9 @@ const openAPISpec = `{
       }
     },
     "/api/dash/assets/{path}": {
-      "post": {
-        "summary": "Upload an image asset",
-        "description": "Raw image bytes; the path's extension (.png/.jpg/.jpeg/.webp/.svg) decides the type. Size capped by --dash-asset-max (default 10 MiB).",
-        "responses": {
-          "201": { "description": "Stored — {path, type}" },
-          "413": { "description": "Too large" },
-          "415": { "description": "Unsupported extension" }
-        }
-      },
       "get": {
         "summary": "Fetch an asset",
-        "description": "SVG is served with a no-execute Content-Security-Policy.",
+        "description": "Serves image files (.png/.jpg/.jpeg/.webp/.svg) kept on disk under the dashboards root — deploy them alongside the documents; there is no upload endpoint. SVG is served with a no-execute Content-Security-Policy.",
         "responses": {
           "200": { "description": "Image bytes" },
           "404": { "description": "Not found" }
@@ -607,10 +597,7 @@ func main() {
 
 	dashEnabled := os.Getenv("DUX_DASH") != "0"
 	if dashEnabled {
-		dash, err := dash.NewServer(dash.Config{
-			Root:          *dashDir,
-			MaxAssetBytes: *dashAssetMax,
-		})
+		dash, err := dash.NewServer(dash.Config{Root: *dashDir})
 		if err != nil {
 			log.Fatalf("dashboards module: %v", err)
 		}

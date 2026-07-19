@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import { duxClient as client, generateQuery, isNumeric } from "@dux/core";
 import type { QueryFailedError, DropField, FilterField, DragPayload, Aggregate, FilterOp } from "@dux/core";
@@ -7,17 +7,24 @@ import DropZone from "./components/DropZone";
 import QueryPreview from "./components/QueryPreview";
 import ResultTable from "./components/ResultTable";
 import TopBar from "./components/TopBar";
-import Explorer from "./components/Explorer";
 import { useFetch } from "./hooks";
 import { dashPathFromPathname, navigate, tabFromPathname, usePathname } from "./router";
 // The dash section is composed here and only here — src/components must never
 // import from src/dash, so a future dash-only duxuid build can ship
 // src/dash + src/components behind its own entry point.
-import DashApp from "./dash/DashApp";
-import DashActions from "./dash/components/DashActions";
+//
+// Dash (Recharts, markdown, TanStack) and Explorer (dagre) are code-split:
+// they load on first tab visit, keeping the entry chunk to the Home
+// workspace. Only the small dash store/api modules stay in the entry (the
+// top bar needs the fullscreen flag and last-open path before the chunk
+// loads).
 import { encodePath } from "./dash/api";
 import { useUiStore } from "./dash/store";
 import styles from "./App.module.css";
+
+const Explorer = lazy(() => import("./components/Explorer"));
+const DashApp = lazy(() => import("./dash/DashApp"));
+const DashActions = lazy(() => import("./dash/components/DashActions"));
 
 // A field is a "metric" if it's a pre-defined measure or a numeric column.
 // Non-metric (group-by) columns always sort before metrics.
@@ -237,7 +244,7 @@ export default function App() {
           actions={
             tab === "home" ? homeActions
             : tab === "explorer" ? explorerActions
-            : dashEnabled ? <DashActions />
+            : dashEnabled ? <Suspense fallback={null}><DashActions /></Suspense>
             : undefined
           }
         />
@@ -299,11 +306,15 @@ export default function App() {
         </div>
       </div>
       {tab === "explorer" && (
-        <Explorer refreshCount={refreshCount} showHidden={showHidden} />
+        <Suspense fallback={<div className={styles.chunkLoading}>Loading…</div>}>
+          <Explorer refreshCount={refreshCount} showHidden={showHidden} />
+        </Suspense>
       )}
       {tab === "dash" &&
         (dashEnabled || version === undefined ? (
-          <DashApp path={dashPath} refreshCount={refreshCount} showHidden={showHidden} />
+          <Suspense fallback={<div className={styles.chunkLoading}>Loading…</div>}>
+            <DashApp path={dashPath} refreshCount={refreshCount} showHidden={showHidden} />
+          </Suspense>
         ) : (
           <div className={styles.dashDisabled}>
             Dashboards are disabled on this server (DUX_DASH=0).

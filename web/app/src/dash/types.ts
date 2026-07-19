@@ -53,6 +53,8 @@ export interface VizSettings {
   cols?: string[];
   /** pivot: subtotal rows per row-group level (default true). */
   subtotals?: boolean;
+  /** pivot: row groups start collapsed (default true; false = expanded). */
+  collapsed?: boolean;
   /** pivot: grand-total row (default true). */
   grandTotal?: boolean;
   /** pivot: total column across the column dims (default true). */
