@@ -33,6 +33,6 @@ jobs:
           ls -l ../../dist/skills
 
       - name: Attach to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v2.5.3
         with:
           files: dist/skills/*.zip
