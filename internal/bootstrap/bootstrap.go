@@ -59,9 +59,10 @@ func Startup(binName, version, usage string, exitAfterImport bool) (metaDB *sema
 		}
 	}
 	if *exportPath != "" {
-		if err := ExportTOML(*exportPath, schema); err != nil {
+		if err := semantic.WriteDuxTOML(*exportPath, schema); err != nil {
 			log.Fatalf("export: %v", err)
 		}
+		log.Printf("exported schema to %q", *exportPath)
 		os.Exit(0)
 	}
 	return metaDB, db, schema, *dbDirFlag, metaPath, *tomlFlag
@@ -177,15 +178,5 @@ func ImportTOML(metaDB *semantic.MetadataDB, path string, schema *semantic.Schem
 		return fmt.Errorf("reload schema: %w", err)
 	}
 	log.Printf("imported %q into metadata DB", path)
-	return nil
-}
-
-// ExportTOML writes the current schema (measures + relationships) as a
-// dux.toml file at the given path.
-func ExportTOML(path string, schema *semantic.Schema) error {
-	if err := semantic.WriteDuxTOML(path, schema); err != nil {
-		return err
-	}
-	log.Printf("exported schema to %q", path)
 	return nil
 }

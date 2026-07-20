@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { QueryResponse, MeasureFormat } from "@dux/core";
 import { duxClient as client, QueryFailedError, formatValue } from "@dux/core";
+import { compareCellsDir } from "../compare";
 import styles from "./ResultTable.module.css";
 
 type SortDir = "asc" | "desc";
@@ -10,17 +11,6 @@ function isNumericCell(v: string | number | null): boolean {
   if (typeof v === "number") return !isNaN(v);
   const n = Number(v);
   return !isNaN(n) && String(v).trim() !== "";
-}
-
-/** Compare two cell values for sorting. Numbers sort numerically; everything else lexicographically. */
-function cmpCells(a: string | number | null, b: string | number | null): number {
-  if (a === null && b === null) return 0;
-  if (a === null) return 1;
-  if (b === null) return -1;
-  const na = typeof a === "number" ? a : Number(a);
-  const nb = typeof b === "number" ? b : Number(b);
-  if (!isNaN(na) && !isNaN(nb)) return na - nb;
-  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
 }
 
 export default function ResultTable(props: {
@@ -76,15 +66,6 @@ export default function ResultTable(props: {
         setFormats(fmts);
         setData(json);
         onQueryErrorRef.current?.(null);
-        // Default: sort DESC by first numeric column
-        const s = new Set<number>();
-        for (let ci = 0; ci < json.columns.length; ci++) {
-          const vals = json.rows.map((r) => r[ci]).filter((v) => v !== null);
-          if (vals.length > 0 && vals.every(isNumericCell)) s.add(ci);
-        }
-        const first = s.values().next();
-        setSortCol(first.done ? -1 : first.value);
-        setSortDir("desc");
       } catch (err) {
         if (stale) return;
         if (err instanceof QueryFailedError) {
@@ -105,6 +86,13 @@ export default function ResultTable(props: {
       clearTimeout(debounceTimer);
     };
   }, [props.query]);
+
+  // Default sort for each new result: DESC by the first numeric column.
+  useEffect(() => {
+    const first = numericCols.values().next();
+    setSortCol(first.done ? -1 : first.value);
+    setSortDir("desc");
+  }, [numericCols]);
 
   function handleHeaderClick(ci: number) {
     if (sortCol === ci) {
@@ -139,8 +127,7 @@ export default function ResultTable(props: {
 
   const sortedRows = useMemo(() => {
     if (sortCol === -1) return visibleRows;
-    const dir = sortDir === "asc" ? 1 : -1;
-    return [...visibleRows].sort((a, b) => dir * cmpCells(a[sortCol], b[sortCol]));
+    return [...visibleRows].sort((a, b) => compareCellsDir(a[sortCol], b[sortCol], sortDir));
   }, [visibleRows, sortCol, sortDir]);
 
   // Expose the displayed dataset as TSV so the Copy Results button

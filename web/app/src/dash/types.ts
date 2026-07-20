@@ -78,7 +78,7 @@ export interface ElementQuery {
   raw?: string | null;
 }
 
-export type SlicerKind = "buttons" | "list" | "dropdown" | "range" | "daterange";
+export type SlicerKind = "buttons" | "dropdown" | "range" | "daterange";
 
 export interface SlicerConfig {
   table: string;

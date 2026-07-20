@@ -87,14 +87,6 @@ export async function putDashboard(
   return res.json();
 }
 
-export async function deleteDashboard(path: string, etag: string): Promise<void> {
-  const res = await fetch(`/api/dash/dashboards/${encodePath(path)}`, {
-    method: "DELETE",
-    headers: { "If-Match": etag },
-  });
-  if (!res.ok && res.status !== 204) throw new Error(await errText(res));
-}
-
 // Assets are read-only: image files live on disk under the dashboards root
 // and are only served (no upload endpoint).
 export function assetUrl(path: string): string {

@@ -79,7 +79,7 @@ func (s *Schema) MeasureFormatFor(table, name string) *MeasureFormat {
 	if formats, ok := s.MeasureFormats[t]; ok {
 		return formats[name]
 	}
-	// Case-insensitive fallback, matching findTable's behaviour.
+	// Case-insensitive fallback, matching FindTable's behaviour.
 	lower := strings.ToLower(t)
 	for k, formats := range s.MeasureFormats {
 		if strings.ToLower(k) == lower {

@@ -1,15 +1,9 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import {
-  getCoreRowModel,
-  getSortedRowModel,
-  useReactTable,
-  type ColumnDef,
-  type SortingState,
-} from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import styles from "./ElementBody.module.css";
+import { compareCellsDir } from "../../compare";
 import { imageUrl } from "../api";
 import { downloadCsv } from "../csv";
 import {
@@ -19,9 +13,9 @@ import {
   useFormats,
   usePalette,
 } from "../data";
-import { TYPE_LABEL } from "../docOps";
-import { useDocStore } from "../store";
-import type { DashElement, ImageFit } from "../types";
+import { TYPE_LABEL, updateElement } from "../docOps";
+import { useDocStore, useUiStore } from "../store";
+import type { DashElement } from "../types";
 import { QUERY_TYPES } from "../types";
 import { formatValue, QueryFailedError } from "@dux/core";
 import type { MeasureFormat, QueryResponse } from "@dux/core";
@@ -83,12 +77,6 @@ function Placeholder({ el, note }: { el: DashElement; note: string }) {
 
 // ─── Image ───────────────────────────────────────────────────────────────────
 
-const IMAGE_FIT: Record<ImageFit, React.CSSProperties["objectFit"]> = {
-  contain: "contain",
-  cover: "cover",
-  fill: "fill",
-};
-
 function ImageBody({ el }: { el: DashElement }) {
   const url = el.image?.url?.trim();
   if (!url) {
@@ -104,7 +92,7 @@ function ImageBody({ el }: { el: DashElement }) {
       className={styles.image}
       src={imageUrl(url)}
       alt={el.title?.text ?? ""}
-      style={{ objectFit: IMAGE_FIT[el.image?.fit ?? "contain"] }}
+      style={{ objectFit: el.image?.fit ?? "contain" }}
       draggable={false}
     />
   );
@@ -195,7 +183,7 @@ function DataViz({ el, data: rawData, formats, palette }: VizProps) {
   // Axis items with no data (all metrics null) are hidden unless toggled on.
   const data = dropEmptyRows(rawData, metricCols, viz.showEmpty ?? false);
 
-  if (el.type === "table") return <TableBody data={data} formats={formats} />;
+  if (el.type === "table") return <TableBody el={el} data={data} formats={formats} />;
   if (el.type === "pivot") return <PivotBody el={el} data={data} formats={formats} />;
 
   // Series split (the "Series by" well): the first Values measure fans out
@@ -340,43 +328,58 @@ function KpiBody({
   );
 }
 
-// ─── Table (TanStack Table for sorting + Virtual for unbounded rows) ─────────
+// ─── Table (useState sorting + Virtual for unbounded rows) ───────────────────
 
 type ResultRow = readonly (string | number | null)[];
+type SortDir = "asc" | "desc";
 
 const TABLE_ROW_H = 25;
 
-/** Nulls last; numbers numerically; everything else as locale strings. */
-function cmpCell(a: unknown, b: unknown): number {
-  if (a === null || a === undefined) return b === null || b === undefined ? 0 : 1;
-  if (b === null || b === undefined) return -1;
-  if (typeof a === "number" && typeof b === "number") return a - b;
-  return String(a).localeCompare(String(b));
-}
-
 function TableBody({
+  el,
   data,
   formats,
 }: {
+  el: DashElement;
   data: QueryResponse;
   formats: Record<string, MeasureFormat>;
 }) {
-  const [sorting, setSorting] = useState<SortingState>([]);
-  const columns: ColumnDef<ResultRow>[] = data.columns.map((c, i) => ({
-    id: c,
-    accessorFn: (row: ResultRow) => row[i],
-    header: c,
-    sortingFn: (a, b) => cmpCell(a.getValue(c), b.getValue(c)),
-  }));
-  const table = useReactTable({
-    data: data.rows as ResultRow[],
-    columns,
-    state: { sorting },
-    onSortingChange: setSorting,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-  });
-  const rows = table.getRowModel().rows;
+  const editing = useUiStore((s) => s.mode === "edit");
+
+  // The persisted sort lives in el.query.sort, so the header, the Settings
+  // "Sort by" control, and (for builder queries) the server-side ORDER BY all
+  // stay in sync. In view mode we keep an ephemeral local override instead, so
+  // a viewer sorting a shared/wall dashboard never dirties the saved document.
+  const saved = el.query?.sort?.[0];
+  const savedCol = saved ? data.columns.indexOf(saved.field) : -1;
+  const [localSort, setLocalSort] = useState<{ col: number; dir: SortDir } | null>(null);
+
+  const active =
+    !editing && localSort
+      ? localSort
+      : savedCol >= 0
+      ? { col: savedCol, dir: (saved?.dir ?? "desc") as SortDir }
+      : null;
+
+  function handleHeaderClick(ci: number) {
+    const dir: SortDir = active?.col === ci && active.dir === "desc" ? "asc" : "desc";
+    if (editing) {
+      updateElement(el.id, (x) => ({
+        ...x,
+        query: { ...(x.query ?? { mode: "builder" }), sort: [{ field: data.columns[ci], dir }] },
+      }));
+    } else {
+      setLocalSort({ col: ci, dir });
+    }
+  }
+
+  const rows = useMemo(() => {
+    const base = data.rows as ResultRow[];
+    if (!active) return base;
+    const { col, dir } = active;
+    return [...base].sort((a, b) => compareCellsDir(a[col], b[col], dir));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.rows, active?.col, active?.dir]);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -394,15 +397,18 @@ function TableBody({
       <table className={styles.table}>
         <thead>
           <tr>
-            {table.getFlatHeaders().map((h) => (
+            {data.columns.map((c, ci) => (
               <th
-                key={h.id}
-                className={formats[h.id] ? styles.num : undefined}
-                onClick={h.column.getToggleSortingHandler()}
+                key={ci}
+                className={formats[c] ? styles.num : undefined}
+                // Stop the canvas drag/select from swallowing the click in edit
+                // mode (same guard the pivot caret uses).
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => handleHeaderClick(ci)}
                 title="Sort"
               >
-                {h.id}
-                {{ asc: " ▲", desc: " ▼" }[h.column.getIsSorted() as string] ?? ""}
+                {c}
+                {active?.col === ci ? (active.dir === "asc" ? " ▲" : " ▼") : ""}
               </th>
             ))}
           </tr>
@@ -416,8 +422,8 @@ function TableBody({
           {items.map((vi) => {
             const r = rows[vi.index];
             return (
-              <tr key={r.id} style={{ height: TABLE_ROW_H }}>
-                {r.original.map((v, j) => {
+              <tr key={vi.index} style={{ height: TABLE_ROW_H }}>
+                {r.map((v, j) => {
                   const col = data.columns[j];
                   const fmt = formats[col];
                   return (

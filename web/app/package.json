@@ -11,9 +11,7 @@
   "dependencies": {
     "@dux/core": "workspace:*",
     "@tanstack/react-query": "^5.62.0",
-    "@tanstack/react-table": "^8",
     "@tanstack/react-virtual": "^3",
-    "dagre": "^0.8.5",
     "highlight.js": "^11.11.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
@@ -24,7 +22,6 @@
     "zustand": "^5.0.3"
   },
   "devDependencies": {
-    "@types/dagre": "^0.7.54",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.5.2",

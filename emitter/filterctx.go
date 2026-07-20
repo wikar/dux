@@ -431,36 +431,11 @@ func sanitizeAliasSuffix(name string) string {
 // nested function-call arguments.
 func collectColRefs(expr *parser.Expr) []*parser.ColRef {
 	var result []*parser.ColRef
-
-	var walkExpr func(*parser.Expr)
-	var walkTerm func(*parser.Term)
-
-	walkExpr = func(e *parser.Expr) {
-		if e == nil {
-			return
-		}
-		walkTerm(e.Left)
-		for _, op := range e.Right {
-			walkTerm(op.Right)
-		}
-	}
-	walkTerm = func(t *parser.Term) {
-		if t == nil {
-			return
-		}
+	walkTerms(expr, func(t *parser.Term) bool {
 		if t.ColRef != nil && t.ColRef.Table != "" {
 			result = append(result, t.ColRef)
 		}
-		if t.FuncCall != nil {
-			for _, arg := range t.FuncCall.Args {
-				walkExpr(arg)
-			}
-		}
-		if t.SubExpr != nil {
-			walkExpr(t.SubExpr)
-		}
-	}
-
-	walkExpr(expr)
+		return true
+	})
 	return result
 }

@@ -37,15 +37,17 @@ func cleanSchemaError(msg string) string {
 //go:embed schema.json
 var schemaJSON []byte
 
-// Validator validates dashboard documents against the embedded schema plus
+// refreshFloorSeconds is the minimum allowed live-refresh interval.
+const refreshFloorSeconds = 5
+
+// validator validates dashboard documents against the embedded schema plus
 // the structural rules a JSON Schema cannot express (unique element ids,
-// configured refresh floor).
-type Validator struct {
-	schema       *jsonschema.Schema
-	refreshFloor int // seconds; 0 disables the check
+// refresh floor).
+type validator struct {
+	schema *jsonschema.Schema
 }
 
-func NewValidator(refreshFloorSeconds int) (*Validator, error) {
+func newValidator() (*validator, error) {
 	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schemaJSON))
 	if err != nil {
 		return nil, fmt.Errorf("parse embedded dashboard schema: %w", err)
@@ -58,12 +60,12 @@ func NewValidator(refreshFloorSeconds int) (*Validator, error) {
 	if err != nil {
 		return nil, fmt.Errorf("compile dashboard schema: %w", err)
 	}
-	return &Validator{schema: schema, refreshFloor: refreshFloorSeconds}, nil
+	return &validator{schema: schema}, nil
 }
 
 // Validate checks data as a dashboard document. The returned error message is
 // user-facing (surfaced in 422 responses and listing error badges).
-func (v *Validator) Validate(data []byte) error {
+func (v *validator) Validate(data []byte) error {
 	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("not valid JSON: %w", err)
@@ -92,10 +94,10 @@ func (v *Validator) Validate(data []byte) error {
 		}
 		seen[el.ID] = true
 	}
-	if v.refreshFloor > 0 && doc.Refresh != nil && doc.Refresh.Enabled &&
-		doc.Refresh.IntervalSeconds < v.refreshFloor {
+	if doc.Refresh != nil && doc.Refresh.Enabled &&
+		doc.Refresh.IntervalSeconds < refreshFloorSeconds {
 		return fmt.Errorf("refresh.intervalSeconds %d is below the server floor of %d seconds",
-			doc.Refresh.IntervalSeconds, v.refreshFloor)
+			doc.Refresh.IntervalSeconds, refreshFloorSeconds)
 	}
 	return nil
 }

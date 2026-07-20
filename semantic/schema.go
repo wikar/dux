@@ -99,12 +99,6 @@ func (s *Schema) AddMeasureFromExpr(table, name, expr string) error {
 // case-insensitive scan as fallback, along with the canonical schema key.
 // Returns (nil, "") when the table is unknown.
 func (s *Schema) FindTable(name string) (*Table, string) {
-	return s.findTable(name)
-}
-
-// findTable returns the *Table for name using an exact key match first and a
-// case-insensitive scan as fallback, along with the canonical schema key.
-func (s *Schema) findTable(name string) (*Table, string) {
 	if t, ok := s.Tables[name]; ok {
 		return t, name
 	}
@@ -120,16 +114,13 @@ func (s *Schema) findTable(name string) (*Table, string) {
 // SetTableHidden marks table (any casing) as hidden or visible, updating both
 // the persistent HiddenTables map and the live Table flag when present.
 func (s *Schema) SetTableHidden(table string, hidden bool) {
-	if s.HiddenTables == nil {
-		s.HiddenTables = make(map[string]bool)
-	}
 	key := strings.ToLower(table)
 	if hidden {
 		s.HiddenTables[key] = true
 	} else {
 		delete(s.HiddenTables, key)
 	}
-	if t, _ := s.findTable(table); t != nil {
+	if t, _ := s.FindTable(table); t != nil {
 		t.Hidden = hidden
 	}
 }
@@ -137,9 +128,6 @@ func (s *Schema) SetTableHidden(table string, hidden bool) {
 // SetColumnHidden marks a column of table (any casing) as hidden or visible,
 // updating both the persistent HiddenColumns map and the live Column flag.
 func (s *Schema) SetColumnHidden(table, column string, hidden bool) {
-	if s.HiddenColumns == nil {
-		s.HiddenColumns = make(map[string]map[string]bool)
-	}
 	tKey := strings.ToLower(table)
 	cKey := strings.ToLower(column)
 	if hidden {
@@ -153,7 +141,7 @@ func (s *Schema) SetColumnHidden(table, column string, hidden bool) {
 			delete(s.HiddenColumns, tKey)
 		}
 	}
-	t, _ := s.findTable(table)
+	t, _ := s.FindTable(table)
 	if t == nil {
 		return
 	}
@@ -194,9 +182,6 @@ func (s *Schema) ApplyHiddenFlags() {
 // SetDateTable designates table (any casing) as a date table with the given
 // date column. An empty column removes the designation.
 func (s *Schema) SetDateTable(table, column string) {
-	if s.DateTables == nil {
-		s.DateTables = make(map[string]string)
-	}
 	key := strings.ToLower(table)
 	if column == "" {
 		delete(s.DateTables, key)

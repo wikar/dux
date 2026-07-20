@@ -1,13 +1,14 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { DragEvent } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type { Schema, DragPayload, Relationship, MeasureFormat } from "@dux/core";
 import { isMetaTable, resolveTable, duxClient as client } from "@dux/core";
 import TypeIcon from "./TypeIcon";
 import DuxEditor from "./DuxEditor";
+import Modal, { modalStyles } from "./Modal";
 import styles from "./SchemaTree.module.css";
 import AddRelationshipModal from "./AddRelationshipModal";
 import { EyeOffIcon } from "./icons";
-import { useFetch } from "../hooks";
 
 // ─── Draggable field row ─────────────────────────────────────────────────────
 
@@ -168,13 +169,6 @@ function AddMeasureModal(props: {
 
   const tables = Object.keys(props.schema.Tables).filter((n) => !isMetaTable(n)).sort();
 
-  useEffect(() => {
-    function onKey(e: globalThis.KeyboardEvent) { if (e.key === "Escape") props.onClose(); }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   function buildFormat(): MeasureFormat | undefined {
     if (!formatKind) return undefined;
     const f: MeasureFormat = { kind: formatKind as MeasureFormat["kind"] };
@@ -207,98 +201,91 @@ function AddMeasureModal(props: {
   }
 
   return (
-    <div className={styles.modalOverlay} onClick={(e) => { if (e.target === e.currentTarget) props.onClose(); }}>
-      <div className={styles.modal}>
-        <div className={styles.modalHeader}>
-          <span>{isEdit ? "Edit Measure" : "New Measure"}</span>
-          <button className={styles.modalClose} onClick={props.onClose}>✕</button>
-        </div>
-        <div className={styles.modalBody}>
-          <label className={styles.modalLabel}>Table</label>
-          {isEdit ? (
-            <div className={styles.modalInput} style={{ opacity: 0.6, cursor: "default" }}>{table}</div>
-          ) : (
-            <select
-              className={styles.modalSelect}
-              value={table}
-              onChange={(e) => setTable(e.currentTarget.value)}
-            >
-              <option value="">— select table —</option>
-              {tables.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-          )}
-
-          <label className={styles.modalLabel}>Name</label>
-          <input
-            className={styles.modalInput}
-            type="text"
-            placeholder="Total Matches"
-            value={name}
-            onChange={(e) => setName(e.currentTarget.value)}
-          />
-
-          <label className={styles.modalLabel}>Expression</label>
-          <DuxEditor
-            className={styles.exprWrap}
-            value={expression}
-            onChange={setExpression}
-            schema={props.schema}
-            placeholder="COUNT(matches[match_num])"
-            excludeMetaTables
-          />
-
-          <label className={styles.modalLabel}>Format</label>
-          <div style={{ display: "flex", gap: 6 }}>
-            <select
-              className={styles.modalSelect}
-              style={{ flex: 1 }}
-              value={formatKind}
-              onChange={(e) => setFormatKind(e.currentTarget.value)}
-            >
-              <option value="">— none —</option>
-              {FORMAT_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
-            </select>
-            {formatKind && (
-              <input
-                className={styles.modalInput}
-                style={{ width: 80 }}
-                type="number"
-                min={0}
-                max={10}
-                placeholder="decimals"
-                title="Fraction digits (blank = default)"
-                value={decimals}
-                onChange={(e) => setDecimals(e.currentTarget.value)}
-              />
-            )}
-            {formatKind === "currency" && (
-              <input
-                className={styles.modalInput}
-                style={{ width: 64 }}
-                type="text"
-                maxLength={3}
-                placeholder="SEK"
-                title="ISO 4217 currency code"
-                value={currency}
-                onChange={(e) => setCurrency(e.currentTarget.value)}
-              />
-            )}
-          </div>
-
-          {error && <div className={styles.modalError}>{error}</div>}
-        </div>
-        <div className={styles.modalFooter}>
-          <button className={styles.modalBtn} onClick={props.onClose} disabled={saving}>Cancel</button>
-          <button
-            className={`${styles.modalBtn} ${styles.modalBtnPrimary}`}
-            onClick={save}
-            disabled={saving}
-          >
+    <Modal
+      title={isEdit ? "Edit Measure" : "New Measure"}
+      onClose={props.onClose}
+      footer={
+        <>
+          <button className={modalStyles.btn} onClick={props.onClose} disabled={saving}>Cancel</button>
+          <button className={modalStyles.btnPrimary} onClick={save} disabled={saving}>
             {saving ? "Saving…" : "Save"}
           </button>
-        </div>
+        </>
+      }
+    >
+      <label className={styles.modalLabel}>Table</label>
+      {isEdit ? (
+        <div className={styles.modalInput} style={{ opacity: 0.6, cursor: "default" }}>{table}</div>
+      ) : (
+        <select
+          className={styles.modalSelect}
+          value={table}
+          onChange={(e) => setTable(e.currentTarget.value)}
+        >
+          <option value="">— select table —</option>
+          {tables.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+      )}
+
+      <label className={styles.modalLabel}>Name</label>
+      <input
+        className={styles.modalInput}
+        type="text"
+        placeholder="Total Matches"
+        value={name}
+        onChange={(e) => setName(e.currentTarget.value)}
+      />
+
+      <label className={styles.modalLabel}>Expression</label>
+      <DuxEditor
+        className={styles.exprWrap}
+        value={expression}
+        onChange={setExpression}
+        schema={props.schema}
+        placeholder="COUNT(matches[match_num])"
+        excludeMetaTables
+      />
+
+      <label className={styles.modalLabel}>Format</label>
+      <div style={{ display: "flex", gap: 6 }}>
+        <select
+          className={styles.modalSelect}
+          style={{ flex: 1 }}
+          value={formatKind}
+          onChange={(e) => setFormatKind(e.currentTarget.value)}
+        >
+          <option value="">— none —</option>
+          {FORMAT_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+        </select>
+        {formatKind && (
+          <input
+            className={styles.modalInput}
+            style={{ width: 80 }}
+            type="number"
+            min={0}
+            max={10}
+            placeholder="decimals"
+            title="Fraction digits (blank = default)"
+            value={decimals}
+            onChange={(e) => setDecimals(e.currentTarget.value)}
+          />
+        )}
+        {formatKind === "currency" && (
+          <input
+            className={styles.modalInput}
+            style={{ width: 64 }}
+            type="text"
+            maxLength={3}
+            placeholder="SEK"
+            title="ISO 4217 currency code"
+            value={currency}
+            onChange={(e) => setCurrency(e.currentTarget.value)}
+          />
+        )}
       </div>
-    </div>
+
+      {error && <div className={styles.modalError}>{error}</div>}
+    </Modal>
   );
 }
 
@@ -443,8 +430,10 @@ export default function SchemaTree(props: {
   /** Render without the panel chrome (host provides header/border, e.g. a CollapsiblePanel). */
   bare?: boolean;
 }) {
-  const { data: schema, error: schemaError, loading, refetch } =
-    useFetch(() => client.fetchSchema(), [props.refreshCount]);
+  const { data: schema, error: schemaError, isFetching: loading, refetch } = useQuery({
+    queryKey: ["schema", props.refreshCount ?? 0],
+    queryFn: () => client.fetchSchema(),
+  });
 
   const [modal, setModal] = useState<ModalMode | null>(null);
   const [editTarget, setEditTarget] = useState<EditTarget | undefined>(undefined);
@@ -459,29 +448,12 @@ export default function SchemaTree(props: {
 
   const [deleteError, setDeleteError] = useState("");
 
-  async function toggleTableHidden(name: string) {
+  async function toggle(name: string, col?: string) {
     if (!schema) return;
     try {
-      if (schema.Tables[name]?.Hidden) {
-        await client.clearHidden(name);
-      } else {
-        await client.setHidden(name);
-      }
-      setDeleteError("");
-      refetch();
-    } catch (e) {
-      setDeleteError(`Failed to toggle hidden: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
-  async function toggleColumnHidden(name: string, col: string) {
-    if (!schema) return;
-    try {
-      if (schema.Tables[name]?.Columns[col]?.Hidden) {
-        await client.clearHidden(name, col);
-      } else {
-        await client.setHidden(name, col);
-      }
+      const hidden = col ? schema.Tables[name]?.Columns[col]?.Hidden : schema.Tables[name]?.Hidden;
+      if (hidden) await client.clearHidden(name, col);
+      else await client.setHidden(name, col);
       setDeleteError("");
       refetch();
     } catch (e) {
@@ -536,8 +508,8 @@ export default function SchemaTree(props: {
             tableName={name}
             schema={schema}
             showHidden={props.showHidden}
-            onToggleHidden={() => toggleTableHidden(name)}
-            onToggleColumnHidden={(col) => toggleColumnHidden(name, col)}
+            onToggleHidden={() => toggle(name)}
+            onToggleColumnHidden={(col) => toggle(name, col)}
           />
         ))}
       </div>

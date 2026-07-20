@@ -7,8 +7,6 @@ interface Props {
   onTabChange: (id: string) => void;
   /** Show the Dash tab (capabilities.dashboards from /version). */
   showDash?: boolean;
-  /** Show the builder tabs (hidden in a future dash-only duxuid build). */
-  showBuilder?: boolean;
   showHidden: boolean;
   onToggleShowHidden: () => void;
   actions?: ReactNode;
@@ -21,16 +19,12 @@ export default function TopBar(props: Props) {
   return (
     <div className={styles.topBar}>
       <nav className={styles.tabs}>
-        {props.showBuilder !== false && (
-          <>
-            <button className={tabClass("home")} onClick={() => props.onTabChange("home")}>
-              Home
-            </button>
-            <button className={tabClass("explorer")} onClick={() => props.onTabChange("explorer")}>
-              Explorer
-            </button>
-          </>
-        )}
+        <button className={tabClass("home")} onClick={() => props.onTabChange("home")}>
+          Home
+        </button>
+        <button className={tabClass("explorer")} onClick={() => props.onTabChange("explorer")}>
+          Explorer
+        </button>
         {props.showDash && (
           <button className={tabClass("dash")} onClick={() => props.onTabChange("dash")}>
             Dash

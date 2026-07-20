@@ -5,6 +5,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import styles from "./ElementBody.module.css";
+import { compareCells } from "../../compare";
 import { pivotParts, totalsKey, usePivotTotals } from "../data";
 import type { DashElement } from "../types";
 import { formatValue } from "@dux/core";
@@ -18,20 +19,13 @@ const CELL_W = 92;
 /** Column-dim combinations explode fast; the surplus is reported below. */
 const COL_CAP = 60;
 
-/** Numeric compare when both sides parse as numbers, else locale strings. */
-function cmpVals(a: string, b: string): number {
-  const na = Number(a);
-  const nb = Number(b);
-  if (a !== "" && b !== "" && !Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
-  return a.localeCompare(b);
-}
-
 /** NULL/empty dim values need a visible label. */
 const lbl = (s: string) => (s === "" ? "(blank)" : s);
 
+/** Compose the shared scalar comparator over dim tuples. */
 function cmpTuples(a: string[], b: string[]): number {
   for (let i = 0; i < Math.min(a.length, b.length); i++) {
-    const c = cmpVals(a[i], b[i]);
+    const c = compareCells(a[i], b[i]);
     if (c !== 0) return c;
   }
   return a.length - b.length;

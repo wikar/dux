@@ -10,7 +10,7 @@ var lexerDefinition = participelexer.MustStateful(participelexer.Rules{
 	"Root": {
 		// Whitespace is listed first so the stateful lexer matches it before any
 		// other rule; token priority is determined by order of appearance.
-		{Name: "Whitespace", Pattern: `[\s\t\n\r]+`},
+		{Name: "Whitespace", Pattern: `\s+`},
 		// Keywords must be tried before Ident so that e.g. "SUM" is a Keyword,
 		// not an Ident. The (?i) flag makes the pattern case-insensitive.
 		{Name: "Keyword", Pattern: `(?i)\b(DEFINE|EVALUATE|MEASURE|CALCULATE|FILTER|SUMMARIZECOLUMNS|ADDCOLUMNS|SELECTCOLUMNS|SUMX|AVERAGEX|COUNTX|MINX|MAXX|CONCATENATEX|SUM|AVERAGE|COUNTA|COUNT|COUNTROWS|COUNTBLANK|DISTINCTCOUNT|MIN|MAX|MEDIAN|DIVIDE|ISBLANK|BLANK|IF|SWITCH|NOT|AND|OR|ALL|VALUES|DISTINCT|UNION|INTERSECT|EXCEPT|TOPN|VAR|RETURN|TRUE|FALSE|TREATAS|ORDER|BY|START|AT|ASC|DESC)\b`},

@@ -24,17 +24,12 @@ DASH_PATH="$1"
 FILE="$2"
 [ -f "$FILE" ] || { echo "error: '$FILE' not found" >&2; exit 1; }
 
-HTTP_CODE=$(curl -sS -o /tmp/dux-dash-out.$$ -w '%{http_code}' \
+# --fail-with-body prints the server's JSON on any error (409 carries
+# currentEtag, 422 the validation message) and exits nonzero — see the
+# skill's api.md for how to react to each status.
+curl -sS --fail-with-body \
   -X PUT "$SERVER/api/dash/dashboards/$DASH_PATH" \
   -H "If-Match: $MATCH" -H 'Content-Type: application/json' \
-  --data-binary @"$FILE")
-
-cat /tmp/dux-dash-out.$$
+  --data-binary @"$FILE"
 echo
-rm -f /tmp/dux-dash-out.$$
-case "$HTTP_CODE" in
-  200|201) echo "published: $SERVER/dash/$DASH_PATH" ;;
-  409) echo "conflict — someone saved in between; re-GET and retry (or use If-Match: *)" >&2; exit 1 ;;
-  422) echo "document failed schema validation (see error above)" >&2; exit 1 ;;
-  *) echo "publish failed (HTTP $HTTP_CODE)" >&2; exit 1 ;;
-esac
+echo "published: $SERVER/dash/$DASH_PATH"

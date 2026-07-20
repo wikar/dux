@@ -4,7 +4,6 @@ package emitter
 import (
 	"fmt"
 	"strings"
-	"unicode"
 
 	"github.com/danielwikar/dux/parser"
 	"github.com/danielwikar/dux/semantic"
@@ -221,8 +220,8 @@ func (e *Emitter) effectiveMeasures() map[string]map[string]*parser.MeasureDefin
 
 // resolveColName returns the exact column name to use in emitted SQL.
 // When the schema is available and the table+column are found, the schema's
-// own casing is used verbatim (e.g. "l_1stIn" stays "l_1stIn").
-// Falls back to toSnakeCase for schema-free unit tests or unknown columns.
+// own casing is used verbatim (e.g. "l_1stIn" stays "l_1stIn"). Otherwise the
+// bracket-stripped name is emitted as-is, letting DuckDB validate it.
 func (e *Emitter) resolveColName(table, stripped string) string {
 	if e.Schema != nil && table != "" {
 		if t, ok := e.Schema.Tables[table]; ok {
@@ -231,7 +230,7 @@ func (e *Emitter) resolveColName(table, stripped string) string {
 			}
 		}
 	}
-	return toSnakeCase(stripped)
+	return stripped
 }
 
 // ─── Literals ────────────────────────────────────────────────────────────────
@@ -1362,54 +1361,57 @@ func (e *Emitter) isMeasureColRef(expr *parser.Expr) bool {
 	return err == nil && def != nil
 }
 
+// walkTerms visits every Term within expr in document order, descending into
+// function-call arguments and parenthesised sub-expressions. The visit
+// callback returns false to skip descending into the current term's children.
+func walkTerms(expr *parser.Expr, visit func(*parser.Term) bool) {
+	if expr == nil {
+		return
+	}
+	terms := append([]*parser.Term{expr.Left}, make([]*parser.Term, 0, len(expr.Right))...)
+	for _, op := range expr.Right {
+		terms = append(terms, op.Right)
+	}
+	for _, t := range terms {
+		if t == nil || !visit(t) {
+			continue
+		}
+		if t.FuncCall != nil {
+			for _, arg := range t.FuncCall.Args {
+				walkTerms(arg, visit)
+			}
+		}
+		if t.SubExpr != nil {
+			walkTerms(t.SubExpr, visit)
+		}
+	}
+}
+
 // collectTables returns the distinct table names (in encounter order) that are
 // directly referenced via ColRef nodes within expr. Nested function call
 // arguments are traversed recursively.
 func collectTables(expr *parser.Expr) []string {
 	seen := map[string]bool{}
 	var result []string
-
-	var walkExpr func(*parser.Expr)
-	var walkTerm func(*parser.Term)
-
-	walkExpr = func(e *parser.Expr) {
-		if e == nil {
-			return
-		}
-		walkTerm(e.Left)
-		for _, op := range e.Right {
-			walkTerm(op.Right)
-		}
-	}
 	add := func(tableName string) {
 		if !seen[tableName] {
 			seen[tableName] = true
 			result = append(result, tableName)
 		}
 	}
-	walkTerm = func(t *parser.Term) {
-		if t == nil {
-			return
-		}
+	walkTerms(expr, func(t *parser.Term) bool {
 		if t.ColRef != nil && t.ColRef.Table != "" {
 			add(semantic.StripSingleQuotes(t.ColRef.Table))
 		}
+		// An iterator's bare-table source joins the enclosing FROM so the
+		// inline aggregate (see emitIterAgg) has rows to aggregate over.
 		if t.FuncCall != nil {
-			// An iterator's bare-table source joins the enclosing FROM so the
-			// inline aggregate (see emitIterAgg) has rows to aggregate over.
 			if tbl := iterBareTable(t.FuncCall); tbl != "" {
 				add(tbl)
 			}
-			for _, arg := range t.FuncCall.Args {
-				walkExpr(arg)
-			}
 		}
-		if t.SubExpr != nil {
-			walkExpr(t.SubExpr)
-		}
-	}
-
-	walkExpr(expr)
+		return true
+	})
 	return result
 }
 
@@ -1654,42 +1656,22 @@ func primaryTableFromExpr(expr *parser.Expr) string {
 // argument in the expression tree. Used to pick up the table name from
 // COUNTROWS(tableName) patterns where collectTables finds nothing.
 func firstIdentInFuncArgs(expr *parser.Expr) string {
-	if expr == nil {
-		return ""
-	}
-	var walkExpr func(*parser.Expr) string
-	var walkTerm func(*parser.Term) string
-	walkExpr = func(e *parser.Expr) string {
-		if e == nil {
-			return ""
-		}
-		if s := walkTerm(e.Left); s != "" {
-			return s
-		}
-		for _, op := range e.Right {
-			if s := walkTerm(op.Right); s != "" {
-				return s
-			}
-		}
-		return ""
-	}
-	walkTerm = func(t *parser.Term) string {
-		if t == nil {
-			return ""
+	var found string
+	walkTerms(expr, func(t *parser.Term) bool {
+		if found != "" {
+			return false
 		}
 		if t.FuncCall != nil {
 			for _, arg := range t.FuncCall.Args {
 				if arg.Left != nil && arg.Left.Ident != "" && len(arg.Right) == 0 {
-					return strings.ToLower(arg.Left.Ident)
-				}
-				if s := walkExpr(arg); s != "" {
-					return s
+					found = strings.ToLower(arg.Left.Ident)
+					return false
 				}
 			}
 		}
-		return ""
-	}
-	return walkExpr(expr)
+		return true
+	})
+	return found
 }
 
 // anyToSQL converts a Go value scanned from database/sql into a SQL literal
@@ -1733,31 +1715,4 @@ func normaliseOp(op string) string {
 	default:
 		return op
 	}
-}
-
-// toSnakeCase converts a CamelCase or PascalCase column name to snake_case.
-// For column names that are already lower-cased, this is a no-op.
-//
-//	"UnitPrice"  → "unit_price"
-//	"OrderID"    → "order_id"
-//	"amount"     → "amount"
-func toSnakeCase(s string) string {
-	runes := []rune(s)
-	var sb strings.Builder
-	for i, r := range runes {
-		if unicode.IsUpper(r) && i > 0 {
-			prev := runes[i-1]
-			// Insert underscore before an uppercase letter when preceded by a
-			// lowercase letter (e.g. unitPrice → unit_Price), or when this is
-			// the start of a new word after an acronym (e.g. OrderID → Order_ID
-			// only at the boundary where the next char is lowercase).
-			if unicode.IsLower(prev) {
-				sb.WriteRune('_')
-			} else if unicode.IsUpper(prev) && i+1 < len(runes) && unicode.IsLower(runes[i+1]) {
-				sb.WriteRune('_')
-			}
-		}
-		sb.WriteRune(unicode.ToLower(r))
-	}
-	return sb.String()
 }

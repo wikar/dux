@@ -1,55 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type { Schema, Relationship } from "@dux/core";
 import { isMetaTable, resolveTable, isDateType, duxClient as client } from "@dux/core";
-import dagre from "dagre";
 import TableCard from "./TableCard";
 import AddRelationshipModal from "./AddRelationshipModal";
 import PreviewModal from "./PreviewModal";
 import styles from "./Explorer.module.css";
-import { useFetch } from "../hooks";
 
 // ─── Layout constants ────────────────────────────────────────────────────────
 const CARD_WIDTH = 240;
-const CARD_HEADER_H = 37;
-const COL_ROW_H = 22;
-const COL_PAD_TOP = 4;
 const GRID_COLS = 3;
 const GRID_COL_STEP = CARD_WIDTH + 80;
 const GRID_ROW_STEP = 360;
 
 type Pos = { x: number; y: number };
 
-/** Use dagre to compute a relationship-aware left-to-right layout. */
-function computeDagreLayout(s: Schema): Record<string, Pos> {
-  const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: "LR", nodesep: 60, ranksep: 140, marginx: 24, marginy: 24 });
-  g.setDefaultEdgeLabel(() => ({}));
-
+/** Seed layout: cards in a fixed column grid. Positions are the starting
+ *  point only — cards stay user-draggable afterwards. */
+function computeGridLayout(s: Schema): Record<string, Pos> {
   const tnames = Object.keys(s.Tables).filter((n) => !isMetaTable(n)).sort();
-  for (const name of tnames) {
-    const colCount = Object.keys(s.Tables[name].Columns).length;
-    const h = CARD_HEADER_H + COL_PAD_TOP + colCount * COL_ROW_H + 8;
-    g.setNode(name, { width: CARD_WIDTH + 40, height: Math.min(h, 320) });
-  }
-  for (const rel of s.Relationships ?? []) {
-    const from = resolveTable(rel.FromTable, tnames);
-    const to = resolveTable(rel.ToTable, tnames);
-    if (from && to) g.setEdge(from, to);
-  }
-
-  dagre.layout(g);
-
   const result: Record<string, Pos> = {};
-  for (const name of tnames) {
-    const node = g.node(name);
-    if (node) {
-      result[name] = {
-        x: (node.x ?? 0) - CARD_WIDTH / 2,
-        y: (node.y ?? 0) - ((node.height ?? 200) / 2),
-      };
-    }
-  }
+  tnames.forEach((name, i) => {
+    result[name] = {
+      x: 24 + (i % GRID_COLS) * GRID_COL_STEP,
+      y: 24 + Math.floor(i / GRID_COLS) * GRID_ROW_STEP,
+    };
+  });
   return result;
 }
 
@@ -58,8 +35,10 @@ type LineDatum = { key: string; d: string; x1: number; y1: number; x2: number; y
 type CardDrag = { table: string; startMouseX: number; startMouseY: number; startCardX: number; startCardY: number };
 
 export default function Explorer(props: { refreshCount?: number; showHidden?: boolean }) {
-  const { data: schema, error: schemaError, loading, refetch } =
-    useFetch(() => client.fetchSchema(), [props.refreshCount]);
+  const { data: schema, error: schemaError, isFetching: loading, refetch } = useQuery({
+    queryKey: ["schema", props.refreshCount ?? 0],
+    queryFn: () => client.fetchSchema(),
+  });
 
   // Absolute positions for each table card on the canvas
   const [positions, setPositions] = useState<Record<string, Pos>>({});
@@ -91,8 +70,8 @@ export default function Explorer(props: { refreshCount?: number; showHidden?: bo
     setPositions((prev) => {
       const existing = Object.keys(prev);
       if (existing.length === 0) {
-        // First load — use dagre for a relationship-aware layout
-        return computeDagreLayout(schema);
+        // First load — seed a simple column grid
+        return computeGridLayout(schema);
       }
       // Subsequent: only add new tables below the existing ones
       const missing = names.filter((n) => !(n in prev));
@@ -329,30 +308,13 @@ export default function Explorer(props: { refreshCount?: number; showHidden?: bo
   }
 
   // ── Hidden designation ─────────────────────────────────────────────────────
-  /** Toggle the hidden flag on a whole table/view. */
-  async function toggleHidden(name: string) {
+  /** Toggle the hidden flag on a whole table/view, or a single column. */
+  async function toggle(name: string, col?: string) {
     if (!schema) return;
     try {
-      if (schema.Tables[name]?.Hidden) {
-        await client.clearHidden(name);
-      } else {
-        await client.setHidden(name);
-      }
-      refetch();
-    } catch (err) {
-      alert((err as Error).message);
-    }
-  }
-
-  /** Toggle the hidden flag on a single column. */
-  async function toggleColumnHidden(name: string, col: string) {
-    if (!schema) return;
-    try {
-      if (schema.Tables[name]?.Columns[col]?.Hidden) {
-        await client.clearHidden(name, col);
-      } else {
-        await client.setHidden(name, col);
-      }
+      const hidden = col ? schema.Tables[name]?.Columns[col]?.Hidden : schema.Tables[name]?.Hidden;
+      if (hidden) await client.clearHidden(name, col);
+      else await client.setHidden(name, col);
       refetch();
     } catch (err) {
       alert((err as Error).message);
@@ -435,8 +397,8 @@ export default function Explorer(props: { refreshCount?: number; showHidden?: bo
                 onPreview={() => setPreviewTable(name)}
                 onToggleDateTable={() => toggleDateTable(name)}
                 onSetDateColumn={(col) => setDateColumn(name, col)}
-                onToggleHidden={() => toggleHidden(name)}
-                onToggleColumnHidden={(col) => toggleColumnHidden(name, col)}
+                onToggleHidden={() => toggle(name)}
+                onToggleColumnHidden={(col) => toggle(name, col)}
               />
             );
           })}

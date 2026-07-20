@@ -1,17 +1,17 @@
 // Pure dashboard-document operations, applied through useDocStore.update so
 // each call is exactly one undo step.
-import { isNumeric } from "@dux/core";
-import type { Aggregate, DragPayload } from "@dux/core";
+import { isMetricField, isNumeric } from "@dux/core";
+import type { Aggregate, DragPayload, DropField } from "@dux/core";
 import { applySlicerSelection } from "./actions";
 import { useDocStore, useUiStore } from "./store";
 import type { BuilderFieldRef, Dashboard, DashElement, ElementType, Layout } from "./types";
 import { QUERY_TYPES } from "./types";
 
-export const SNAP = 8;
-export const MIN_W = 40;
-export const MIN_H = 24;
+const SNAP = 8;
+const MIN_W = 40;
+const MIN_H = 24;
 
-export function snap(v: number): number {
+function snap(v: number): number {
   return Math.round(v / SNAP) * SNAP;
 }
 
@@ -42,21 +42,6 @@ export const TYPE_LABEL: Record<ElementType, string> = {
   table: "Table",
   pivot: "Pivot",
   kpi: "KPI card",
-  slicer: "Slicer",
-  text: "Text",
-  image: "Image",
-};
-
-/** Compact palette-button labels ("chart"/"card" dropped for space). */
-export const SHORT_LABEL: Record<ElementType, string> = {
-  bar: "Bar",
-  line: "Line",
-  combo: "Combo",
-  area: "Area",
-  donut: "Donut",
-  table: "Table",
-  pivot: "Pivot",
-  kpi: "KPI",
   slicer: "Slicer",
   text: "Text",
   image: "Image",
@@ -210,10 +195,6 @@ export function nudgeElement(id: string, dx: number, dy: number) {
   }));
 }
 
-export function updateCanvas(fn: (doc: Dashboard) => Dashboard) {
-  useDocStore.getState().update(fn);
-}
-
 // ─── Field wells ─────────────────────────────────────────────────────────────
 //
 // The element's query.fields is one flat ordered list (dims before metrics —
@@ -223,14 +204,9 @@ export function updateCanvas(fn: (doc: Dashboard) => Dashboard) {
 export type WellId =
   | "axis" | "values" | "y2" | "bars" | "lines" | "fields" | "rows" | "cols" | "series";
 
-/** True when the field produces a metric output column. */
-export function isMetricRef(f: BuilderFieldRef): boolean {
-  return f.kind === "measure" || (isNumeric(f.dataType ?? "") && f.aggregate !== "VALUES");
-}
-
 /** Insert a dim before the first metric so dims lead the column order. */
 function insertDim(fields: BuilderFieldRef[], field: BuilderFieldRef) {
-  const at = fields.findIndex(isMetricRef);
+  const at = fields.findIndex((f) => isMetricField(f as DropField));
   if (at === -1) fields.push(field);
   else fields.splice(at, 0, field);
 }
@@ -250,7 +226,7 @@ function addFieldPure(el: DashElement, well: WellId, p: DragPayload): DashElemen
     insertDim(fields, field);
   } else if (well === "fields") {
     if (p.kind === "column" && numeric) field.aggregate = "SUM";
-    if (isMetricRef(field)) fields.push(field);
+    if (isMetricField(field as DropField)) fields.push(field);
     else insertDim(fields, field);
   } else {
     if (p.kind !== "measure" && !numeric) return el;

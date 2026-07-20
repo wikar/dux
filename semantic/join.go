@@ -55,7 +55,7 @@ func InferJoinPath(schema *Schema, tables []string) (*JoinPath, error) {
 
 	var steps []JoinStep
 	for _, target := range targets {
-		if joined[strings.ToLower(resolveSchemaTable(schema, target))] {
+		if joined[strings.ToLower(ResolveTable(schema, target))] {
 			// Already introduced as an intermediate step — nothing to emit.
 			continue
 		}
@@ -113,7 +113,7 @@ func bfsJoin(schema *Schema, from, to string) ([]JoinStep, error) {
 			}
 
 			// Resolve to the canonical schema key (e.g. bare "Sales" → "bev.Sales").
-			nextTable := resolveSchemaTable(schema, nextRaw)
+			nextTable := ResolveTable(schema, nextRaw)
 			nextLower := strings.ToLower(nextTable)
 			if visited[nextLower] {
 				continue
@@ -181,9 +181,9 @@ func tableNamesMatch(a, b string) bool {
 func FilterReaches(schema *Schema, src string, targets []string) bool {
 	targetSet := map[string]bool{}
 	for _, t := range targets {
-		targetSet[strings.ToLower(resolveSchemaTable(schema, t))] = true
+		targetSet[strings.ToLower(ResolveTable(schema, t))] = true
 	}
-	src = resolveSchemaTable(schema, src)
+	src = ResolveTable(schema, src)
 	if targetSet[strings.ToLower(src)] {
 		return true
 	}
@@ -203,7 +203,7 @@ func FilterReaches(schema *Schema, src string, targets []string) bool {
 			default:
 				continue
 			}
-			next = resolveSchemaTable(schema, next)
+			next = ResolveTable(schema, next)
 			nl := strings.ToLower(next)
 			if visited[nl] {
 				continue
@@ -218,18 +218,11 @@ func FilterReaches(schema *Schema, src string, targets []string) bool {
 	return false
 }
 
-// ResolveTable returns the canonical schema key for a table name (exact
+// ResolveTable returns the canonical schema key for name: exact
 // case-insensitive match first, then bare-name suffix match for unqualified
-// names). It is the exported form of resolveSchemaTable for callers outside
-// this package (e.g. the emitter's measure clustering).
+// names. Returns name unchanged if no schema entry is found. Used across the
+// package and by the emitter's measure clustering.
 func ResolveTable(schema *Schema, name string) string {
-	return resolveSchemaTable(schema, name)
-}
-
-// resolveSchemaTable returns the canonical schema key for name: exact
-// case-insensitive match first, then bare-name suffix match for unqualified
-// names. Returns name unchanged if no schema entry is found.
-func resolveSchemaTable(schema *Schema, name string) string {
 	nl := strings.ToLower(name)
 	for key := range schema.Tables {
 		if strings.ToLower(key) == nl {
@@ -294,16 +287,15 @@ func ValidateBidiPaths(schema *Schema) error {
 	//
 	// Build adjacency list (undirected).
 	type edge struct {
-		to      string
-		rel     *Relationship
-		forward bool // true = traversing FromTable→ToTable; false = reverse
+		to  string
+		rel *Relationship
 	}
 	adj := map[string][]edge{}
 	for _, r := range schema.Relationships {
 		fl := strings.ToLower(r.FromTable)
 		tl := strings.ToLower(r.ToTable)
-		adj[fl] = append(adj[fl], edge{to: tl, rel: r, forward: true})
-		adj[tl] = append(adj[tl], edge{to: fl, rel: r, forward: false})
+		adj[fl] = append(adj[fl], edge{to: tl, rel: r})
+		adj[tl] = append(adj[tl], edge{to: fl, rel: r})
 	}
 
 	// Normalise table names to the lower-case set we built.

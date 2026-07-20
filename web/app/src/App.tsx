@@ -1,19 +1,19 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
-import { duxClient as client, generateQuery, isNumeric } from "@dux/core";
+import { useQuery } from "@tanstack/react-query";
+import { duxClient as client, generateQuery, isMetricField, isNumeric } from "@dux/core";
 import type { QueryFailedError, DropField, FilterField, DragPayload, Aggregate, FilterOp } from "@dux/core";
 import SchemaTree from "./components/SchemaTree";
 import DropZone from "./components/DropZone";
 import QueryPreview from "./components/QueryPreview";
 import ResultTable from "./components/ResultTable";
 import TopBar from "./components/TopBar";
-import { useFetch } from "./hooks";
 import { dashPathFromPathname, navigate, tabFromPathname, usePathname } from "./router";
 // The dash section is composed here and only here — src/components must never
 // import from src/dash, so a future dash-only duxuid build can ship
 // src/dash + src/components behind its own entry point.
 //
-// Dash (Recharts, markdown, TanStack) and Explorer (dagre) are code-split:
+// Dash (Recharts, markdown, TanStack) and Explorer are code-split:
 // they load on first tab visit, keeping the entry chunk to the Home
 // workspace. Only the small dash store/api modules stay in the entry (the
 // top bar needs the fullscreen flag and last-open path before the chunk
@@ -26,16 +26,14 @@ const Explorer = lazy(() => import("./components/Explorer"));
 const DashApp = lazy(() => import("./dash/DashApp"));
 const DashActions = lazy(() => import("./dash/components/DashActions"));
 
-// A field is a "metric" if it's a pre-defined measure or a numeric column.
-// Non-metric (group-by) columns always sort before metrics.
-const isMetric = (f: DropField) =>
-  f.kind === "measure" || (f.kind === "column" && isNumeric(f.dataType) && f.aggregate !== "VALUES");
+// A field is a "metric" if it's a pre-defined measure or a numeric column
+// (isMetricField from @dux/core). Non-metric (group-by) columns sort first.
 
 export default function App() {
   const pathname = usePathname();
   const tab = tabFromPathname(pathname);
   const dashPath = dashPathFromPathname(pathname);
-  const { data: version } = useFetch(() => client.fetchVersion());
+  const { data: version } = useQuery({ queryKey: ["version"], queryFn: () => client.fetchVersion() });
   const dashEnabled = version?.capabilities?.dashboards === true;
 
   const dashFullscreen = useUiStore((s) => s.fullscreen);
@@ -95,12 +93,12 @@ export default function App() {
         dataType: payload.dataType,
         aggregate: payload.kind === "column" && isNumeric(payload.dataType) ? "SUM" : undefined,
       };
-      if (isMetric(field)) {
+      if (isMetricField(field)) {
         // Metrics go at the end.
         return [...prev, field];
       }
       // Non-metric columns insert before the first metric.
-      const insertAt = prev.findIndex(isMetric);
+      const insertAt = prev.findIndex(isMetricField);
       if (insertAt === -1) return [...prev, field];
       const next = [...prev];
       next.splice(insertAt, 0, field);
@@ -125,8 +123,8 @@ export default function App() {
   function handleAggChange(i: number, agg: Aggregate) {
     setFields((prev) => {
       const updated: DropField = { ...prev[i], aggregate: agg };
-      const wasMetric = isMetric(prev[i]);
-      const nowMetric = isMetric(updated);
+      const wasMetric = isMetricField(prev[i]);
+      const nowMetric = isMetricField(updated);
       const arr = [...prev];
       arr[i] = updated;
       if (wasMetric === nowMetric) {
@@ -140,7 +138,7 @@ export default function App() {
         arr.push(item);
       } else {
         // Became a dimension (VALUES): insert before the first metric.
-        const insertAt = arr.findIndex(isMetric);
+        const insertAt = arr.findIndex(isMetricField);
         if (insertAt === -1) arr.push(item);
         else arr.splice(insertAt, 0, item);
       }
@@ -154,8 +152,8 @@ export default function App() {
       // Non-metric columns always precede metrics. Clamp target to enforce this.
       let clamped = to;
       // Count of non-metric items excluding the dragged item.
-      const nonMetricCount = prev.filter((f, i) => i !== from && !isMetric(f)).length;
-      if (isMetric(item)) {
+      const nonMetricCount = prev.filter((f, i) => i !== from && !isMetricField(f)).length;
+      if (isMetricField(item)) {
         // Metric: cannot go before a non-metric column.
         clamped = Math.max(to, nonMetricCount);
       } else {
@@ -289,6 +287,7 @@ export default function App() {
         <div className={styles.col3}>
           <QueryPreview
             query={activeQuery}
+            refreshCount={refreshCount}
             isDirty={isDirty}
             onQueryChange={handleQueryChange}
             onRun={commitQuery}

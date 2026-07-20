@@ -1,5 +1,5 @@
 import styles from "./ElementsPane.module.css";
-import { addElement, SHORT_LABEL, swapElementType, TYPE_LABEL } from "../docOps";
+import { addElement, swapElementType, TYPE_LABEL } from "../docOps";
 import { useDocStore, useUiStore } from "../store";
 import type { ElementType } from "../types";
 import { QUERY_TYPES } from "../types";
@@ -38,7 +38,7 @@ export default function ElementsPane() {
               onClick={() => onType(t)}
             >
               {typeIcon(t)}
-              <span>{SHORT_LABEL[t]}</span>
+              <span>{TYPE_LABEL[t].split(" ")[0]}</span>
             </button>
           ))}
         </div>

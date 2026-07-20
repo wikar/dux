@@ -104,15 +104,9 @@ func PreResolveMeasures(defines []*parser.MeasureDefinition, target map[string]m
 	for _, def := range defines {
 		table := StripSingleQuotes(def.Table)
 		name := StripBrackets(def.Column)
-		// Uniqueness check: is this name already registered under a different table?
-		for existingTable, defs := range target {
-			if existingTable == table {
-				continue
-			}
-			if _, conflicts := defs[name]; conflicts {
-				return &SemanticError{
-					Message: fmt.Sprintf("measure name %q already defined in table %q; measure names must be unique", name, existingTable),
-				}
+		if existingTable, conflicts := MeasureNameConflict(target, table, name); conflicts {
+			return &SemanticError{
+				Message: fmt.Sprintf("measure name %q already defined in table %q; measure names must be unique", name, existingTable),
 			}
 		}
 		if target[table] == nil {
@@ -121,6 +115,21 @@ func PreResolveMeasures(defines []*parser.MeasureDefinition, target map[string]m
 		target[table][name] = def
 	}
 	return nil
+}
+
+// MeasureNameConflict reports the first table in measures — other than the
+// given table — that already defines name. Measure names must be unique across
+// tables so that bare [MeasureName] references stay unambiguous.
+func MeasureNameConflict(measures map[string]map[string]*parser.MeasureDefinition, table, name string) (string, bool) {
+	for existingTable, defs := range measures {
+		if existingTable == table {
+			continue
+		}
+		if _, conflicts := defs[name]; conflicts {
+			return existingTable, true
+		}
+	}
+	return "", false
 }
 
 // cloneMeasures returns a deep copy of a measure map so that per-query

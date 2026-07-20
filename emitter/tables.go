@@ -214,7 +214,7 @@ func (e *Emitter) emitOrderKey(expr *parser.Expr) (string, error) {
 		if cr.Table != "" {
 			name = e.resolveColName(semantic.StripSingleQuotes(cr.Table), name)
 		}
-		return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`, nil
+		return quoteIdent(name), nil
 	}
 	return e.emitExpr(expr)
 }

@@ -151,16 +151,6 @@
   cursor: pointer;
 }
 
-.assetName {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--subtext1);
-}
-
 .btn {
   display: flex;
   align-items: center;
@@ -360,16 +350,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text);
-}
-
-.fieldChipMeasure {
-  font-size: 10px;
-  font-weight: 700;
-  background: var(--mauve);
-  color: var(--base);
-  padding: 1px 4px;
-  border-radius: 3px;
-  flex-shrink: 0;
 }
 
 .fieldChipRemove {

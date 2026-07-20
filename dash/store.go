@@ -11,7 +11,7 @@
 package dash
 
 import (
-	"crypto/rand"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -85,25 +85,22 @@ type cacheEntry struct {
 	verr    string
 }
 
-func NewStore(root string, validate func([]byte) error) *Store {
+func newStore(root string, validate func([]byte) error) *Store {
 	return &Store{root: root, validate: validate, cache: make(map[string]*cacheEntry)}
 }
-
-// Root returns the store's root directory.
-func (s *Store) Root() string { return s.root }
 
 // ─── Path rules ──────────────────────────────────────────────────────────────
 
 // invalidPathChars are rejected in path segments (Windows-invalid plus quotes).
 const invalidPathChars = `<>:"|?*\`
 
-// CleanPath validates and normalises a dashboard/asset path: slash-separated
+// cleanPath validates and normalises a dashboard/asset path: slash-separated
 // segments, no traversal, no Windows-hostile names, and **lower-cased** — the
 // store's identities are lower-case so behaviour is identical on
 // case-insensitive (Windows/macOS) and case-sensitive (Linux) filesystems.
 // Files created outside the API with mixed-case names are resolved
 // case-insensitively and listed under their lower-cased identity.
-func CleanPath(p string) (string, error) {
+func cleanPath(p string) (string, error) {
 	p = strings.Trim(strings.ReplaceAll(p, "\\", "/"), "/")
 	if p == "" {
 		return "", fmt.Errorf("empty path")
@@ -167,9 +164,9 @@ func (s *Store) resolvePath(relLower string) (string, bool) {
 	return cur, true
 }
 
-// cleanDashboardPath applies CleanPath plus dashboard-specific reservations.
+// cleanDashboardPath applies cleanPath plus dashboard-specific reservations.
 func cleanDashboardPath(p string) (string, error) {
-	p, err := CleanPath(p)
+	p, err := cleanPath(p)
 	if err != nil {
 		return "", err
 	}
@@ -504,7 +501,7 @@ var assetMIME = map[string]string{
 // on disk under the dashboards root (deployed alongside the documents) —
 // there is no upload path; only assetMIME extensions are served.
 func (s *Store) GetAsset(rawPath string) (data []byte, mime string, err error) {
-	clean, err := CleanPath(rawPath)
+	clean, err := cleanPath(rawPath)
 	if err != nil {
 		return nil, "", err
 	}
@@ -534,16 +531,14 @@ func (e *ValidationError) Unwrap() error { return e.Err }
 // prettyJSON re-indents a JSON document with stable formatting (2-space
 // indent, trailing newline) so on-disk files diff cleanly in git.
 func prettyJSON(data []byte) ([]byte, error) {
-	var v any
-	dec := json.NewDecoder(strings.NewReader(string(data)))
-	dec.UseNumber() // preserve numeric representation
-	if err := dec.Decode(&v); err != nil {
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, data, "", "  "); err != nil {
 		return nil, fmt.Errorf("not valid JSON: %w", err)
 	}
-	out, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return nil, err
-	}
+	// json.Indent copies any trailing whitespace already in the input, so trim
+	// before adding exactly one newline — keeps the output idempotent (a
+	// re-indented file is byte-identical, so ETags stay stable across restore).
+	out := bytes.TrimRight(buf.Bytes(), " \t\r\n")
 	return append(out, '\n'), nil
 }
 
@@ -554,17 +549,24 @@ func writeAtomic(target string, data []byte) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	var suffix [8]byte
-	if _, err := rand.Read(suffix[:]); err != nil {
+	f, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(dir, ".tmp-"+hex.EncodeToString(suffix[:]))
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return err
+	tmp := f.Name()
+	_, werr := f.Write(data)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
 	}
-	if err := os.Rename(tmp, target); err != nil {
+	if werr == nil {
+		werr = os.Chmod(tmp, 0644) // CreateTemp makes 0600; keep files readable
+	}
+	if werr == nil {
+		werr = os.Rename(tmp, target)
+	}
+	if werr != nil {
 		_ = os.Remove(tmp)
-		return err
+		return werr
 	}
 	return nil
 }

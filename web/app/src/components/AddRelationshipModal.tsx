@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Schema, Relationship } from "@dux/core";
 import { isMetaTable, resolveTable, duxClient as client } from "@dux/core";
+import Modal, { modalStyles } from "./Modal";
 import styles from "./SchemaTree.module.css";
 
 export default function AddRelationshipModal(props: {
@@ -31,15 +32,6 @@ export default function AddRelationshipModal(props: {
   const [bidi, setBidi] = useState(props.initial?.Bidirectional ?? false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    function onKey(e: globalThis.KeyboardEvent) {
-      if (e.key === "Escape") props.onClose();
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   function reverse() {
     setFromTable(toTable);
@@ -123,29 +115,12 @@ export default function AddRelationshipModal(props: {
   );
 
   return (
-    <div
-      className={styles.modalOverlay}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) props.onClose();
-      }}
-    >
-      <div className={styles.modal}>
-        <div className={styles.modalHeader}>
-          <span>{isEdit ? "Edit Relationship" : "New Relationship"}</span>
-          <button className={styles.modalClose} onClick={props.onClose}>
-            ✕
-          </button>
-        </div>
-        <div className={styles.modalBody}>
-          {select("From table", "— select table —", tables, fromTable, (v) => { setFromTable(v); setFromCol(""); })}
-          {select("From column", "— select column —", colsFor(fromTable), fromCol, setFromCol)}
-          {select("To table", "— select table —", tables, toTable, (v) => { setToTable(v); setToCol(""); })}
-          {select("To column", "— select column —", colsFor(toTable), toCol, setToCol)}
-
-          {error && <div className={styles.modalError}>{error}</div>}
-        </div>
-        <div className={styles.modalFooter}>
-          <button className={styles.modalBtn} onClick={reverse} disabled={saving} style={{ marginRight: 8 }}>
+    <Modal
+      title={isEdit ? "Edit Relationship" : "New Relationship"}
+      onClose={props.onClose}
+      footer={
+        <>
+          <button className={modalStyles.btn} onClick={reverse} disabled={saving} style={{ marginRight: 8 }}>
             ⇄ Reverse
           </button>
           <label style={{ display: "flex", alignItems: "center", gap: 6, marginRight: "auto", cursor: "pointer", fontSize: "0.875rem" }}>
@@ -157,18 +132,21 @@ export default function AddRelationshipModal(props: {
             />
             Bidirectional
           </label>
-          <button className={styles.modalBtn} onClick={props.onClose} disabled={saving}>
+          <button className={modalStyles.btn} onClick={props.onClose} disabled={saving}>
             Cancel
           </button>
-          <button
-            className={`${styles.modalBtn} ${styles.modalBtnPrimary}`}
-            onClick={save}
-            disabled={saving}
-          >
+          <button className={modalStyles.btnPrimary} onClick={save} disabled={saving}>
             {saving ? "Saving…" : "Save"}
           </button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+      {select("From table", "— select table —", tables, fromTable, (v) => { setFromTable(v); setFromCol(""); })}
+      {select("From column", "— select column —", colsFor(fromTable), fromCol, setFromCol)}
+      {select("To table", "— select table —", tables, toTable, (v) => { setToTable(v); setToCol(""); })}
+      {select("To column", "— select column —", colsFor(toTable), toCol, setToCol)}
+
+      {error && <div className={styles.modalError}>{error}</div>}
+    </Modal>
   );
 }

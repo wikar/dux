@@ -143,44 +143,23 @@ func (e *Emitter) aggSubtrees(expr *parser.Expr) []*parser.FuncCall {
 	var result []*parser.FuncCall
 	visiting := map[*parser.MeasureDefinition]bool{}
 
-	var walkExpr func(*parser.Expr)
-	var walkTerm func(*parser.Term)
-
-	walkExpr = func(ex *parser.Expr) {
-		if ex == nil {
-			return
-		}
-		walkTerm(ex.Left)
-		for _, op := range ex.Right {
-			walkTerm(op.Right)
-		}
-	}
-	walkTerm = func(t *parser.Term) {
-		if t == nil {
-			return
-		}
+	var visit func(*parser.Term) bool
+	visit = func(t *parser.Term) bool {
 		if t.ColRef != nil {
 			if def := e.resolveMeasureDef(t.ColRef); def != nil && def.Expr != nil && !visiting[def] {
 				visiting[def] = true
-				walkExpr(def.Expr)
+				walkTerms(def.Expr, visit)
 				delete(visiting, def)
 			}
 		}
-		if t.FuncCall != nil {
-			if isLiftable(strings.ToUpper(t.FuncCall.Name)) {
-				result = append(result, t.FuncCall)
-				return // maximal: do not descend
-			}
-			for _, arg := range t.FuncCall.Args {
-				walkExpr(arg)
-			}
+		if t.FuncCall != nil && isLiftable(strings.ToUpper(t.FuncCall.Name)) {
+			result = append(result, t.FuncCall)
+			return false // maximal: do not descend
 		}
-		if t.SubExpr != nil {
-			walkExpr(t.SubExpr)
-		}
+		return true
 	}
 
-	walkExpr(expr)
+	walkTerms(expr, visit)
 	return result
 }
 
@@ -264,27 +243,13 @@ func (e *Emitter) measureExprTables(expr *parser.Expr) []string {
 		}
 	}
 
-	var walkExpr func(*parser.Expr)
-	var walkTerm func(*parser.Term)
-
-	walkExpr = func(ex *parser.Expr) {
-		if ex == nil {
-			return
-		}
-		walkTerm(ex.Left)
-		for _, op := range ex.Right {
-			walkTerm(op.Right)
-		}
-	}
-	walkTerm = func(t *parser.Term) {
-		if t == nil {
-			return
-		}
+	var visit func(*parser.Term) bool
+	visit = func(t *parser.Term) bool {
 		if t.ColRef != nil {
 			if def := e.resolveMeasureDef(t.ColRef); def != nil && def.Expr != nil {
 				if !visiting[def] {
 					visiting[def] = true
-					walkExpr(def.Expr)
+					walkTerms(def.Expr, visit)
 					delete(visiting, def)
 				}
 			} else if t.ColRef.Table != "" {
@@ -297,15 +262,10 @@ func (e *Emitter) measureExprTables(expr *parser.Expr) []string {
 			if tbl := iterBareTable(t.FuncCall); tbl != "" {
 				add(tbl)
 			}
-			for _, arg := range t.FuncCall.Args {
-				walkExpr(arg)
-			}
 		}
-		if t.SubExpr != nil {
-			walkExpr(t.SubExpr)
-		}
+		return true
 	}
 
-	walkExpr(expr)
+	walkTerms(expr, visit)
 	return result
 }

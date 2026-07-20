@@ -17,14 +17,12 @@ import {
   addFieldToWell,
   addFilterToElement,
   duplicateElement,
-  isMetricRef,
   removeElement,
   replaceFieldInWell,
   removeFieldFromElement,
   removeFilter,
   setFieldAggregate,
   swapElementType,
-  updateCanvas,
   updateElement,
   updateFilter,
   clamp,
@@ -43,7 +41,7 @@ import type {
 } from "../types";
 import { QUERY_TYPES } from "../types";
 import { applySlicerSelection } from "../actions";
-import { isNumeric, QueryFailedError } from "@dux/core";
+import { isMetricField, isNumeric, QueryFailedError } from "@dux/core";
 import type { Aggregate, DragPayload, DropField, FilterField, FilterOp } from "@dux/core";
 
 /** Settings for the selected element, or the dashboard when none selected.
@@ -250,16 +248,17 @@ const WELLS: Partial<
 
 function wellMembers(el: DashElement, well: WellId): BuilderFieldRef[] {
   const fields = el.query?.fields ?? [];
-  const metrics = fields.filter(isMetricRef);
+  const isMetric = (f: BuilderFieldRef) => isMetricField(asDropField(f));
+  const metrics = fields.filter(isMetric);
   const y2 = new Set(el.viz?.y2 ?? []);
   const lines = new Set(el.viz?.lines ?? []);
   const cols = new Set(el.viz?.cols ?? []);
   const series = el.viz?.series;
   switch (well) {
     case "axis":
-      return fields.filter((f) => !isMetricRef(f) && f.name !== series);
+      return fields.filter((f) => !isMetric(f) && f.name !== series);
     case "series":
-      return fields.filter((f) => !isMetricRef(f) && f.name === series);
+      return fields.filter((f) => !isMetric(f) && f.name === series);
     case "fields":
       return fields;
     case "values":
@@ -271,9 +270,9 @@ function wellMembers(el: DashElement, well: WellId): BuilderFieldRef[] {
     case "lines":
       return metrics.filter((f) => lines.has(f.name));
     case "rows":
-      return fields.filter((f) => !isMetricRef(f) && !cols.has(f.name));
+      return fields.filter((f) => !isMetric(f) && !cols.has(f.name));
     case "cols":
-      return fields.filter((f) => !isMetricRef(f) && cols.has(f.name));
+      return fields.filter((f) => !isMetric(f) && cols.has(f.name));
   }
 }
 
@@ -364,6 +363,29 @@ const SLICER_KINDS: { v: SlicerKind; label: string }[] = [
   { v: "daterange", label: "Date range" },
 ];
 
+/** Shared drag-over highlight + application/dux drop parsing for the wells.
+ *  Returns the `over` highlight flag and handlers to spread on the drop div. */
+function useDuxDrop(onDrop: (p: DragPayload) => void) {
+  const [over, setOver] = useState(false);
+  const dropProps = {
+    onDragOver: (e: React.DragEvent) => {
+      if (e.dataTransfer.types.includes("application/dux")) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        setOver(true);
+      }
+    },
+    onDragLeave: () => setOver(false),
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      setOver(false);
+      const raw = e.dataTransfer.getData("application/dux");
+      if (raw) onDrop(JSON.parse(raw) as DragPayload);
+    },
+  };
+  return { over, dropProps };
+}
+
 /** Generic single-purpose drop target in the well idiom. */
 function DropTarget({
   label,
@@ -376,27 +398,11 @@ function DropTarget({
   onDrop: (p: DragPayload) => void;
   children?: React.ReactNode;
 }) {
-  const [over, setOver] = useState(false);
+  const { over, dropProps } = useDuxDrop(onDrop);
   return (
     <div>
       <label className={styles.label}>{label}</label>
-      <div
-        className={`${styles.well}${over ? ` ${styles.wellOver}` : ""}`}
-        onDragOver={(e) => {
-          if (e.dataTransfer.types.includes("application/dux")) {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = "copy";
-            setOver(true);
-          }
-        }}
-        onDragLeave={() => setOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setOver(false);
-          const raw = e.dataTransfer.getData("application/dux");
-          if (raw) onDrop(JSON.parse(raw) as DragPayload);
-        }}
-      >
+      <div className={`${styles.well}${over ? ` ${styles.wellOver}` : ""}`} {...dropProps}>
         {children ?? <span className={styles.wellHint}>{hint}</span>}
       </div>
     </div>
@@ -628,35 +634,19 @@ function Well({
   hint?: string;
 }) {
   const members = wellMembers(el, well);
-  const [over, setOver] = useState(false);
+  const { over, dropProps } = useDuxDrop((p) => {
+    // A full single-slot well swaps its member for the dropped field.
+    if (max !== undefined && members.length >= max) {
+      replaceFieldInWell(el.id, well, members.map((m) => m.name), p);
+    } else {
+      addFieldToWell(el.id, well, p);
+    }
+  });
 
   return (
     <div>
       <label className={styles.label}>{label}</label>
-      <div
-        className={`${styles.well}${over ? ` ${styles.wellOver}` : ""}`}
-        onDragOver={(e) => {
-          if (e.dataTransfer.types.includes("application/dux")) {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = "copy";
-            setOver(true);
-          }
-        }}
-        onDragLeave={() => setOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setOver(false);
-          const raw = e.dataTransfer.getData("application/dux");
-          if (!raw) return;
-          const p = JSON.parse(raw) as DragPayload;
-          // A full single-slot well swaps its member for the dropped field.
-          if (max !== undefined && members.length >= max) {
-            replaceFieldInWell(el.id, well, members.map((m) => m.name), p);
-          } else {
-            addFieldToWell(el.id, well, p);
-          }
-        }}
-      >
+      <div className={`${styles.well}${over ? ` ${styles.wellOver}` : ""}`} {...dropProps}>
         {members.length === 0 && (
           <span className={styles.wellHint}>{hint ?? "Drop a field from Schema"}</span>
         )}
@@ -678,28 +668,12 @@ function Well({
 
 function FiltersWell({ el }: { el: DashElement }) {
   const filters = el.query?.filters ?? [];
-  const [over, setOver] = useState(false);
+  const { over, dropProps } = useDuxDrop((p) => addFilterToElement(el.id, p));
 
   return (
     <div>
       <label className={styles.label}>Filters</label>
-      <div
-        className={`${styles.well}${over ? ` ${styles.wellOver}` : ""}`}
-        onDragOver={(e) => {
-          if (e.dataTransfer.types.includes("application/dux")) {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = "copy";
-            setOver(true);
-          }
-        }}
-        onDragLeave={() => setOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setOver(false);
-          const raw = e.dataTransfer.getData("application/dux");
-          if (raw) addFilterToElement(el.id, JSON.parse(raw));
-        }}
-      >
+      <div className={`${styles.well}${over ? ` ${styles.wellOver}` : ""}`} {...dropProps}>
         {filters.length === 0 && <span className={styles.wellHint}>Drop a field to filter on</span>}
         {filters.map((f, i) => (
           <FieldPill
@@ -901,7 +875,7 @@ function DashboardSettings() {
   const setSize = (k: "width" | "height", raw: string) => {
     const v = Math.round(Number(raw));
     if (!Number.isFinite(v) || v < 1 || v > 16384) return;
-    updateCanvas((d) => ({ ...d, canvas: { ...d.canvas, [k]: v } }));
+    useDocStore.getState().update((d) => ({ ...d, canvas: { ...d.canvas, [k]: v } }));
   };
 
   return (
@@ -939,7 +913,7 @@ function DashboardSettings() {
             type="checkbox"
             checked={doc.refresh?.enabled ?? false}
             onChange={(e) =>
-              updateCanvas((d) => ({
+              useDocStore.getState().update((d) => ({
                 ...d,
                 refresh: { enabled: e.target.checked, intervalSeconds: d.refresh?.intervalSeconds ?? 60 },
               }))
@@ -958,7 +932,7 @@ function DashboardSettings() {
               onChange={(e) => {
                 const v = Number(e.target.value);
                 if (!Number.isFinite(v)) return;
-                updateCanvas((d) => ({
+                useDocStore.getState().update((d) => ({
                   ...d,
                   refresh: { enabled: true, intervalSeconds: clamp(Math.round(v), 1, 86400) },
                 }));
@@ -1154,7 +1128,7 @@ function ThemeSection() {
   const tokens = (doc.theme ?? {}) as ThemeTokens;
 
   const onToken = (key: keyof ThemeTokens, value: string | string[] | undefined) =>
-    updateCanvas((d) => {
+    useDocStore.getState().update((d) => {
       const theme = { ...(d.theme ?? {}) } as Record<string, unknown>;
       if (value === undefined) delete theme[key];
       else theme[key] = value;

@@ -17,15 +17,11 @@ const maxDocumentBytes = 4 << 20
 type Config struct {
 	// Root is the dashboards directory (created lazily on first write).
 	Root string
-	// RefreshFloorSeconds is the minimum allowed live-refresh interval.
-	// Default 5; 0 keeps the default (use -1 to disable the check).
-	RefreshFloorSeconds int
 }
 
 // Server is the /api/dash HTTP API over a Store. Mount it on the parent mux
 // at /api/dash/.
 type Server struct {
-	cfg   Config
 	store *Store
 	mux   *http.ServeMux
 }
@@ -34,18 +30,11 @@ func NewServer(cfg Config) (*Server, error) {
 	if cfg.Root == "" {
 		cfg.Root = "dashboards"
 	}
-	if cfg.RefreshFloorSeconds == 0 {
-		cfg.RefreshFloorSeconds = 5
-	}
-	floor := cfg.RefreshFloorSeconds
-	if floor < 0 {
-		floor = 0
-	}
-	validator, err := NewValidator(floor)
+	validator, err := newValidator()
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{cfg: cfg, store: NewStore(cfg.Root, validator.Validate)}
+	s := &Server{store: newStore(cfg.Root, validator.Validate)}
 
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/dash/dashboards", s.handleList)
@@ -61,9 +50,6 @@ func NewServer(cfg Config) (*Server, error) {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
-
-// Store exposes the underlying store (used by tests and future callers).
-func (s *Server) Store() *Store { return s.store }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 

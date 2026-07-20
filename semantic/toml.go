@@ -96,13 +96,8 @@ func LoadDuxTOMLBytes(data []byte, schema *Schema) error {
 		// Measure names must be unique across tables so that bare
 		// [MeasureName] references stay unambiguous.
 		table := StripSingleQuotes(m.Table)
-		for existingTable, defs := range schema.Measures {
-			if existingTable == table {
-				continue
-			}
-			if _, conflicts := defs[m.Name]; conflicts {
-				return fmt.Errorf("measure %q already defined in table %q", m.Name, existingTable)
-			}
+		if existingTable, conflicts := MeasureNameConflict(schema.Measures, table, m.Name); conflicts {
+			return fmt.Errorf("measure %q already defined in table %q", m.Name, existingTable)
 		}
 		if err := schema.AddMeasureFromExpr(m.Table, m.Name, m.Expression); err != nil {
 			return fmt.Errorf("measure %q: %w", m.Name, err)

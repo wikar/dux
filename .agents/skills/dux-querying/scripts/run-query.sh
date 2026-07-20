@@ -26,12 +26,10 @@ else
 fi
 [ -n "$QUERY" ] || { echo "error: empty query" >&2; exit 1; }
 
-HTTP_CODE=$(curl -sS -o /tmp/dux-query-out.$$ -w '%{http_code}' \
+# --fail-with-body prints the JSON result on success and the server's JSON
+# error (with line/column/stage) on failure, exiting nonzero either way.
+curl -sS --fail-with-body \
   -X POST "$SERVER/query" \
   -H 'Content-Type: text/plain' \
-  --data-binary "$QUERY")
-
-cat /tmp/dux-query-out.$$
+  --data-binary "$QUERY"
 echo
-rm -f /tmp/dux-query-out.$$
-[ "$HTTP_CODE" = "200" ] || { echo "query failed (HTTP $HTTP_CODE)" >&2; exit 1; }
