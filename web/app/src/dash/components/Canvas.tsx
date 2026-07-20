@@ -18,6 +18,7 @@ export default function Canvas() {
   const doc = useDocStore((s) => s.doc)!;
   const mode = useUiStore((s) => s.mode);
   const select = useUiStore((s) => s.select);
+  const clearCrossFilters = useUiStore((s) => s.clearCrossFilters);
   const outerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -73,9 +74,12 @@ export default function Canvas() {
     <div
       ref={outerRef}
       className={styles.outer}
-      onPointerDown={() => {
+      onPointerDown={(e) => {
         select(null);
         setMenu(null);
+        // A click outside any element clears chart cross-filter selections;
+        // clicks landing inside a visual (marks, chrome) are left alone.
+        if (!(e.target as HTMLElement).closest("[data-element-id]")) clearCrossFilters();
       }}
     >
       <div className={styles.sizer} style={{ width: width * scale, height: height * scale }}>

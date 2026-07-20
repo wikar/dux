@@ -25,10 +25,35 @@ Content-Type: application/json
 |-------|---------|-------|
 | `table` | all | Dot-qualified table name |
 | `column` | all | Column name |
-| `op` | all | One of `in`, `between`, `=`, `!=`, `<`, `<=`, `>`, `>=`, `contains` |
+| `op` | all | One of `in`, `between`, `=`, `!=`, `<`, `<=`, `>`, `>=`, `contains`, `in_tuples` |
 | `values` | `in` | Array of scalars |
 | `value` | `=` `!=` `<` `<=` `>` `>=` `contains` | Single scalar |
 | `from`, `to` | `between` | Inclusive bounds |
+| `columns`, `tuples` | `in_tuples` | Multi-column set membership (OR-of-tuples) |
+
+### `in_tuples` — multi-column set membership
+
+Selecting several multi-dimensional points at once (e.g. a multi-select of
+clustered/stacked chart marks) needs an OR of column tuples, which a flat AND
+of per-column filters cannot express. `in_tuples` carries the columns and the
+value rows; `table`/`column`/`values` are omitted.
+
+```json
+{
+  "op": "in_tuples",
+  "columns": [
+    { "table": "sales", "column": "region" },
+    { "table": "sales", "column": "product" }
+  ],
+  "tuples": [ ["North", "Widget"], ["South", "Gadget"] ]
+}
+```
+
+Compiles to a multi-column `TREATAS` emitted as OR-of-ANDs
+(`(region='North' AND product='Widget') OR (region='South' AND product='Gadget')`).
+**Constraint:** all `columns` must belong to **one table** so the predicate
+routes to a single cluster; a cross-table request is rejected (callers should
+fall back to per-column `in` filters, an approximate cross-product).
 
 Rules:
 

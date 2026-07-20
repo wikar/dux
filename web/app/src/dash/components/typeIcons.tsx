@@ -82,3 +82,10 @@ const ICONS: Record<ElementType, JSX.Element> = {
 export function typeIcon(type: ElementType): JSX.Element {
   return ICONS[type];
 }
+
+/** Funnel glyph for the "filters affecting this visual" header control. */
+export const funnelIcon: JSX.Element = (
+  <svg {...S}>
+    <path d="M2.5 4 L15.5 4 L10.5 10 L10.5 15 L7.5 13 L7.5 10 Z" {...stroke} strokeLinejoin="round" />
+  </svg>
+);

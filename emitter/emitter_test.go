@@ -286,6 +286,18 @@ func TestFilterContext(t *testing.T) {
 		assertContains(t, sql, "WHERE", "IN (SELECT DISTINCT", "FROM products")
 	})
 
+	t.Run("TREATAS_MultiColumn", func(t *testing.T) {
+		// A multi-column set membership emits as OR-of-ANDs (no row-value IN).
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			sales[region],
+			TREATAS({("North", "A"), ("South", "B")}, sales[region], sales[product]),
+			"Total", SUM(sales[amount])
+		)`)
+		assertContains(t, sql, "WHERE",
+			"region = 'North'", "product = 'A'",
+			"region = 'South'", "product = 'B'", " OR ")
+	})
+
 	t.Run("CALCULATE_standalone", func(t *testing.T) {
 		sql := emit(t, `EVALUATE CALCULATE(SUM(sales[amount]), TREATAS({"North"}, sales[region]))`)
 		assertContains(t, sql, "(SELECT", "SUM(", "WHERE", "IN (", "'North'")
@@ -791,7 +803,7 @@ func TestEmitErrors(t *testing.T) {
 		{
 			"TREATAS_wrong_arg_count",
 			`EVALUATE TREATAS({"x"})`,
-			"TREATAS requires exactly 2 arguments",
+			"TREATAS requires at least 2 arguments",
 		},
 		{
 			"DIVIDE_too_few_args",

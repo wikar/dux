@@ -138,3 +138,8 @@ While active, extra metrics are ignored; NULL/empty series values label as
 
 `"interactions": { "ignoreSlicers": ["slicer-1"] }` — element ids of
 slicers this element opts out of.
+
+Chart cross-filtering (clicking a mark/row to filter the other visuals, in
+view/fullscreen mode) is automatic for every query-backed element and has
+no per-element document config — see the "Slicers and cross-filtering"
+section of the skill overview.

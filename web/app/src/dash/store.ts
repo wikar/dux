@@ -5,6 +5,20 @@ import { useStore } from "zustand";
 import { temporal } from "zundo";
 import type { Dashboard, SlicerSelection } from "./types";
 
+// ─── Cross-filter (chart click) selection ────────────────────────────────────
+
+/** One selected mark = the dim column→value tuple that identifies it. */
+export type CrossMark = { dims: { table: string; column: string; value: string | number }[] };
+
+/** Stable key for a mark (order-independent over its dims) — used to dedupe
+ *  selections and to test membership when highlighting. */
+export function markKey(m: CrossMark): string {
+  return m.dims
+    .map((d) => `${d.table}.${d.column}=${d.value}`)
+    .sort()
+    .join("&");
+}
+
 // ─── Document store (undo/redo via zundo) ────────────────────────────────────
 
 interface DocState {
@@ -70,6 +84,9 @@ interface UiState {
   saving: boolean;
   /** Runtime slicer selections by element id (deep-linked via ?f=, not saved). */
   slicerSelections: Record<string, SlicerSelection>;
+  /** Runtime chart cross-filter selections, keyed by the SOURCE element id.
+   *  Transient — cleared on open/mode change/outside click, never saved. */
+  crossFilters: Record<string, CrossMark[]>;
   /** Chrome-less full-screen view (?fullscreen deep link). */
   fullscreen: boolean;
 
@@ -83,6 +100,10 @@ interface UiState {
   setSaving: (saving: boolean) => void;
   setSlicerSelection: (id: string, sel: SlicerSelection | null) => void;
   setSlicerSelections: (all: Record<string, SlicerSelection>) => void;
+  /** Toggle a clicked mark. additive (Ctrl/⌘) accumulates within a source and
+   *  keeps other sources; a plain click replaces the whole selection. */
+  toggleCrossMark: (sourceId: string, mark: CrossMark, additive: boolean) => void;
+  clearCrossFilters: () => void;
   setFullscreen: (on: boolean) => void;
 }
 
@@ -98,11 +119,21 @@ export const useUiStore = create<UiState>()((set) => ({
   saveError: null,
   saving: false,
   slicerSelections: {},
+  crossFilters: {},
   fullscreen: false,
 
   setPath: (path) => set({ path }),
   opened: (path, etag, savedJson, loadError = null) =>
-    set({ loadedPath: path, etag, savedJson, loadError, selectedId: null, conflict: null, saveError: null }),
+    set({
+      loadedPath: path,
+      etag,
+      savedJson,
+      loadError,
+      selectedId: null,
+      conflict: null,
+      saveError: null,
+      crossFilters: {},
+    }),
   setSlicerSelection: (id, sel) =>
     set((s) => {
       const slicerSelections = { ...s.slicerSelections };
@@ -111,9 +142,26 @@ export const useUiStore = create<UiState>()((set) => ({
       return { slicerSelections };
     }),
   setSlicerSelections: (slicerSelections) => set({ slicerSelections }),
-  setFullscreen: (on) => set(on ? { fullscreen: true, mode: "view", selectedId: null } : { fullscreen: false }),
+  toggleCrossMark: (sourceId, mark, additive) =>
+    set((s) => {
+      if (!additive) {
+        // Plain click: this mark becomes the entire selection.
+        return { crossFilters: { [sourceId]: [mark] } };
+      }
+      const key = markKey(mark);
+      const existing = s.crossFilters[sourceId] ?? [];
+      const kept = existing.filter((m) => markKey(m) !== key);
+      const next = { ...s.crossFilters };
+      if (kept.length === existing.length) next[sourceId] = [...existing, mark]; // add
+      else if (kept.length === 0) delete next[sourceId]; // removed last → drop key
+      else next[sourceId] = kept; // removed one
+      return { crossFilters: next };
+    }),
+  clearCrossFilters: () => set((s) => (Object.keys(s.crossFilters).length ? { crossFilters: {} } : s)),
+  setFullscreen: (on) =>
+    set(on ? { fullscreen: true, mode: "view", selectedId: null, crossFilters: {} } : { fullscreen: false }),
   markSaved: (etag, savedJson) => set({ etag, savedJson, conflict: null, saveError: null }),
-  setMode: (mode) => set({ mode, selectedId: null }),
+  setMode: (mode) => set({ mode, selectedId: null, crossFilters: {} }),
   select: (id) => set({ selectedId: id }),
   setConflict: (conflict) => set({ conflict }),
   setSaveError: (saveError) => set({ saveError }),

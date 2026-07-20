@@ -143,6 +143,31 @@ func TestExternalFilters_SummarizeColumns(t *testing.T) {
 		}
 	})
 
+	t.Run("in_tuples_multi_column", func(t *testing.T) {
+		// Multi-select of multi-dimensional marks: (North,Widget) and
+		// (South,Gadget) — OR-of-tuples, not a cross-product.
+		_, rows := runFiltered(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			sales[region], "Total", SUM(sales[amount])
+		)`, []executor.ExternalFilter{
+			{Op: "in_tuples",
+				Columns: []executor.FilterColumn{
+					{Table: "sales", Column: "region"},
+					{Table: "sales", Column: "product"},
+				},
+				Tuples: [][]any{{"North", "Widget"}, {"South", "Gadget"}}},
+		})
+		totals := map[string]float64{}
+		for _, row := range rows {
+			totals[cell(t, row, "region").(string)] = toFloat(cell(t, row, "Total"))
+		}
+		if totals["North"] != 100 {
+			t.Errorf("expected (North,Widget) total 100, got %v", totals["North"])
+		}
+		if totals["South"] != 250 {
+			t.Errorf("expected (South,Gadget) total 250, got %v", totals["South"])
+		}
+	})
+
 	t.Run("multiple_filters_AND", func(t *testing.T) {
 		_, rows := runFiltered(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
 			sales[product], "Total", SUM(sales[amount])
@@ -337,6 +362,17 @@ func TestExternalFilters_Errors(t *testing.T) {
 	expectFilterErr(t, q, []executor.ExternalFilter{
 		{Table: "sales", Column: "amount", Op: "contains", Value: "1"},
 	}, "not valid for numeric")
+
+	// in_tuples columns spanning two tables are rejected (the frontend then
+	// degrades to per-column "in").
+	expectFilterErr(t, q, []executor.ExternalFilter{
+		{Op: "in_tuples",
+			Columns: []executor.FilterColumn{
+				{Table: "sales", Column: "region"},
+				{Table: "products", Column: "category"},
+			},
+			Tuples: [][]any{{"North", "Electronics"}}},
+	}, "one table")
 
 	// A bare-table query only accepts filters on its own base table.
 	expectFilterErr(t, `EVALUATE sales`, []executor.ExternalFilter{

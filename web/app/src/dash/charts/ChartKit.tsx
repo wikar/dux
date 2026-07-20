@@ -18,6 +18,7 @@ import {
 } from "recharts";
 import { formatValue } from "@dux/core";
 import type { MeasureFormat, QueryResponse } from "@dux/core";
+import { markKey, type CrossMark } from "../store";
 
 // Catppuccin chrome (literal values — SVG attributes can't resolve CSS vars).
 const GRID = "#313244";
@@ -29,17 +30,40 @@ const TOOLTIP_STYLE = {
   fontSize: 12,
 } as const;
 
-export type ChartRow = Record<string, string | number | null>;
+/** One dim column→value pair carried by a chart row, so a clicked mark can be
+ *  turned back into a cross-filter (the joined __x string loses this). */
+export type ChartDim = { table: string; column: string; value: string | number };
+
+export interface ChartRow {
+  /** Joined dim values — the category axis / slice label. */
+  __x: string;
+  /** Structured dim values behind __x (absent in raw mode). */
+  __dims?: ChartDim[];
+  [key: string]: string | number | null | ChartDim[] | undefined;
+}
 
 /** Pivot a query result into Recharts rows: one row per result row, __x =
- *  the joined dim values, one numeric key per metric column. */
-export function toChartData(res: QueryResponse, dimCols: string[], metricCols: string[]): ChartRow[] {
-  const dimIdx = dimCols.map((c) => res.columns.indexOf(c)).filter((i) => i >= 0);
+ *  the joined dim values, __dims = the structured dim tuple, one numeric key
+ *  per metric column. dimTables maps a dim column to its table. */
+export function toChartData(
+  res: QueryResponse,
+  dimCols: string[],
+  metricCols: string[],
+  dimTables: Record<string, string> = {}
+): ChartRow[] {
+  const dimIdx = dimCols
+    .map((c) => [c, res.columns.indexOf(c)] as const)
+    .filter(([, i]) => i >= 0);
   const metIdx = metricCols
     .map((c) => [c, res.columns.indexOf(c)] as const)
     .filter(([, i]) => i >= 0);
   return res.rows.map((r) => {
-    const row: ChartRow = { __x: dimIdx.map((i) => String(r[i] ?? "")).join(" · ") };
+    const dims: ChartDim[] = dimIdx.map(([c, i]) => ({
+      table: dimTables[c] ?? "",
+      column: c,
+      value: (r[i] ?? "") as string | number,
+    }));
+    const row: ChartRow = { __x: dims.map((d) => String(d.value)).join(" · "), __dims: dims };
     for (const [c, i] of metIdx) {
       const v = r[i];
       row[c] = v === null || v === undefined ? null : Number(v);
@@ -55,22 +79,30 @@ export function toSeriesData(
   res: QueryResponse,
   dimCols: string[],
   seriesCol: string,
-  metricCol: string
+  metricCol: string,
+  dimTables: Record<string, string> = {}
 ): { data: ChartRow[]; series: string[] } {
-  const dimIdx = dimCols.map((c) => res.columns.indexOf(c)).filter((i) => i >= 0);
+  const dimIdx = dimCols
+    .map((c) => [c, res.columns.indexOf(c)] as const)
+    .filter(([, i]) => i >= 0);
   const sIdx = res.columns.indexOf(seriesCol);
   const mIdx = res.columns.indexOf(metricCol);
   if (sIdx < 0 || mIdx < 0) return { data: [], series: [] };
   const byX = new Map<string, ChartRow>();
   const series = new Set<string>();
   for (const r of res.rows) {
-    const x = dimIdx.map((i) => String(r[i] ?? "")).join(" · ");
+    const dims: ChartDim[] = dimIdx.map(([c, i]) => ({
+      table: dimTables[c] ?? "",
+      column: c,
+      value: (r[i] ?? "") as string | number,
+    }));
+    const x = dims.map((d) => String(d.value)).join(" · ");
     const raw = r[sIdx];
     const s = raw === null || raw === undefined || raw === "" ? "(blank)" : String(raw);
     series.add(s);
     let row = byX.get(x);
     if (!row) {
-      row = { __x: x };
+      row = { __x: x, __dims: dims };
       byX.set(x, row);
     }
     const v = r[mIdx];
@@ -100,11 +132,59 @@ function tooltipFormatter(formats: Formats) {
 
 const commonAxis = { stroke: AXIS, tick: { fill: AXIS, fontSize: 10 }, tickLine: false } as const;
 
+// ─── Cross-filter interaction (click a mark → filter the other visuals) ──────
+
+/** Called when a mark is clicked; additive = Ctrl/⌘ held. */
+export type MarkClick = (dims: ChartDim[], additive: boolean) => void;
+
+export interface Interaction {
+  /** Present only when clicking should cross-filter (view mode, builder query). */
+  onMarkClick?: MarkClick;
+  /** markKey() values currently selected in THIS visual (for highlighting). */
+  selectedKeys?: Set<string>;
+  /** Series-split ("Legend") dim, so a clicked segment carries the series value. */
+  seriesDim?: { table: string; column: string };
+}
+
+function additiveOf(e: unknown): boolean {
+  const me = e as { ctrlKey?: boolean; metaKey?: boolean } | undefined;
+  return !!(me?.ctrlKey || me?.metaKey);
+}
+
+/** Full dim tuple of a mark: the row's dims plus the series value when split. */
+function markDims(row: ChartRow | undefined, seriesDim?: Interaction["seriesDim"], seriesVal?: string): ChartDim[] {
+  const dims = [...(row?.__dims ?? [])];
+  if (seriesDim && seriesVal !== undefined) dims.push({ ...seriesDim, value: seriesVal });
+  return dims;
+}
+
+/** Opacity for a mark given the current selection: 1 when nothing is selected
+ *  or this mark is selected, dimmed otherwise. */
+function markOpacity(sel: Set<string> | undefined, dims: ChartDim[]): number {
+  if (!sel || sel.size === 0) return 1;
+  return sel.has(markKey({ dims } as CrossMark)) ? 1 : 0.25;
+}
+
+/** Row extracted from a Recharts click payload. */
+function rowOf(d: unknown): ChartRow | undefined {
+  const o = d as { payload?: ChartRow; __dims?: ChartDim[] } | undefined;
+  return (o?.payload ?? (o as ChartRow)) || undefined;
+}
+
+/** A Recharts onClick handler that turns a clicked mark into a cross-filter.
+ *  Uses rest args so it satisfies both the Bar/Pie and Curve handler types
+ *  (which pass (data, index, event)). Returns undefined when not clickable. */
+function markClickHandler(click: MarkClick | undefined, seriesDim?: Interaction["seriesDim"], seriesVal?: string) {
+  if (!click) return undefined;
+  return (...args: unknown[]) => click(markDims(rowOf(args[0]), seriesDim, seriesVal), additiveOf(args[2]));
+}
+
 interface BaseProps {
   data: ChartRow[];
   palette: string[];
   formats: Formats;
   legend?: boolean;
+  interaction?: Interaction;
 }
 
 // ─── Bar (clustered / stacked, vertical / horizontal) ────────────────────────
@@ -115,9 +195,11 @@ interface BarProps extends BaseProps {
   stacked?: boolean;
 }
 
-export function BarChartViz({ data, series, palette, formats, orientation, stacked, legend }: BarProps) {
+export function BarChartViz({ data, series, palette, formats, orientation, stacked, legend, interaction }: BarProps) {
   const horizontal = orientation === "horizontal";
   const valueFmt = tickFormatter(formats, series);
+  const split = interaction?.seriesDim; // when set, each series key is a dim value
+  const click = interaction?.onMarkClick;
   return (
     <ResponsiveContainer width="100%" height="100%">
       <ComposedChart
@@ -147,7 +229,17 @@ export function BarChartViz({ data, series, palette, formats, orientation, stack
             stackId={stacked ? "stack" : undefined}
             radius={stacked ? 0 : 2}
             isAnimationActive={false}
-          />
+            cursor={click ? "pointer" : undefined}
+            onClick={markClickHandler(click, split, split ? s : undefined)}
+          >
+            {data.map((row, ri) => (
+              <Cell
+                key={ri}
+                fill={palette[i % palette.length]}
+                fillOpacity={markOpacity(interaction?.selectedKeys, markDims(row, split, split ? s : undefined))}
+              />
+            ))}
+          </Bar>
         ))}
       </ComposedChart>
     </ResponsiveContainer>
@@ -161,8 +253,23 @@ interface LineProps extends BaseProps {
   right: string[];
 }
 
-export function LineChartViz({ data, left, right, palette, formats, legend }: LineProps) {
+export function LineChartViz({ data, left, right, palette, formats, legend, interaction }: LineProps) {
   const all = [...left, ...right];
+  const split = interaction?.seriesDim;
+  const click = interaction?.onMarkClick;
+  const sel = interaction?.selectedKeys;
+  const hasSel = !!sel && sel.size > 0;
+  // Custom dot: emphasize points whose mark is selected (line highlight is
+  // intentionally point-level — dimming a continuous line reads poorly).
+  const dotFor = (s: string, color: string) =>
+    hasSel
+      ? (props: { cx?: number; cy?: number; index?: number }) => {
+          const { cx, cy, index } = props;
+          if (cx === undefined || cy === undefined) return <g />;
+          const on = sel!.has(markKey({ dims: markDims(data[index ?? -1], split, split ? s : undefined) } as CrossMark));
+          return <circle cx={cx} cy={cy} r={on ? 4.5 : 2} fill={color} fillOpacity={on ? 1 : 0.35} />;
+        }
+      : data.length <= 40;
   return (
     <ResponsiveContainer width="100%" height="100%">
       <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
@@ -188,8 +295,10 @@ export function LineChartViz({ data, left, right, palette, formats, legend }: Li
             yAxisId={right.includes(s) ? "right" : "left"}
             stroke={palette[i % palette.length]}
             strokeWidth={2}
-            dot={data.length <= 40}
+            dot={dotFor(s, palette[i % palette.length])}
             isAnimationActive={false}
+            cursor={click ? "pointer" : undefined}
+            onClick={markClickHandler(click, split, split ? s : undefined)}
           />
         ))}
       </ComposedChart>
@@ -204,7 +313,20 @@ interface AreaProps extends BaseProps {
   stacked?: boolean;
 }
 
-export function AreaChartViz({ data, series, palette, formats, stacked, legend }: AreaProps) {
+export function AreaChartViz({ data, series, palette, formats, stacked, legend, interaction }: AreaProps) {
+  const split = interaction?.seriesDim;
+  const click = interaction?.onMarkClick;
+  const sel = interaction?.selectedKeys;
+  const hasSel = !!sel && sel.size > 0;
+  const dotFor = (s: string, color: string) =>
+    hasSel
+      ? (props: { cx?: number; cy?: number; index?: number }) => {
+          const { cx, cy, index } = props;
+          if (cx === undefined || cy === undefined) return <g />;
+          const on = sel!.has(markKey({ dims: markDims(data[index ?? -1], split, split ? s : undefined) } as CrossMark));
+          return <circle cx={cx} cy={cy} r={on ? 4.5 : 0} fill={color} fillOpacity={on ? 1 : 0} />;
+        }
+      : false;
   return (
     <ResponsiveContainer width="100%" height="100%">
       <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
@@ -223,6 +345,9 @@ export function AreaChartViz({ data, series, palette, formats, stacked, legend }
             fillOpacity={stacked ? 0.7 : 0.3}
             strokeWidth={2}
             isAnimationActive={false}
+            dot={dotFor(s, palette[i % palette.length])}
+            cursor={click ? "pointer" : undefined}
+            onClick={markClickHandler(click, split, split ? s : undefined)}
           />
         ))}
       </ComposedChart>
@@ -237,9 +362,10 @@ interface DonutProps extends BaseProps {
   metric: string;
 }
 
-export function DonutChartViz({ data, metric, palette, formats, legend }: DonutProps) {
+export function DonutChartViz({ data, metric, palette, formats, legend, interaction }: DonutProps) {
   const fmt = formats[metric];
   const total = data.reduce((sum, r) => sum + (typeof r[metric] === "number" ? (r[metric] as number) : 0), 0);
+  const click = interaction?.onMarkClick;
   return (
     <ResponsiveContainer width="100%" height="100%">
       <PieChart margin={{ top: 8, right: 8, bottom: 4, left: 8 }}>
@@ -252,9 +378,15 @@ export function DonutChartViz({ data, metric, palette, formats, legend }: DonutP
           paddingAngle={1}
           stroke="none"
           isAnimationActive={false}
+          cursor={click ? "pointer" : undefined}
+          onClick={markClickHandler(click)}
         >
-          {data.map((_, i) => (
-            <Cell key={i} fill={palette[i % palette.length]} />
+          {data.map((row, i) => (
+            <Cell
+              key={i}
+              fill={palette[i % palette.length]}
+              fillOpacity={markOpacity(interaction?.selectedKeys, markDims(row))}
+            />
           ))}
         </Pie>
         {/* Category values format like the sliced metric. */}
@@ -283,8 +415,9 @@ interface ComboProps extends BaseProps {
   lineY2?: boolean;
 }
 
-export function ComboChartViz({ data, bars, lines, lineY2 = true, palette, formats, legend }: ComboProps) {
+export function ComboChartViz({ data, bars, lines, lineY2 = true, palette, formats, legend, interaction }: ComboProps) {
   const rightAxis = lineY2 && lines.length > 0;
+  const click = interaction?.onMarkClick; // combo series are metrics → dims = row.__dims
   return (
     <ResponsiveContainer width="100%" height="100%">
       <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
@@ -304,7 +437,24 @@ export function ComboChartViz({ data, bars, lines, lineY2 = true, palette, forma
         <Tooltip formatter={tooltipFormatter(formats)} contentStyle={TOOLTIP_STYLE} cursor={{ fill: "#31324455" }} />
         {legend && <Legend wrapperStyle={{ fontSize: 11 }} />}
         {bars.map((s, i) => (
-          <Bar key={s} dataKey={s} yAxisId="left" fill={palette[i % palette.length]} radius={2} isAnimationActive={false} />
+          <Bar
+            key={s}
+            dataKey={s}
+            yAxisId="left"
+            fill={palette[i % palette.length]}
+            radius={2}
+            isAnimationActive={false}
+            cursor={click ? "pointer" : undefined}
+            onClick={markClickHandler(click)}
+          >
+            {data.map((row, ri) => (
+              <Cell
+                key={ri}
+                fill={palette[i % palette.length]}
+                fillOpacity={markOpacity(interaction?.selectedKeys, markDims(row))}
+              />
+            ))}
+          </Bar>
         ))}
         {lines.map((s, i) => (
           <Line
@@ -315,6 +465,8 @@ export function ComboChartViz({ data, bars, lines, lineY2 = true, palette, forma
             strokeWidth={2}
             dot={data.length <= 40}
             isAnimationActive={false}
+            cursor={click ? "pointer" : undefined}
+            onClick={markClickHandler(click)}
           />
         ))}
       </ComposedChart>

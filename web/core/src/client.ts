@@ -20,16 +20,21 @@ export class QueryFailedError extends Error {
   }
 }
 
-/** External filter injected into a query's outermost filter context
- *  (mirrors executor.ExternalFilter; ops: in, between, =, !=, <, <=, >, >=, contains). */
+/** External filter injected into a query's outermost filter context (mirrors
+ *  executor.ExternalFilter; ops: in, between, =, !=, <, <=, >, >=, contains,
+ *  in_tuples). For in_tuples, table/column/values are omitted and
+ *  columns+tuples carry a multi-column OR-of-tuples set (columns must share
+ *  one table). */
 export interface ExternalFilter {
-  table: string;
-  column: string;
+  table?: string;
+  column?: string;
   op: string;
   values?: (string | number)[];
   value?: string | number;
   from?: string | number;
   to?: string | number;
+  columns?: { table: string; column: string }[];
+  tuples?: (string | number)[][];
 }
 
 async function parseQueryResponse(res: Response): Promise<QueryResponse> {

@@ -202,9 +202,11 @@ func (r *Resolver) resolveTerm(t *parser.Term) error {
 	}
 	switch {
 	case t.TableConstructor != nil:
-		for _, v := range t.TableConstructor.Values {
-			if err := r.resolveExpr(v); err != nil {
-				return err
+		for _, row := range t.TableConstructor.Rows {
+			for _, v := range row.Values {
+				if err := r.resolveExpr(v); err != nil {
+					return err
+				}
 			}
 		}
 		return nil

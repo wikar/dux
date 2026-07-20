@@ -109,6 +109,20 @@ semantics), slicers cascade each other's option lists, and
 `"interactions": {"ignoreSlicers": ["slicer-1"]}` opts an element out.
 `?fullscreen` (composable with `?f=`) hides all chrome.
 
+**Chart cross-filtering** (view/fullscreen only): clicking a bar, line
+point, donut slice, or table/pivot row filters every *other* query visual
+by that data point and highlights the selection in the clicked visual.
+Ctrl/⌘-click multi-selects within and across visuals; a left-click on empty
+canvas clears it. These selections are **transient** (session only — not in
+the document, not in `?f=`) and need no configuration: every query visual
+both emits and receives them. Nothing to author — it's automatic at view
+time.
+
+**Filter funnel**: each query visual's header carries a funnel control;
+hovering (or clicking to pin) lists every filter currently affecting that
+visual, grouped by source — its own `query.filters`, each active slicer,
+and each cross-filtering visual.
+
 ## Element IDs and hygiene
 
 - `id` must be unique in the document (pattern `[A-Za-z0-9_-]{1,64}`); the

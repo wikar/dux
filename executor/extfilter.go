@@ -29,16 +29,29 @@ import (
 
 // ExternalFilter is one structured filter to apply to a query's outermost
 // filter context. Exactly one of Values (op "in"), Value (scalar ops and
-// "contains"), or From/To (op "between") must be populated.
+// "contains"), From/To (op "between"), or Columns+Tuples (op "in_tuples") must
+// be populated.
 type ExternalFilter struct {
 	Table  string `json:"table"`
 	Column string `json:"column"`
-	// Op is one of: "in", "between", "=", "!=", "<", "<=", ">", ">=", "contains".
+	// Op is one of: "in", "between", "=", "!=", "<", "<=", ">", ">=",
+	// "contains", "in_tuples".
 	Op     string `json:"op"`
 	Values []any  `json:"values,omitempty"`
 	Value  any    `json:"value,omitempty"`
 	From   any    `json:"from,omitempty"`
 	To     any    `json:"to,omitempty"`
+	// in_tuples: membership in an OR-of-tuples over several columns (e.g. a
+	// multi-select of multi-dimensional chart marks). Columns must all belong
+	// to one table; each Tuples row supplies one value per column, in order.
+	Columns []FilterColumn `json:"columns,omitempty"`
+	Tuples  [][]any        `json:"tuples,omitempty"`
+}
+
+// FilterColumn is one column of an in_tuples filter.
+type FilterColumn struct {
+	Table  string `json:"table"`
+	Column string `json:"column"`
 }
 
 // resolvedFilter is an ExternalFilter validated against the schema.
@@ -51,12 +64,21 @@ type resolvedFilter struct {
 	value   *parser.Literal   // scalar ops, contains
 	from    *parser.Literal   // between
 	to      *parser.Literal
+	columns []resolvedColumn    // in_tuples target columns
+	tuples  [][]*parser.Literal // in_tuples value rows (each len == len(columns))
+}
+
+// resolvedColumn is one schema-validated in_tuples column.
+type resolvedColumn struct {
+	table   string // canonical schema table key
+	column  string // canonical column name
+	numeric bool
 }
 
 var numericTypeRe = regexp.MustCompile(`(?i)^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|DOUBLE|FLOAT|REAL|DECIMAL|NUMERIC)`)
 
 var validFilterOps = map[string]bool{
-	"in": true, "between": true, "contains": true,
+	"in": true, "between": true, "contains": true, "in_tuples": true,
 	"=": true, "!=": true, "<": true, "<=": true, ">": true, ">=": true,
 }
 
@@ -103,9 +125,25 @@ func ApplyExternalFilters(q *parser.Query, schema *semantic.Schema, filters []Ex
 	return nil
 }
 
+// findColumn resolves a column on a table, tolerating case differences.
+func findColumn(table *semantic.Table, name string) *semantic.Column {
+	if c := table.Columns[name]; c != nil {
+		return c
+	}
+	for n, c := range table.Columns {
+		if strings.EqualFold(n, name) {
+			return c
+		}
+	}
+	return nil
+}
+
 // resolveFilter validates one filter against the schema and coerces its
 // operand values to literals matching the column type.
 func resolveFilter(schema *semantic.Schema, f ExternalFilter) (*resolvedFilter, error) {
+	if f.Op == "in_tuples" {
+		return resolveTupleFilter(schema, f)
+	}
 	if f.Table == "" || f.Column == "" {
 		return nil, fmt.Errorf("table and column are required")
 	}
@@ -113,15 +151,7 @@ func resolveFilter(schema *semantic.Schema, f ExternalFilter) (*resolvedFilter, 
 	if table == nil {
 		return nil, fmt.Errorf("unknown table")
 	}
-	col := table.Columns[f.Column]
-	if col == nil {
-		for name, c := range table.Columns {
-			if strings.EqualFold(name, f.Column) {
-				col = c
-				break
-			}
-		}
-	}
+	col := findColumn(table, f.Column)
 	if col == nil {
 		return nil, fmt.Errorf("unknown column")
 	}
@@ -188,6 +218,60 @@ func resolveFilter(schema *semantic.Schema, f ExternalFilter) (*resolvedFilter, 
 		if rf.value, err = lit(f.Value, "value"); err != nil {
 			return nil, err
 		}
+	}
+	return rf, nil
+}
+
+// resolveTupleFilter validates an "in_tuples" filter: several columns on one
+// table plus a set of value rows. The single-table restriction keeps the
+// emitted OR-of-ANDs predicate routable to one cluster; callers that need
+// columns across tables must fall back to per-column "in" filters.
+func resolveTupleFilter(schema *semantic.Schema, f ExternalFilter) (*resolvedFilter, error) {
+	if len(f.Columns) == 0 {
+		return nil, fmt.Errorf(`op "in_tuples" requires a non-empty columns array`)
+	}
+	if len(f.Tuples) == 0 {
+		return nil, fmt.Errorf(`op "in_tuples" requires a non-empty tuples array`)
+	}
+	rf := &resolvedFilter{op: "in_tuples"}
+	var tableKey string
+	for i, fc := range f.Columns {
+		if fc.Table == "" || fc.Column == "" {
+			return nil, fmt.Errorf("column %d: table and column are required", i+1)
+		}
+		table, key := schema.FindTable(fc.Table)
+		if table == nil {
+			return nil, fmt.Errorf("column %d: unknown table %q", i+1, fc.Table)
+		}
+		if i == 0 {
+			tableKey = key
+		} else if !strings.EqualFold(key, tableKey) {
+			return nil, fmt.Errorf(`op "in_tuples" columns must all belong to one table (got %q and %q)`, tableKey, key)
+		}
+		col := findColumn(table, fc.Column)
+		if col == nil {
+			return nil, fmt.Errorf("column %d: unknown column %q", i+1, fc.Column)
+		}
+		rf.columns = append(rf.columns, resolvedColumn{
+			table:   key,
+			column:  col.Name,
+			numeric: numericTypeRe.MatchString(col.DataType),
+		})
+	}
+	rf.table = tableKey
+	for i, tup := range f.Tuples {
+		if len(tup) != len(rf.columns) {
+			return nil, fmt.Errorf("tuple %d has %d value(s), expected %d", i+1, len(tup), len(rf.columns))
+		}
+		row := make([]*parser.Literal, len(tup))
+		for j, v := range tup {
+			l, err := literalFor(v, rf.columns[j].numeric)
+			if err != nil {
+				return nil, fmt.Errorf("tuple %d value %d: %w", i+1, j+1, err)
+			}
+			row[j] = l
+		}
+		rf.tuples = append(rf.tuples, row)
 	}
 	return rf, nil
 }
@@ -314,6 +398,24 @@ func conjoin(preds []*parser.Expr) *parser.Expr {
 func (rf *resolvedFilter) predicate() *parser.Expr {
 	col := func() *parser.Expr { return colRefExpr(rf.table, rf.column) }
 	switch rf.op {
+	case "in_tuples":
+		// OR of per-tuple AND groups: (c1=a && c2=b) || (c1=c && c2=d) || …
+		ors := make([]*parser.Expr, len(rf.tuples))
+		for i, tup := range rf.tuples {
+			ands := make([]*parser.Expr, len(rf.columns))
+			for j, c := range rf.columns {
+				ands[j] = binary(colRefExpr(c.table, c.column), "=", litExpr(tup[j]))
+			}
+			ors[i] = conjoin(ands)
+		}
+		if len(ors) == 1 {
+			return ors[0]
+		}
+		out := &parser.Expr{Left: &parser.Term{SubExpr: ors[0]}}
+		for _, o := range ors[1:] {
+			out.Right = append(out.Right, &parser.OpExpr{Op: "||", Right: &parser.Term{SubExpr: o}})
+		}
+		return out
 	case "in":
 		ors := make([]*parser.Expr, len(rf.values))
 		for i, v := range rf.values {
@@ -350,13 +452,29 @@ func (rf *resolvedFilter) predicate() *parser.Expr {
 // filter: TREATAS for set membership, FILTER(T, pred) for everything else.
 func (rf *resolvedFilter) filterArg() *parser.Expr {
 	if rf.op == "in" {
-		values := make([]*parser.Expr, len(rf.values))
+		rows := make([]*parser.ValueTuple, len(rf.values))
 		for i, v := range rf.values {
-			values[i] = litExpr(v)
+			rows[i] = &parser.ValueTuple{Values: []*parser.Expr{litExpr(v)}}
 		}
 		return funcExpr("TREATAS",
-			exprOf(&parser.Term{TableConstructor: &parser.TableConstructor{Values: values}}),
+			exprOf(&parser.Term{TableConstructor: &parser.TableConstructor{Rows: rows}}),
 			colRefExpr(rf.table, rf.column))
+	}
+	if rf.op == "in_tuples" {
+		// Multi-column TREATAS: {(v1a,v1b),…}, T[c1], T[c2], …
+		rows := make([]*parser.ValueTuple, len(rf.tuples))
+		for i, tup := range rf.tuples {
+			vals := make([]*parser.Expr, len(tup))
+			for j, v := range tup {
+				vals[j] = litExpr(v)
+			}
+			rows[i] = &parser.ValueTuple{Values: vals}
+		}
+		args := []*parser.Expr{exprOf(&parser.Term{TableConstructor: &parser.TableConstructor{Rows: rows}})}
+		for _, c := range rf.columns {
+			args = append(args, colRefExpr(c.table, c.column))
+		}
+		return funcExpr("TREATAS", args...)
 	}
 	return funcExpr("FILTER", exprOf(tableTerm(rf.table)), rf.predicate())
 }

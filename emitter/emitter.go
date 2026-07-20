@@ -708,7 +708,7 @@ func emitFlatJoins(primary string, jp *semantic.JoinPath) string {
 	return fbuf.String()
 }
 
-// emitTreatas emits TREATAS(source, t[col]) as a SQL IN predicate for use
+// emitTreatas emits TREATAS(source, t[col], ...) as a SQL predicate for use
 // inside CALCULATE filter arguments.
 //
 //	Pattern A: TREATAS({"Clay","Grass"}, matches[surface])
@@ -716,17 +716,26 @@ func emitFlatJoins(primary string, jp *semantic.JoinPath) string {
 //
 //	Pattern B: TREATAS(VALUES(players[player_id]), matches[winner_id])
 //	         → winner_id IN (SELECT DISTINCT player_id FROM players)
+//
+//	Pattern C: TREATAS({("SE",2020),("NO",2021)}, sales[country], sales[year])
+//	         → ((country = 'SE' AND year = 2020) OR (country = 'NO' AND year = 2021))
+//	           (multi-column set membership as OR-of-ANDs — no reliance on
+//	           row-value IN; the target columns must resolve on one table so the
+//	           predicate routes to a single cluster.)
 func (e *Emitter) emitTreatas(fc *parser.FuncCall) (string, error) {
-	if len(fc.Args) != 2 {
-		return "", fmt.Errorf("TREATAS requires exactly 2 arguments")
+	if len(fc.Args) < 2 {
+		return "", fmt.Errorf("TREATAS requires at least 2 arguments")
 	}
 
-	// arg[1]: target column reference.
-	targetTerm := fc.Args[1].Left
-	if targetTerm == nil || targetTerm.ColRef == nil {
-		return "", fmt.Errorf("TREATAS: second argument must be a column reference (e.g. matches[surface])")
+	// arg[1:]: one or more target column references.
+	cols := make([]string, len(fc.Args)-1)
+	for i, a := range fc.Args[1:] {
+		t := a.Left
+		if t == nil || t.ColRef == nil || len(a.Right) > 0 {
+			return "", fmt.Errorf("TREATAS: target arguments must be column references (e.g. matches[surface])")
+		}
+		cols[i] = e.resolveColName(semantic.StripSingleQuotes(t.ColRef.Table), semantic.StripBrackets(t.ColRef.Column))
 	}
-	col := e.resolveColName(semantic.StripSingleQuotes(targetTerm.ColRef.Table), semantic.StripBrackets(targetTerm.ColRef.Column))
 
 	// arg[0]: source — TableConstructor or VALUES(t[c]).
 	srcTerm := fc.Args[0].Left
@@ -735,19 +744,48 @@ func (e *Emitter) emitTreatas(fc *parser.FuncCall) (string, error) {
 	}
 	switch {
 	case srcTerm.TableConstructor != nil:
-		// Pattern A: {"v1", "v2", ...}
-		var vals []string
-		for _, v := range srcTerm.TableConstructor.Values {
-			s, err := e.emitExpr(v)
-			if err != nil {
-				return "", err
-			}
-			vals = append(vals, s)
+		rows := srcTerm.TableConstructor.Rows
+		if len(rows) == 0 {
+			return "", fmt.Errorf("TREATAS: value set must not be empty")
 		}
-		return fmt.Sprintf("%s IN (%s)", col, strings.Join(vals, ", ")), nil
+		// Single column, single value per row → the plain IN form (Pattern A).
+		if len(cols) == 1 {
+			vals := make([]string, len(rows))
+			for i, row := range rows {
+				if len(row.Values) != 1 {
+					return "", fmt.Errorf("TREATAS: single-column set must not contain tuples")
+				}
+				s, err := e.emitExpr(row.Values[0])
+				if err != nil {
+					return "", err
+				}
+				vals[i] = s
+			}
+			return fmt.Sprintf("%s IN (%s)", cols[0], strings.Join(vals, ", ")), nil
+		}
+		// Multi-column set → OR-of-ANDs (Pattern C).
+		ors := make([]string, len(rows))
+		for i, row := range rows {
+			if len(row.Values) != len(cols) {
+				return "", fmt.Errorf("TREATAS: each tuple must have %d value(s) to match the target columns", len(cols))
+			}
+			ands := make([]string, len(cols))
+			for j, v := range row.Values {
+				s, err := e.emitExpr(v)
+				if err != nil {
+					return "", err
+				}
+				ands[j] = fmt.Sprintf("%s = %s", cols[j], s)
+			}
+			ors[i] = "(" + strings.Join(ands, " AND ") + ")"
+		}
+		return "(" + strings.Join(ors, " OR ") + ")", nil
 
 	case srcTerm.FuncCall != nil && strings.ToUpper(srcTerm.FuncCall.Name) == "VALUES":
 		// Pattern B: VALUES(t[c])
+		if len(cols) != 1 {
+			return "", fmt.Errorf("TREATAS: VALUES source supports a single target column")
+		}
 		if len(srcTerm.FuncCall.Args) != 1 {
 			return "", fmt.Errorf("TREATAS: VALUES requires exactly 1 argument")
 		}
@@ -757,7 +795,7 @@ func (e *Emitter) emitTreatas(fc *parser.FuncCall) (string, error) {
 		}
 		srcCol := e.resolveColName(semantic.StripSingleQuotes(vcr.ColRef.Table), semantic.StripBrackets(vcr.ColRef.Column))
 		srcTable := sqlIdent(semantic.StripSingleQuotes(vcr.ColRef.Table))
-		return fmt.Sprintf("%s IN (SELECT DISTINCT %s FROM %s)", col, srcCol, srcTable), nil
+		return fmt.Sprintf("%s IN (SELECT DISTINCT %s FROM %s)", cols[0], srcCol, srcTable), nil
 
 	default:
 		return "", fmt.Errorf("TREATAS: first argument must be a table constructor {...} or VALUES(...)")
@@ -908,9 +946,11 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 		if arg.Left != nil && arg.Left.FuncCall != nil &&
 			strings.ToUpper(arg.Left.FuncCall.Name) == "TREATAS" && len(arg.Right) == 0 {
 			treatasFC := arg.Left.FuncCall
-			// Extract the target table and column for routing.
+			// Extract the target table and column for routing. A multi-column
+			// TREATAS tags on its first target column (all target columns
+			// resolve on one table, so one tag routes the whole predicate).
 			var predTable, predCol string
-			if len(treatasFC.Args) == 2 && treatasFC.Args[1].Left != nil && treatasFC.Args[1].Left.ColRef != nil {
+			if len(treatasFC.Args) >= 2 && treatasFC.Args[1].Left != nil && treatasFC.Args[1].Left.ColRef != nil {
 				cr := treatasFC.Args[1].Left.ColRef
 				tbl := semantic.StripSingleQuotes(cr.Table)
 				predTable = strings.ToLower(tbl)

@@ -15,6 +15,7 @@ import type {
 } from "@dux/core";
 import { getTheme } from "./api";
 import { useDocStore, useUiStore } from "./store";
+import type { CrossMark } from "./store";
 import type { Dashboard, DashElement, SlicerSelection, ThemeTokens } from "./types";
 
 // ─── Schema / formats ────────────────────────────────────────────────────────
@@ -139,15 +140,130 @@ export function buildExternalFilters(
   return out;
 }
 
-/** The external filters that apply to this element right now. Slicers get
- *  the other slicers' filters — that's what makes their lists cascade. */
+// ─── Cross-filter fan-out (chart clicks → every other element) ───────────────
+
+function dedupeValues(vs: (string | number)[]): (string | number)[] {
+  const seen = new Set<string>();
+  const out: (string | number)[] = [];
+  for (const v of vs) {
+    const k = String(v);
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(v);
+    }
+  }
+  return out;
+}
+
+/** Value a mark carries for a given dim column (marks from one source share
+ *  the same dim columns, so this always resolves). */
+function markValue(m: CrossMark, table: string, column: string): string | number {
+  return m.dims.find((d) => d.table === table && d.column === column)?.value ?? "";
+}
+
+/** Translate the cross-filter selections of every *other* visual into external
+ *  filters for this element. Exact for the common cases; a multi-select of
+ *  multi-dimensional marks becomes one `in_tuples` filter when its columns
+ *  share a table, else degrades to per-column `in` (approximate cross-product). */
+export function crossExternalFilters(
+  forId: string | null,
+  crossFilters: Record<string, CrossMark[]>
+): ExternalFilter[] {
+  const out: ExternalFilter[] = [];
+  for (const [sourceId, marks] of Object.entries(crossFilters)) {
+    if (sourceId === forId || !marks || marks.length === 0) continue;
+    const cols = marks[0].dims.map((d) => ({ table: d.table, column: d.column }));
+    if (cols.length === 0) continue;
+
+    if (cols.length === 1) {
+      // Single-dim source → one IN with the union of selected values.
+      const c = cols[0];
+      out.push({ table: c.table, column: c.column, op: "in", values: dedupeValues(marks.map((m) => m.dims[0].value)) });
+    } else if (marks.length === 1) {
+      // One multi-dim mark → AND of per-column equality (exact).
+      for (const d of marks[0].dims) out.push({ table: d.table, column: d.column, op: "in", values: [d.value] });
+    } else if (cols.every((c) => c.table === cols[0].table)) {
+      // Multiple multi-dim marks, one table → exact OR-of-tuples.
+      out.push({ op: "in_tuples", columns: cols, tuples: marks.map((m) => cols.map((c) => markValue(m, c.table, c.column))) });
+    } else {
+      // Columns span tables → degrade to per-column IN (approximate).
+      for (const c of cols) {
+        out.push({ table: c.table, column: c.column, op: "in", values: dedupeValues(marks.map((m) => markValue(m, c.table, c.column))) });
+      }
+    }
+  }
+  return out;
+}
+
+/** The external filters that apply to this element right now: the other
+ *  slicers' filters (which also make slicer lists cascade) plus every other
+ *  visual's cross-filter selection. */
 export function useExternalFilters(el: DashElement): ExternalFilter[] {
   const doc = useDocStore((s) => s.doc);
   const selections = useUiStore((s) => s.slicerSelections);
+  const crossFilters = useUiStore((s) => s.crossFilters);
   return useMemo(
-    () => buildExternalFilters(el.id, doc, selections, el.interactions?.ignoreSlicers ?? []),
-    [el.id, el.interactions, doc, selections]
+    () => [
+      ...buildExternalFilters(el.id, doc, selections, el.interactions?.ignoreSlicers ?? []),
+      ...crossExternalFilters(el.id, crossFilters),
+    ],
+    [el.id, el.interactions, doc, selections, crossFilters]
   );
+}
+
+/** Human-readable list of every filter affecting this element, grouped by
+ *  source (own query filters, active slicers, cross-filtering visuals). Powers
+ *  the header funnel popover. */
+export function useAffectingFilters(el: DashElement): { source: string; text: string }[] {
+  const doc = useDocStore((s) => s.doc);
+  const slicerSelections = useUiStore((s) => s.slicerSelections);
+  const crossFilters = useUiStore((s) => s.crossFilters);
+  return useMemo(() => {
+    const fmtVals = (vs: (string | number)[]): string => {
+      const shown = vs.slice(0, 6).map(String);
+      return shown.join(", ") + (vs.length > 6 ? `, +${vs.length - 6} more` : "");
+    };
+    const out: { source: string; text: string }[] = [];
+
+    // 1. This visual's own query filters.
+    for (const f of el.query?.filters ?? []) {
+      out.push({ source: "This visual", text: `${f.name} ${f.op ?? "="} ${f.value ?? ""}`.trim() });
+    }
+
+    // 2. Active slicers (minus opted-out ones and self).
+    const ignore = el.interactions?.ignoreSlicers ?? [];
+    for (const s of doc?.elements ?? []) {
+      if (s.type !== "slicer" || s.id === el.id || ignore.includes(s.id)) continue;
+      const sel = slicerSelections[s.id];
+      if (!sel) continue;
+      const label = `Slicer: ${s.title?.text || s.slicer?.column || s.id}`;
+      const col = s.slicer?.column ?? "";
+      if (sel.kind === "values" && sel.values.length > 0) {
+        out.push({ source: label, text: `${col} in ${fmtVals(sel.values)}` });
+      } else if (sel.kind === "range") {
+        const parts: string[] = [];
+        if (sel.from) parts.push(`≥ ${sel.from}`);
+        if (sel.to) parts.push(`≤ ${sel.to}`);
+        if (parts.length) out.push({ source: label, text: `${col} ${parts.join(" and ")}` });
+      }
+    }
+
+    // 3. Cross-filters from other visuals.
+    for (const [sourceId, marks] of Object.entries(crossFilters)) {
+      if (sourceId === el.id || !marks || marks.length === 0) continue;
+      const src = doc?.elements.find((e) => e.id === sourceId);
+      const label = `Cross-filter: ${src?.title?.text || sourceId}`;
+      const byCol = new Map<string, (string | number)[]>();
+      for (const m of marks) for (const d of m.dims) {
+        const arr = byCol.get(d.column) ?? [];
+        arr.push(d.value);
+        byCol.set(d.column, arr);
+      }
+      for (const [col, vals] of byCol) out.push({ source: label, text: `${col} in ${fmtVals(dedupeValues(vals))}` });
+    }
+
+    return out;
+  }, [el, doc, slicerSelections, crossFilters]);
 }
 
 // ─── Live refresh ────────────────────────────────────────────────────────────

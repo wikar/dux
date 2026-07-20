@@ -4,7 +4,7 @@ import { applyGesture, updateElement, type GestureKind } from "../docOps";
 import { useUiStore } from "../store";
 import type { CanvasSpec, DashElement, Layout } from "../types";
 import { QUERY_TYPES } from "../types";
-import ElementBody, { TitleCsvButton } from "./ElementBody";
+import ElementBody, { FunnelButton, TitleCsvButton } from "./ElementBody";
 
 const HANDLES: GestureKind[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 
@@ -63,6 +63,7 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
 
   return (
     <div
+      data-element-id={el.id}
       className={`${styles.el} ${editing ? styles.editing : ""} ${selected ? styles.selected : ""}`}
       style={{ left: layout.x, top: layout.y, width: layout.w, height: layout.h, zIndex: layout.z ?? 0 }}
       onPointerDown={(e) => begin(e, "move")}
@@ -79,6 +80,7 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
       {showTitle && (
         <div className={styles.titleBar}>
           <span className={styles.titleText}>{el.title!.text}</span>
+          {QUERY_TYPES.has(el.type) && <FunnelButton el={el} />}
           {QUERY_TYPES.has(el.type) && <TitleCsvButton el={el} className={styles.titleCsv} />}
         </div>
       )}

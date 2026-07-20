@@ -61,13 +61,21 @@ type OpExpr struct {
 	Right *Term  `parser:"@@"`
 }
 
-// TableConstructor is a DAX-style inline value set: { expr, expr, ... }.
-// It is the first argument to TREATAS and enumerates a literal filter list.
+// TableConstructor is a DAX-style inline value set: the first argument to
+// TREATAS, enumerating a literal filter list. Each element is a bare scalar
+// (single-column set) or a parenthesised tuple (multi-column set).
 //
-//	{"Clay", "Grass"}
-//	{100, 200, 300}
+//	{"Clay", "Grass"}          — single column
+//	{100, 200, 300}            — single column
+//	{("SE", 2020), ("NO", 21)} — two columns (multi-column TREATAS)
 type TableConstructor struct {
-	Values []*Expr `parser:"'{' ( @@ ( ',' @@ )* )? '}'"`
+	Rows []*ValueTuple `parser:"'{' ( @@ ( ',' @@ )* )? '}'"`
+}
+
+// ValueTuple is one row of a TableConstructor. A bare scalar has a single
+// Values entry; a parenthesised tuple has one per column.
+type ValueTuple struct {
+	Values []*Expr `parser:"( '(' @@ ( ',' @@ )* ')' ) | @@"`
 }
 
 // Term is a single expression unit, optionally preceded by a unary minus

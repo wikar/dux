@@ -7,6 +7,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import styles from "./ElementBody.module.css";
 import { compareCells } from "../../compare";
 import { pivotParts, totalsKey, usePivotTotals } from "../data";
+import { markKey, useUiStore } from "../store";
 import type { DashElement } from "../types";
 import { formatValue } from "@dux/core";
 import type { MeasureFormat, QueryResponse } from "@dux/core";
@@ -78,6 +79,12 @@ export default function PivotBody({ el, data, formats }: Props) {
   const viz = el.viz ?? {};
   const { byKey, loading: totalsLoading } = usePivotTotals(el);
 
+  // Cross-filter: clicking a leaf row selects its full row-dim tuple (view
+  // mode, builder queries — raw mode has no per-dim tables).
+  const mode = useUiStore((s) => s.mode);
+  const crossSel = useUiStore((s) => s.crossFilters[el.id]);
+  const toggleCrossMark = useUiStore((s) => s.toggleCrossMark);
+
   // Expand/collapse: per-group keys whose state differs from the default
   // (viz.collapsed = start collapsed). Session state — never in the document.
   const startCollapsed = viz.collapsed ?? true;
@@ -114,6 +121,18 @@ export default function PivotBody({ el, data, formats }: Props) {
   const subtotalsOn = !raw && (viz.subtotals ?? true) && R > 1;
   const grandOn = !raw && (viz.grandTotal ?? true) && R > 0;
   const totalColOn = !raw && (viz.totalCol ?? true) && hasCols;
+
+  const rowTables = useMemo(
+    () => (raw ? {} : Object.fromEntries(pivotParts(el).rowDims.map((f) => [f.name, f.table]))),
+    [raw, el]
+  );
+  const canCross = mode === "view" && !raw && R > 0;
+  const selectedKeys = useMemo(() => new Set((crossSel ?? []).map(markKey)), [crossSel]);
+  /** Full row-dim tuple of a leaf row (its key is the SEP-joined values). */
+  const leafDims = (dr: DisplayRow) => {
+    const vals = dr.key.split(SEP);
+    return rowNames.map((n, i) => ({ table: rowTables[n] ?? "", column: n, value: vals[i] ?? "" }));
+  };
 
   // Distinct column combinations, sorted; the axis is capped for sanity.
   const colAxisFull = useMemo(() => {
@@ -282,11 +301,14 @@ export default function PivotBody({ el, data, formats }: Props) {
             const dr = displayRows[vi.index];
             const cells = cellsFor(dr);
             const totals = totalColFor(dr);
+            const clickable = canCross && dr.kind === "leaf";
+            const selected = clickable && selectedKeys.size > 0 && selectedKeys.has(markKey({ dims: leafDims(dr) }));
             return (
               <div
                 key={vi.key}
-                className={`${styles.pvRow} ${rowClass[dr.kind]}`}
-                style={{ position: "absolute", top: 0, left: 0, right: 0, height: ROW_H, transform: `translateY(${vi.start}px)` }}
+                className={`${styles.pvRow} ${rowClass[dr.kind]} ${selected ? styles.rowSelected : ""}`}
+                style={{ position: "absolute", top: 0, left: 0, right: 0, height: ROW_H, transform: `translateY(${vi.start}px)`, cursor: clickable ? "pointer" : undefined }}
+                onClick={clickable ? (e) => toggleCrossMark(el.id, { dims: leafDims(dr) }, e.ctrlKey || e.metaKey) : undefined}
               >
                 <div
                   className={styles.pvRowHead}

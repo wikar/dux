@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -9,12 +10,13 @@ import { downloadCsv } from "../csv";
 import {
   dropEmptyRows,
   splitElementFields,
+  useAffectingFilters,
   useElementData,
   useFormats,
   usePalette,
 } from "../data";
 import { TYPE_LABEL, updateElement } from "../docOps";
-import { useDocStore, useUiStore } from "../store";
+import { markKey, useDocStore, useUiStore } from "../store";
 import type { DashElement } from "../types";
 import { QUERY_TYPES } from "../types";
 import { formatValue, QueryFailedError } from "@dux/core";
@@ -27,10 +29,12 @@ import {
   LineChartViz,
   toChartData,
   toSeriesData,
+  type ChartDim,
+  type Interaction,
 } from "../charts/ChartKit";
 import PivotBody from "./PivotBody";
 import SlicerBody from "./SlicerBody";
-import { typeIcon } from "./typeIcons";
+import { funnelIcon, typeIcon } from "./typeIcons";
 
 /** CSV download in the title bar (rendered by ElementView for query types).
  *  useElementData hits the cache — the body already runs the same query. */
@@ -46,6 +50,68 @@ export function TitleCsvButton({ el, className }: { el: DashElement; className: 
     >
       ⤓
     </button>
+  );
+}
+
+/** Header/floating control that reveals every filter affecting this visual
+ *  (own query filters, active slicers, cross-filtering visuals) in a popover.
+ *  The badge shows the count; the button stays lit while filters are active. */
+export function FunnelButton({ el, floating }: { el: DashElement; floating?: boolean }) {
+  const filters = useAffectingFilters(el);
+  const ref = useRef<HTMLButtonElement>(null);
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const [pinned, setPinned] = useState(false);
+  const count = filters.length;
+  const openPop = () => setRect(ref.current?.getBoundingClientRect() ?? null);
+  const closePop = () => {
+    if (!pinned) setRect(null);
+  };
+  return (
+    <>
+      <button
+        ref={ref}
+        className={`${styles.funnelBtn} ${floating ? styles.funnelFloat : ""}`}
+        title="Filters affecting this visual"
+        onPointerDown={(e) => e.stopPropagation()}
+        onMouseEnter={openPop}
+        onMouseLeave={closePop}
+        onClick={(e) => {
+          // Hover shows it; a click pins it open (toggle) so it survives
+          // moving the pointer away.
+          e.stopPropagation();
+          if (pinned) {
+            setPinned(false);
+            setRect(null);
+          } else {
+            setPinned(true);
+            openPop();
+          }
+        }}
+      >
+        {funnelIcon}
+      </button>
+      {rect &&
+        createPortal(
+          <div
+            className={styles.funnelPop}
+            style={{ top: rect.bottom + 4, left: Math.max(8, Math.min(rect.left, window.innerWidth - 268)) }}
+            onMouseEnter={openPop}
+            onMouseLeave={closePop}
+          >
+            {count === 0 ? (
+              <div className={styles.funnelEmpty}>No filters affecting this visual.</div>
+            ) : (
+              filters.map((f, i) => (
+                <div key={i} className={styles.funnelItem}>
+                  <span className={styles.funnelSrc}>{f.source}</span>
+                  <span className={styles.funnelTxt}>{f.text}</span>
+                </div>
+              ))
+            )}
+          </div>,
+          document.body
+        )}
+    </>
   );
 }
 
@@ -123,14 +189,17 @@ function DataBody({ el }: { el: DashElement }) {
     <div className={styles.dataWrap}>
       {data && <DataViz el={el} data={data} formats={formats} palette={palette} />}
       {data && !titleShown && (
-        <button
-          className={styles.exportBtn}
-          title="Download CSV"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => downloadCsv(data, el.title?.text || el.id)}
-        >
-          ⤓
-        </button>
+        <>
+          <FunnelButton el={el} floating />
+          <button
+            className={styles.exportBtn}
+            title="Download CSV"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => downloadCsv(data, el.title?.text || el.id)}
+          >
+            ⤓
+          </button>
+        </>
       )}
       {loading && (
         <div className={styles.overlay}>
@@ -170,6 +239,12 @@ function DataViz({ el, data: rawData, formats, palette }: VizProps) {
   const { dims, metrics } = splitElementFields(el);
   const viz = el.viz ?? {};
 
+  // Cross-filter interaction: clicking a mark filters the other visuals
+  // (view mode + builder queries only; raw queries lack per-dim tables).
+  const mode = useUiStore((s) => s.mode);
+  const crossSel = useUiStore((s) => s.crossFilters[el.id]);
+  const toggleCrossMark = useUiStore((s) => s.toggleCrossMark);
+
   // Raw mode has no builder fields, so charts treat the first result column
   // as x and the rest as series.
   const raw = el.query?.mode === "raw";
@@ -177,6 +252,16 @@ function DataViz({ el, data: rawData, formats, palette }: VizProps) {
   const metricCols = raw
     ? rawData.columns.slice(1)
     : metrics.map((f) => f.name).filter((n) => rawData.columns.includes(n));
+
+  const dimTables = useMemo(() => Object.fromEntries(dims.map((f) => [f.name, f.table])), [dims]);
+  const selectedKeys = useMemo(() => new Set((crossSel ?? []).map(markKey)), [crossSel]);
+  const onMarkClick =
+    mode === "view" && !raw && dims.length > 0
+      ? (d: ChartDim[], additive: boolean) => {
+          if (d.length > 0) toggleCrossMark(el.id, { dims: d }, additive);
+        }
+      : undefined;
+  const interaction: Interaction = { onMarkClick, selectedKeys };
 
   if (el.type === "kpi") return <KpiBody data={rawData} metricCols={metricCols} formats={formats} />;
 
@@ -198,12 +283,18 @@ function DataViz({ el, data: rawData, formats, palette }: VizProps) {
       data,
       dimCols.filter((c) => c !== splitBy),
       splitBy,
-      metric
+      metric,
+      dimTables
     );
     // Every series carries the split measure — its format applies to all.
     const sFormats: Record<string, MeasureFormat> = {};
     if (formats[metric]) for (const s of series) sFormats[s] = formats[metric];
     const legend = viz.legend ?? series.length > 1;
+    // A clicked segment carries the series dim value too.
+    const splitInteraction: Interaction = {
+      ...interaction,
+      seriesDim: { table: dimTables[splitBy] ?? "", column: splitBy },
+    };
     if (el.type === "bar") {
       return (
         <BarChartViz
@@ -214,11 +305,22 @@ function DataViz({ el, data: rawData, formats, palette }: VizProps) {
           orientation={viz.orientation}
           stacked={viz.stacked}
           legend={legend}
+          interaction={splitInteraction}
         />
       );
     }
     if (el.type === "line") {
-      return <LineChartViz data={sData} left={series} right={[]} palette={palette} formats={sFormats} legend={legend} />;
+      return (
+        <LineChartViz
+          data={sData}
+          left={series}
+          right={[]}
+          palette={palette}
+          formats={sFormats}
+          legend={legend}
+          interaction={splitInteraction}
+        />
+      );
     }
     return (
       <AreaChartViz
@@ -228,11 +330,12 @@ function DataViz({ el, data: rawData, formats, palette }: VizProps) {
         palette={palette}
         formats={sFormats}
         legend={legend}
+        interaction={splitInteraction}
       />
     );
   }
 
-  const chartData = toChartData(data, dimCols, metricCols);
+  const chartData = toChartData(data, dimCols, metricCols, dimTables);
   if (el.type === "bar") {
     return (
       <BarChartViz
@@ -243,6 +346,7 @@ function DataViz({ el, data: rawData, formats, palette }: VizProps) {
         orientation={viz.orientation}
         stacked={viz.stacked}
         legend={viz.legend ?? metricCols.length > 1}
+        interaction={interaction}
       />
     );
   }
@@ -257,6 +361,7 @@ function DataViz({ el, data: rawData, formats, palette }: VizProps) {
         palette={palette}
         formats={formats}
         legend={viz.legend ?? metricCols.length > 1}
+        interaction={interaction}
       />
     );
   }
@@ -272,6 +377,7 @@ function DataViz({ el, data: rawData, formats, palette }: VizProps) {
         palette={palette}
         formats={formats}
         legend={viz.legend ?? metricCols.length > 1}
+        interaction={interaction}
       />
     );
   }
@@ -284,6 +390,7 @@ function DataViz({ el, data: rawData, formats, palette }: VizProps) {
         palette={palette}
         formats={formats}
         legend={viz.legend ?? metricCols.length > 1}
+        interaction={interaction}
       />
     );
   }
@@ -298,6 +405,7 @@ function DataViz({ el, data: rawData, formats, palette }: VizProps) {
         palette={palette}
         formats={formats}
         legend={viz.legend ?? true}
+        interaction={interaction}
       />
     );
   }
@@ -345,6 +453,21 @@ function TableBody({
   formats: Record<string, MeasureFormat>;
 }) {
   const editing = useUiStore((s) => s.mode === "edit");
+  const crossSel = useUiStore((s) => s.crossFilters[el.id]);
+  const toggleCrossMark = useUiStore((s) => s.toggleCrossMark);
+
+  // Cross-filter: a clicked data row selects its dim-column tuple (view mode).
+  const dimIdx = useMemo(
+    () =>
+      splitElementFields(el)
+        .dims.map((d) => ({ table: d.table, column: d.name, i: data.columns.indexOf(d.name) }))
+        .filter((d) => d.i >= 0),
+    [el, data.columns]
+  );
+  const selectedKeys = useMemo(() => new Set((crossSel ?? []).map(markKey)), [crossSel]);
+  const canCross = !editing && dimIdx.length > 0;
+  const rowDims = (r: ResultRow): ChartDim[] =>
+    dimIdx.map((d) => ({ table: d.table, column: d.column, value: (r[d.i] ?? "") as string | number }));
 
   // The persisted sort lives in el.query.sort, so the header, the Settings
   // "Sort by" control, and (for builder queries) the server-side ORDER BY all
@@ -421,8 +544,14 @@ function TableBody({
           )}
           {items.map((vi) => {
             const r = rows[vi.index];
+            const selected = canCross && selectedKeys.size > 0 && selectedKeys.has(markKey({ dims: rowDims(r) }));
             return (
-              <tr key={vi.index} style={{ height: TABLE_ROW_H }}>
+              <tr
+                key={vi.index}
+                style={{ height: TABLE_ROW_H, cursor: canCross ? "pointer" : undefined }}
+                className={selected ? styles.rowSelected : undefined}
+                onClick={canCross ? (e) => toggleCrossMark(el.id, { dims: rowDims(r) }, e.ctrlKey || e.metaKey) : undefined}
+              >
                 {r.map((v, j) => {
                   const col = data.columns[j];
                   const fmt = formats[col];
