@@ -941,6 +941,35 @@ function DashboardSettings() {
           </label>
         )}
         <div className={styles.hint}>Elements refetch on this interval, staggered ±10% (5s floor).</div>
+
+        <label className={styles.label}>Element header controls</label>
+        <label className={styles.check}>
+          <input
+            type="checkbox"
+            checked={doc.controls?.funnel !== false}
+            onChange={(e) =>
+              useDocStore.getState().update((d) => ({
+                ...d,
+                controls: { ...d.controls, funnel: e.target.checked },
+              }))
+            }
+          />
+          Filter funnel icon
+        </label>
+        <label className={styles.check}>
+          <input
+            type="checkbox"
+            checked={doc.controls?.csv !== false}
+            onChange={(e) =>
+              useDocStore.getState().update((d) => ({
+                ...d,
+                controls: { ...d.controls, csv: e.target.checked },
+              }))
+            }
+          />
+          CSV download icon
+        </label>
+        <div className={styles.hint}>Shown on every chart, table, and pivot header.</div>
       </div>
 
       <ThemeSection />

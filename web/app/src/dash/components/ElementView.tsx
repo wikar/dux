@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import styles from "./ElementView.module.css";
 import { applyGesture, updateElement, type GestureKind } from "../docOps";
-import { useUiStore } from "../store";
+import { useDocStore, useUiStore } from "../store";
 import type { CanvasSpec, DashElement, Layout } from "../types";
 import { QUERY_TYPES } from "../types";
 import ElementBody, { FunnelButton, TitleCsvButton } from "./ElementBody";
@@ -23,6 +23,8 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
   const mode = useUiStore((s) => s.mode);
   const selected = useUiStore((s) => s.selectedId === el.id);
   const select = useUiStore((s) => s.select);
+  const showFunnel = useDocStore((s) => s.doc?.controls?.funnel) !== false;
+  const showCsv = useDocStore((s) => s.doc?.controls?.csv) !== false;
   const [ghost, setGhost] = useState<Layout | null>(null);
   const gesture = useRef<{ kind: GestureKind; startX: number; startY: number; orig: Layout } | null>(null);
 
@@ -80,8 +82,8 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
       {showTitle && (
         <div className={styles.titleBar}>
           <span className={styles.titleText}>{el.title!.text}</span>
-          {QUERY_TYPES.has(el.type) && <FunnelButton el={el} />}
-          {QUERY_TYPES.has(el.type) && <TitleCsvButton el={el} className={styles.titleCsv} />}
+          {QUERY_TYPES.has(el.type) && showFunnel && <FunnelButton el={el} />}
+          {QUERY_TYPES.has(el.type) && showCsv && <TitleCsvButton el={el} className={styles.titleCsv} />}
         </div>
       )}
       <div className={styles.body}>

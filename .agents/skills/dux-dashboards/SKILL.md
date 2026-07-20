@@ -40,6 +40,7 @@ Full endpoint semantics (ETags, conflicts, raw download):
   "version": 1,
   "canvas": { "width": 1280, "height": 720 },
   "refresh": { "enabled": false, "intervalSeconds": 60 },
+  "controls": { "csv": true, "funnel": true },
   "theme": { "background": "#101020" },
   "elements": [ ... ]
 }
@@ -50,6 +51,9 @@ Full endpoint semantics (ETags, conflicts, raw download):
   an 8px grid; agents should too). The canvas scales to fit the viewer.
 - `refresh` re-runs every element's query on the interval (5s server
   floor), staggered per element.
+- `controls` toggles the per-element header icons — `csv` (export) and
+  `funnel` (filter provenance). Both default **on**; set either to `false`
+  for a cleaner, non-interactive look.
 - `theme` is a sparse per-dashboard override of the global theme — see
   [references/theme.md](references/theme.md).
 

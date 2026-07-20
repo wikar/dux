@@ -34,7 +34,7 @@ import {
 } from "../charts/ChartKit";
 import PivotBody from "./PivotBody";
 import SlicerBody from "./SlicerBody";
-import { funnelIcon, typeIcon } from "./typeIcons";
+import { downloadIcon, funnelIcon, typeIcon } from "./typeIcons";
 
 /** CSV download in the title bar (rendered by ElementView for query types).
  *  useElementData hits the cache — the body already runs the same query. */
@@ -48,7 +48,7 @@ export function TitleCsvButton({ el, className }: { el: DashElement; className: 
       onPointerDown={(e) => e.stopPropagation()}
       onClick={() => downloadCsv(data, el.title?.text || el.id)}
     >
-      ⤓
+      {downloadIcon}
     </button>
   );
 }
@@ -184,21 +184,25 @@ function DataBody({ el }: { el: DashElement }) {
   // The CSV button lives in the title bar; elements without one keep a
   // floating hover button so export stays reachable.
   const titleShown = el.title?.show !== false && !!el.title?.text;
+  const showFunnel = doc?.controls?.funnel !== false;
+  const showCsv = doc?.controls?.csv !== false;
 
   return (
     <div className={styles.dataWrap}>
       {data && <DataViz el={el} data={data} formats={formats} palette={palette} />}
       {data && !titleShown && (
         <>
-          <FunnelButton el={el} floating />
-          <button
-            className={styles.exportBtn}
-            title="Download CSV"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => downloadCsv(data, el.title?.text || el.id)}
-          >
-            ⤓
-          </button>
+          {showFunnel && <FunnelButton el={el} floating />}
+          {showCsv && (
+            <button
+              className={styles.exportBtn}
+              title="Download CSV"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => downloadCsv(data, el.title?.text || el.id)}
+            >
+              {downloadIcon}
+            </button>
+          )}
         </>
       )}
       {loading && (

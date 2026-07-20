@@ -40,9 +40,12 @@
   text-overflow: ellipsis;
 }
 
-/* CSV download in the title bar — visible while hovering the element. */
+/* CSV download in the title bar — always visible, muted, matching the funnel. */
 .titleCsv {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 18px;
   height: 18px;
   padding: 0;
@@ -50,15 +53,10 @@
   border-radius: 3px;
   background: transparent;
   color: var(--th-text, var(--subtext0));
-  font-size: 12px;
   line-height: 1;
   cursor: pointer;
-  opacity: 0;
+  opacity: 0.35;
   transition: opacity 0.12s;
-}
-
-.el:hover .titleCsv {
-  opacity: 0.6;
 }
 
 .titleCsv:hover {

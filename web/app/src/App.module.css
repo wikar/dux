@@ -16,7 +16,8 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-right: 1px solid var(--surface1);
+  /* The schema pane (SchemaTree .panel) owns the divider border; col1 must
+     not add its own or the two 1px borders stack into a 2px line. */
 }
 
 .col2 {

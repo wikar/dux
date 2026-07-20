@@ -41,6 +41,15 @@
         "intervalSeconds": { "type": "integer", "minimum": 1, "maximum": 86400, "description": "The server additionally enforces a configurable floor (default 5s)." }
       }
     },
+    "controls": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Visibility of the per-element header controls. Both default to shown when omitted.",
+      "properties": {
+        "csv":    { "type": "boolean", "description": "Show the CSV-export icon on each query element (default true)." },
+        "funnel": { "type": "boolean", "description": "Show the filter-provenance funnel icon on each query element (default true)." }
+      }
+    },
     "elements": {
       "type": "array",
       "items": { "$ref": "#/$defs/element" }

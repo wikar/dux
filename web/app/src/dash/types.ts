@@ -176,12 +176,19 @@ export interface ThemeTokens {
   fontFamily?: string;
 }
 
+/** Visibility of the per-element header controls (both default to shown). */
+export interface ControlsSpec {
+  csv?: boolean;
+  funnel?: boolean;
+}
+
 export interface Dashboard {
   $schema?: string;
   version: 1;
   canvas: CanvasSpec;
   theme?: Record<string, unknown>;
   refresh?: RefreshSpec;
+  controls?: ControlsSpec;
   elements: DashElement[];
 }
 

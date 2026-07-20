@@ -232,13 +232,15 @@
   top: 4px;
   right: 4px;
   z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 22px;
   height: 22px;
   border-radius: 4px;
   border: 1px solid var(--surface1);
   background: var(--mantle);
   color: var(--subtext0);
-  font-size: 12px;
   line-height: 1;
   cursor: pointer;
   opacity: 0;
