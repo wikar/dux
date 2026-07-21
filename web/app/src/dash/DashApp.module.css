@@ -49,16 +49,21 @@
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  border: 1px solid var(--surface1);
-  background: var(--mantle);
-  color: var(--subtext0);
+  border: 1px solid var(--exit-border);
+  background: color-mix(in srgb, var(--exit-text) 20%, transparent);
+  color: var(--exit-text);
   font-size: 12px;
   cursor: pointer;
-  opacity: 0.25;
+  opacity: 0;
+  pointer-events: none;
   transition: opacity 0.15s;
 }
 
-.exitFullscreen:hover {
+.exitFullscreenVisible {
   opacity: 1;
-  color: var(--text);
+  pointer-events: auto;
+}
+
+.exitFullscreenVisible:hover {
+  background: color-mix(in srgb, var(--exit-text) 30%, transparent);
 }

@@ -84,6 +84,7 @@ export async function openDashboard(path: string) {
   const ui = useUiStore.getState();
   try {
     const d = await getDashboard(path);
+    if (useUiStore.getState().path !== path) return;
     if (!d.valid || !d.document) {
       loadDoc(null);
       ui.opened(path, d.etag, null, d.error || "this file is not a valid dashboard — fix it on disk and reload");
@@ -94,6 +95,7 @@ export async function openDashboard(path: string) {
     // Deep link / reload persistence: seed slicer selections from ?f=.
     ui.setSlicerSelections(selectionsFromUrl());
   } catch (e) {
+    if (useUiStore.getState().path !== path) return;
     loadDoc(null);
     ui.opened(path, null, null, e instanceof Error ? e.message : String(e));
   }

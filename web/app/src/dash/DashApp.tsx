@@ -4,9 +4,10 @@
 // @dux/core — never from Home/Explorer code — and nothing outside the app
 // entry imports from src/dash. This keeps a future dash-only duxuid bundle a
 // matter of adding a second Vite entry over src/dash + src/components.
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import styles from "./DashApp.module.css";
 import { fullscreenFromUrl, openDashboard, save, setFullscreen } from "./actions";
+import { useResolvedTheme } from "./data";
 import { nudgeElement, removeElement } from "./docOps";
 import { redo, undo, useDocStore, useUiStore } from "./store";
 import CollapsiblePanel from "../components/CollapsiblePanel";
@@ -30,7 +31,23 @@ export default function DashApp({ path, refreshCount, showHidden }: Props) {
   const fullscreen = useUiStore((s) => s.fullscreen);
   const conflict = useUiStore((s) => s.conflict);
   const doc = useDocStore((s) => s.doc);
+  const theme = useResolvedTheme(doc);
   const setPath = useUiStore((s) => s.setPath);
+  const [exitVisible, setExitVisible] = useState(false);
+  const exitTimer = useRef<number | null>(null);
+
+  const revealExit = () => {
+    setExitVisible(true);
+    if (exitTimer.current !== null) window.clearTimeout(exitTimer.current);
+    exitTimer.current = window.setTimeout(() => setExitVisible(false), 1200);
+  };
+
+  useEffect(() => {
+    if (!fullscreen) setExitVisible(false);
+    return () => {
+      if (exitTimer.current !== null) window.clearTimeout(exitTimer.current);
+    };
+  }, [fullscreen]);
 
   // Mirror the URL path into the dash UI store (DashActions reads it).
   useEffect(() => {
@@ -105,7 +122,11 @@ export default function DashApp({ path, refreshCount, showHidden }: Props) {
   if (!path) return <Home />;
 
   return (
-    <div className={styles.main}>
+    <div
+      className={styles.main}
+      style={{ "--exit-text": theme.text, "--exit-border": theme.border } as React.CSSProperties}
+      onPointerMove={fullscreen ? revealExit : undefined}
+    >
       {mode === "edit" && doc && (
         <CollapsiblePanel title="Schema" side="left" width={260} storageKey="dux.dash.schema">
           <SchemaTree bare refreshCount={refreshCount} showHidden={showHidden} />
@@ -118,7 +139,7 @@ export default function DashApp({ path, refreshCount, showHidden }: Props) {
       )}
       {fullscreen && (
         <button
-          className={styles.exitFullscreen}
+          className={`${styles.exitFullscreen} ${exitVisible ? styles.exitFullscreenVisible : ""}`}
           title="Exit full screen (Esc)"
           onClick={() => setFullscreen(false)}
         >

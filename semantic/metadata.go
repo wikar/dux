@@ -266,6 +266,28 @@ func (m *MetadataDB) DeleteDateTable(tableName string) error {
 	return err
 }
 
+// ReplaceDateTable atomically replaces every date-table designation.
+func (m *MetadataDB) ReplaceDateTable(tableName, columnName string) error {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.Exec(`DELETE FROM dux_date_tables`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO dux_date_tables (table_name, column_name) VALUES (?, ?)`, tableName, columnName); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ClearDateTables atomically removes every date-table designation.
+func (m *MetadataDB) ClearDateTables() error {
+	_, err := m.db.Exec(`DELETE FROM dux_date_tables`)
+	return err
+}
+
 // SaveHidden marks a table (columnName == "") or a single column as hidden.
 func (m *MetadataDB) SaveHidden(tableName, columnName string) error {
 	_, err := m.db.Exec(`

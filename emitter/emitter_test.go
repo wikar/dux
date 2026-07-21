@@ -25,7 +25,7 @@ func mustParse(t *testing.T, input string) *parser.Query {
 func minSchema() *semantic.Schema {
 	s := semantic.NewSchema()
 	s.Tables["sales"] = &semantic.Table{
-		Name:     "sales",
+		Name: "sales",
 		Columns: map[string]*semantic.Column{
 			"id":      {Name: "id", DataType: "INTEGER"},
 			"product": {Name: "product", DataType: "TEXT"},
@@ -35,7 +35,7 @@ func minSchema() *semantic.Schema {
 		},
 	}
 	s.Tables["products"] = &semantic.Table{
-		Name:     "products",
+		Name: "products",
 		Columns: map[string]*semantic.Column{
 			"product":  {Name: "product", DataType: "TEXT"},
 			"category": {Name: "category", DataType: "TEXT"},

@@ -12,10 +12,12 @@ import {
   Pie,
   PieChart,
   ResponsiveContainer,
+  Text,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
+import type { XAxisTickContentProps } from "recharts";
 import { formatValue } from "@dux/core";
 import type { MeasureFormat, QueryResponse } from "@dux/core";
 import { markKey, type CrossMark } from "../store";
@@ -132,6 +134,40 @@ function tooltipFormatter(formats: Formats) {
 
 const commonAxis = { stroke: AXIS, tick: { fill: AXIS, fontSize: 10 }, tickLine: false } as const;
 
+/** Compact ISO timestamps on axes; the underlying value remains untouched for
+ * tooltips and cross-filtering. Multiple dimension labels are handled too. */
+export function formatCategoryTick(value: unknown): string {
+  return String(value ?? "").replace(
+    /(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):\d{2}(?:\.\d+)?Z?/g,
+    (_, date: string, hour: string, minute: string) =>
+      hour === "00" && minute === "00" ? date : `${date} ${hour}:${minute}`
+  );
+}
+
+const categoryAxis = {
+  ...commonAxis,
+  padding: { left: 12, right: 12 },
+  minTickGap: 16,
+  tickFormatter: formatCategoryTick,
+} as const;
+
+function lineCategoryTick({ x, y, payload, index, visibleTicksCount, className }: XAxisTickContentProps) {
+  const inset = index === 0 ? 8 : index === visibleTicksCount - 1 ? -8 : 0;
+  return (
+    <Text
+      className={className}
+      x={Number(x) + inset}
+      y={y}
+      fill={AXIS}
+      fontSize={10}
+      textAnchor="middle"
+      verticalAnchor="start"
+    >
+      {formatCategoryTick(payload.value)}
+    </Text>
+  );
+}
+
 // ─── Cross-filter interaction (click a mark → filter the other visuals) ──────
 
 /** Called when a mark is clicked; additive = Ctrl/⌘ held. */
@@ -211,11 +247,11 @@ export function BarChartViz({ data, series, palette, formats, orientation, stack
         {horizontal ? (
           <>
             <XAxis type="number" {...commonAxis} tickFormatter={valueFmt} />
-            <YAxis type="category" dataKey="__x" {...commonAxis} width={92} />
+            <YAxis type="category" dataKey="__x" {...commonAxis} tickFormatter={formatCategoryTick} width={92} />
           </>
         ) : (
           <>
-            <XAxis type="category" dataKey="__x" {...commonAxis} />
+            <XAxis type="category" dataKey="__x" {...categoryAxis} />
             <YAxis type="number" {...commonAxis} tickFormatter={valueFmt} width={48} />
           </>
         )}
@@ -274,7 +310,7 @@ export function LineChartViz({ data, left, right, palette, formats, legend, inte
     <ResponsiveContainer width="100%" height="100%">
       <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
         <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-        <XAxis type="category" dataKey="__x" {...commonAxis} />
+        <XAxis type="category" dataKey="__x" {...categoryAxis} tick={lineCategoryTick} />
         <YAxis yAxisId="left" type="number" {...commonAxis} tickFormatter={tickFormatter(formats, left)} width={48} />
         {right.length > 0 && (
           <YAxis
@@ -331,7 +367,7 @@ export function AreaChartViz({ data, series, palette, formats, stacked, legend, 
     <ResponsiveContainer width="100%" height="100%">
       <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
         <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-        <XAxis type="category" dataKey="__x" {...commonAxis} />
+        <XAxis type="category" dataKey="__x" {...categoryAxis} />
         <YAxis type="number" {...commonAxis} tickFormatter={tickFormatter(formats, series)} width={48} />
         <Tooltip formatter={tooltipFormatter(formats)} contentStyle={TOOLTIP_STYLE} />
         {legend && <Legend wrapperStyle={{ fontSize: 11 }} />}
@@ -422,7 +458,7 @@ export function ComboChartViz({ data, bars, lines, lineY2 = true, palette, forma
     <ResponsiveContainer width="100%" height="100%">
       <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
         <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-        <XAxis type="category" dataKey="__x" {...commonAxis} />
+        <XAxis type="category" dataKey="__x" {...categoryAxis} />
         <YAxis yAxisId="left" type="number" {...commonAxis} tickFormatter={tickFormatter(formats, bars)} width={48} />
         {rightAxis && (
           <YAxis

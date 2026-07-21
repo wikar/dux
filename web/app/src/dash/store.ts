@@ -13,10 +13,9 @@ export type CrossMark = { dims: { table: string; column: string; value: string |
 /** Stable key for a mark (order-independent over its dims) — used to dedupe
  *  selections and to test membership when highlighting. */
 export function markKey(m: CrossMark): string {
-  return m.dims
-    .map((d) => `${d.table}.${d.column}=${d.value}`)
-    .sort()
-    .join("&");
+  const dims = m.dims.map((d) => [d.table, d.column, d.value] as const);
+  dims.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return JSON.stringify(dims);
 }
 
 // ─── Document store (undo/redo via zundo) ────────────────────────────────────
@@ -145,7 +144,12 @@ export const useUiStore = create<UiState>()((set) => ({
   toggleCrossMark: (sourceId, mark, additive) =>
     set((s) => {
       if (!additive) {
-        // Plain click: this mark becomes the entire selection.
+        // Plain-clicking an already selected mark clears every visual;
+        // otherwise this mark becomes the entire selection.
+        const key = markKey(mark);
+        if ((s.crossFilters[sourceId] ?? []).some((m) => markKey(m) === key)) {
+          return { crossFilters: {} };
+        }
         return { crossFilters: { [sourceId]: [mark] } };
       }
       const key = markKey(mark);

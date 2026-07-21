@@ -1,6 +1,7 @@
 package executor_test
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"math/big"
@@ -11,6 +12,16 @@ import (
 	"github.com/danielwikar/dux/executor"
 	"github.com/danielwikar/dux/semantic"
 )
+
+func TestExecute_CanceledContext(t *testing.T) {
+	db, schema := setupTestDB(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := executor.ExecuteContext(ctx, db, schema, `EVALUATE sales`)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+}
 
 // ─── test fixture ─────────────────────────────────────────────────────────────
 

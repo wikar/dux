@@ -11,6 +11,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -57,12 +58,12 @@ func runFile(db *sql.DB, schema *semantic.Schema, path string) {
 	if err != nil {
 		log.Fatalf("read file: %v", err)
 	}
-	_, results, err := executor.Execute(db, schema, string(src))
+	cols, results, err := executor.ExecuteContext(context.Background(), db, schema, string(src))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	printResults(results)
+	printResults(cols, results)
 }
 
 // runREPL starts an interactive prompt. A blank line submits the buffered query.
@@ -85,12 +86,12 @@ func runREPL(db *sql.DB, schema *semantic.Schema) {
 			input := strings.Join(lines, "\n")
 			lines = lines[:0]
 
-			_, results, err := executor.Execute(db, schema, input)
+			cols, results, err := executor.ExecuteContext(context.Background(), db, schema, input)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				continue
 			}
-			printResults(results)
+			printResults(cols, results)
 		} else {
 			lines = append(lines, line)
 		}
@@ -101,7 +102,7 @@ func runREPL(db *sql.DB, schema *semantic.Schema) {
 }
 
 // printResults writes result rows to stdout in a simple key: value format.
-func printResults(rows []map[string]any) {
+func printResults(cols []string, rows [][]any) {
 	if len(rows) == 0 {
 		fmt.Println("(no results)")
 		return
@@ -110,8 +111,8 @@ func printResults(rows []map[string]any) {
 		if i > 0 {
 			fmt.Println()
 		}
-		for k, v := range row {
-			fmt.Printf("  %-20s %v\n", k+":", v)
+		for j, col := range cols {
+			fmt.Printf("  %-20s %v\n", col+":", row[j])
 		}
 	}
 }

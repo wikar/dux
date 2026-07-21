@@ -17,6 +17,7 @@ const FIT_CSS: Record<BackgroundFit, React.CSSProperties> = {
 export default function Canvas() {
   const doc = useDocStore((s) => s.doc)!;
   const mode = useUiStore((s) => s.mode);
+  const fullscreen = useUiStore((s) => s.fullscreen);
   const select = useUiStore((s) => s.select);
   const clearCrossFilters = useUiStore((s) => s.clearCrossFilters);
   const outerRef = useRef<HTMLDivElement>(null);
@@ -29,17 +30,17 @@ export default function Canvas() {
   useLayoutEffect(() => {
     const el = outerRef.current;
     if (!el) return;
-    const PAD = 24;
+    const pad = fullscreen ? 0 : 24;
     const fit = () => {
-      const w = el.clientWidth - PAD * 2;
-      const h = el.clientHeight - PAD * 2;
+      const w = el.clientWidth - pad * 2;
+      const h = el.clientHeight - pad * 2;
       setScale(Math.max(0.05, Math.min(w / width, h / height)));
     };
     fit();
     const ro = new ResizeObserver(fit);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [width, height]);
+  }, [width, height, fullscreen]);
 
   // Theme cascade: the dashboard's own canvas.background wins over theme
   // tokens; element chrome tokens flow down as CSS variables.
@@ -73,7 +74,7 @@ export default function Canvas() {
   return (
     <div
       ref={outerRef}
-      className={styles.outer}
+      className={`${styles.outer} ${fullscreen ? styles.fullscreen : ""}`}
       onPointerDown={(e) => {
         select(null);
         setMenu(null);

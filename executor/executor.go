@@ -72,6 +72,28 @@ func Execute(db *sql.DB, schema *semantic.Schema, input string) ([]string, []map
 // ExecuteFiltered is Execute with external filters applied to the query's
 // outermost filter context after parsing (see ApplyExternalFilters).
 func ExecuteFiltered(db *sql.DB, schema *semantic.Schema, input string, filters []ExternalFilter) ([]string, []map[string]any, error) {
+	cols, rows, err := ExecuteFilteredContext(context.Background(), db, schema, input, filters)
+	if err != nil {
+		return nil, nil, err
+	}
+	rowMaps := make([]map[string]any, len(rows))
+	for i, values := range rows {
+		rowMaps[i] = make(map[string]any, len(cols))
+		for j, col := range cols {
+			rowMaps[i][col] = values[j]
+		}
+	}
+	return cols, rowMaps, nil
+}
+
+// ExecuteContext is Execute with caller cancellation. Rows follow the returned
+// column order, avoiding an intermediate map allocation per result row.
+func ExecuteContext(ctx context.Context, db *sql.DB, schema *semantic.Schema, input string) ([]string, [][]any, error) {
+	return ExecuteFilteredContext(ctx, db, schema, input, nil)
+}
+
+// ExecuteFilteredContext is ExecuteContext with external filters applied.
+func ExecuteFilteredContext(ctx context.Context, db *sql.DB, schema *semantic.Schema, input string, filters []ExternalFilter) ([]string, [][]any, error) {
 	q, err := parser.Parse(input)
 	if err != nil {
 		return nil, nil, queryErr("parse", err)
@@ -90,7 +112,7 @@ func ExecuteFiltered(db *sql.DB, schema *semantic.Schema, input string, filters 
 
 	// Pin a single connection so that session temp tables created for VAR
 	// bindings are visible across all statements.
-	ctx, cancel := context.WithTimeout(context.Background(), QueryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, QueryTimeout)
 	defer cancel()
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -151,15 +173,14 @@ func ExecuteFiltered(db *sql.DB, schema *semantic.Schema, input string, filters 
 	return scanRows(rows)
 }
 
-// scanRows reads all rows from a *sql.Rows result set into []map[string]any,
-// also returning the ordered column names as reported by the driver.
-func scanRows(rows *sql.Rows) ([]string, []map[string]any, error) {
+// scanRows reads all rows from a *sql.Rows result set in driver column order.
+func scanRows(rows *sql.Rows) ([]string, [][]any, error) {
 	cols, err := rows.Columns()
 	if err != nil {
 		return nil, nil, fmt.Errorf("get columns: %w", err)
 	}
 
-	var results []map[string]any
+	var results [][]any
 	for rows.Next() {
 		vals := make([]any, len(cols))
 		ptrs := make([]any, len(cols))
@@ -169,11 +190,10 @@ func scanRows(rows *sql.Rows) ([]string, []map[string]any, error) {
 		if err := rows.Scan(ptrs...); err != nil {
 			return nil, nil, fmt.Errorf("scan row: %w", err)
 		}
-		row := make(map[string]any, len(cols))
-		for i, col := range cols {
-			row[col] = normaliseValue(vals[i])
+		for i := range vals {
+			vals[i] = normaliseValue(vals[i])
 		}
-		results = append(results, row)
+		results = append(results, vals)
 	}
 	return cols, results, rows.Err()
 }

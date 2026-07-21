@@ -59,6 +59,8 @@ var (
 	dashDir    = flag.String("dash-dir", "dashboards", "dashboard file store directory")
 )
 
+const maxRequestBodyBytes = 4 << 20
+
 // openAPISpec is a minimal OpenAPI 3.1 document describing the HTTP API.
 const openAPISpec = `{
   "openapi": "3.1.0",
@@ -607,7 +609,7 @@ func main() {
 		// Keep the API surface a hard 404 — without this the SPA catch-all
 		// would answer /api/dash/* with index.html.
 		mux.HandleFunc("/api/dash/", func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "dashboards disabled (DUX_DASH=0)", http.StatusNotFound)
+			writeError(w, "dashboards disabled (DUX_DASH=0)", http.StatusNotFound)
 		})
 		log.Printf("dashboards disabled (DUX_DASH=0)")
 	}
@@ -727,7 +729,7 @@ func watchDBDir(dir, metaPath string, metaDB *semantic.MetadataDB, schema *seman
 					schema.Tables[k] = t
 				}
 			}
-			schema.Relationships = append(schema.Relationships, fresh.Relationships...)
+			mergeRelationships(schema, fresh.Relationships)
 			schema.ApplyHiddenFlags()
 			mu.Unlock()
 			log.Printf("schema refreshed — %d tables, %d relationships total", len(schema.Tables), len(schema.Relationships))
@@ -741,24 +743,39 @@ func watchDBDir(dir, metaPath string, metaDB *semantic.MetadataDB, schema *seman
 	}
 }
 
+func mergeRelationships(schema *semantic.Schema, incoming []*semantic.Relationship) {
+	for _, candidate := range incoming {
+		found := false
+		for _, existing := range schema.Relationships {
+			if existing.FromTable == candidate.FromTable && existing.FromColumn == candidate.FromColumn &&
+				existing.ToTable == candidate.ToTable && existing.ToColumn == candidate.ToColumn {
+				found = true
+				break
+			}
+		}
+		if !found {
+			schema.Relationships = append(schema.Relationships, candidate)
+		}
+	}
+}
+
+func replaceSchema(dst, src *semantic.Schema) {
+	*dst = *src
+	dst.ApplyHiddenFlags()
+}
+
+func clearSchemaMetadata(schema *semantic.Schema) {
+	schema.Relationships = nil
+	schema.Measures = make(map[string]map[string]*parser.MeasureDefinition)
+	schema.MeasureFormats = make(map[string]map[string]*semantic.MeasureFormat)
+	schema.DateTables = make(map[string]string)
+	schema.ClearHidden()
+}
+
 // queryResponse is the JSON shape returned by POST /query.
 type queryResponse struct {
 	Columns []string `json:"columns"`
 	Rows    [][]any  `json:"rows"`
-}
-
-// pivotResults converts an ordered column list and []map[string]any rows into
-// the JSON query response, preserving the column order from the result set.
-func pivotResults(cols []string, rowMaps []map[string]any) queryResponse {
-	rows := make([][]any, 0, len(rowMaps))
-	for _, rm := range rowMaps {
-		rowVals := make([]any, len(cols))
-		for i, col := range cols {
-			rowVals[i] = rm[col]
-		}
-		rows = append(rows, rowVals)
-	}
-	return queryResponse{Columns: cols, Rows: rows}
 }
 
 // writeJSON encodes v as JSON to w with the appropriate Content-Type.
@@ -767,6 +784,24 @@ func writeJSON(w http.ResponseWriter, v any) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("warning: encode response: %v", err)
 	}
+}
+
+func writeError(w http.ResponseWriter, msg string, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	return io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes))
+}
+
+func bodyErrorStatus(err error) int {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return http.StatusRequestEntityTooLarge
+	}
+	return http.StatusBadRequest
 }
 
 // queryRequest is the JSON body form of POST /query. The filters are applied
@@ -781,13 +816,13 @@ type queryRequest struct {
 // external filters.
 func queryHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
+		body, err := readBody(w, r)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, err.Error(), bodyErrorStatus(err))
 			return
 		}
 		if len(body) == 0 {
-			http.Error(w, "empty query body", http.StatusBadRequest)
+			writeError(w, "empty query body", http.StatusBadRequest)
 			return
 		}
 
@@ -796,11 +831,11 @@ func queryHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.Ha
 		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 			var req queryRequest
 			if err := json.Unmarshal(body, &req); err != nil {
-				http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+				writeError(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
 				return
 			}
 			if strings.TrimSpace(req.Query) == "" {
-				http.Error(w, `"query" is required in the JSON body`, http.StatusBadRequest)
+				writeError(w, `"query" is required in the JSON body`, http.StatusBadRequest)
 				return
 			}
 			query = req.Query
@@ -808,7 +843,7 @@ func queryHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.Ha
 		}
 
 		mu.RLock()
-		cols, rowMaps, err := executor.ExecuteFiltered(db, schema, query, filters)
+		cols, rows, err := executor.ExecuteFilteredContext(r.Context(), db, schema, query, filters)
 		mu.RUnlock()
 		if err != nil {
 			// Structured pipeline errors carry a stage and source position;
@@ -825,11 +860,11 @@ func queryHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.Ha
 				})
 				return
 			}
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		writeJSON(w, pivotResults(cols, rowMaps))
+		writeJSON(w, queryResponse{Columns: cols, Rows: rows})
 	}
 }
 
@@ -842,7 +877,7 @@ func valuesHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.H
 		colName := r.URL.Query().Get("column")
 		q := r.URL.Query().Get("q")
 		if tableKey == "" || colName == "" {
-			http.Error(w, "table and column are required", http.StatusBadRequest)
+			writeError(w, "table and column are required", http.StatusBadRequest)
 			return
 		}
 
@@ -854,11 +889,11 @@ func valuesHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.H
 		}
 		mu.RUnlock()
 		if !ok {
-			http.Error(w, fmt.Sprintf("unknown table %q", tableKey), http.StatusNotFound)
+			writeError(w, fmt.Sprintf("unknown table %q", tableKey), http.StatusNotFound)
 			return
 		}
 		if col == nil {
-			http.Error(w, fmt.Sprintf("unknown column %q in table %q", colName, tableKey), http.StatusNotFound)
+			writeError(w, fmt.Sprintf("unknown column %q in table %q", colName, tableKey), http.StatusNotFound)
 			return
 		}
 
@@ -878,7 +913,7 @@ func valuesHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.H
 
 		rows, err := db.Query(query, args...)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		defer rows.Close()
@@ -887,13 +922,13 @@ func valuesHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.H
 		for rows.Next() {
 			var s string
 			if err := rows.Scan(&s); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeError(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 			values = append(values, s)
 		}
 		if err := rows.Err(); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -948,7 +983,7 @@ func exportHandler(schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
 		data, err := semantic.ExportDuxTOML(schema)
 		mu.RUnlock()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -961,38 +996,35 @@ func exportHandler(schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
 // it to the metadata DB, and reloads the in-memory schema.
 func importHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
+		body, err := readBody(w, r)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, err.Error(), bodyErrorStatus(err))
 			return
 		}
 		if len(body) == 0 {
-			http.Error(w, "empty body", http.StatusBadRequest)
+			writeError(w, "empty body", http.StatusBadRequest)
 			return
 		}
 
 		// Parse the uploaded TOML into a fresh schema overlay.
 		importSchema := semantic.NewSchema()
 		if err := semantic.LoadDuxTOMLBytes(body, importSchema); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		// Persist to the metadata DB.
 		if err := metaDB.ReplaceAllFromSchema(importSchema); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		// Reload the live schema from DB (under write lock).
 		mu.Lock()
-		schema.Relationships = nil
-		schema.Measures = make(map[string]map[string]*parser.MeasureDefinition)
-		schema.DateTables = make(map[string]string)
-		schema.ClearHidden()
+		clearSchemaMetadata(schema)
 		if err := metaDB.LoadIntoSchema(schema); err != nil {
 			mu.Unlock()
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		mu.Unlock()
@@ -1046,16 +1078,16 @@ func addMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu 
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req measureRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if req.Table == "" || req.Name == "" || req.Expression == "" {
-			http.Error(w, "table, name, and expression are required", http.StatusBadRequest)
+			writeError(w, "table, name, and expression are required", http.StatusBadRequest)
 			return
 		}
 		if req.Format != nil {
 			if err := req.Format.Validate(); err != nil {
-				http.Error(w, fmt.Sprintf("invalid format: %v", err), http.StatusBadRequest)
+				writeError(w, fmt.Sprintf("invalid format: %v", err), http.StatusBadRequest)
 				return
 			}
 		}
@@ -1069,13 +1101,13 @@ func addMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu 
 		}
 		mu.Unlock()
 		if err != nil {
-			http.Error(w, fmt.Sprintf("invalid expression: %v", err), http.StatusBadRequest)
+			writeError(w, fmt.Sprintf("invalid expression: %v", err), http.StatusBadRequest)
 			return
 		}
 
 		// Persist to the metadata DB.
 		if err := metaDB.SaveMeasure(req.Table, req.Name, req.Expression, req.Format); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -1089,12 +1121,12 @@ func deleteMeasureHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, 
 		table := r.PathValue("table")
 		name := r.PathValue("name")
 		if table == "" || name == "" {
-			http.Error(w, "table and name are required", http.StatusBadRequest)
+			writeError(w, "table and name are required", http.StatusBadRequest)
 			return
 		}
 
 		if err := metaDB.DeleteMeasure(table, name); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -1125,26 +1157,10 @@ func isDateColumnType(dataType string) bool {
 	return dt == "DATE" || strings.HasPrefix(dt, "TIMESTAMP")
 }
 
-// clearDateTables removes every date-table designation from the in-memory
-// schema and returns the cleared table keys. The caller must hold the schema
-// write lock.
-func clearDateTables(schema *semantic.Schema) []string {
-	previous := make([]string, 0, len(schema.DateTables))
-	for tbl := range schema.DateTables {
-		previous = append(previous, tbl)
-	}
+// clearDateTables removes every in-memory date-table designation.
+// The caller must hold the schema write lock.
+func clearDateTables(schema *semantic.Schema) {
 	schema.DateTables = make(map[string]string)
-	return previous
-}
-
-// dropDateTables deletes the given date-table designations from the metadata DB.
-func dropDateTables(metaDB *semantic.MetadataDB, tables []string) error {
-	for _, tbl := range tables {
-		if err := metaDB.DeleteDateTable(tbl); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // setDateTableHandler serves POST /datetable — designates the model's date
@@ -1154,11 +1170,11 @@ func setDateTableHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, m
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req dateTableRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if req.Table == "" || req.Column == "" {
-			http.Error(w, "table and column are required", http.StatusBadRequest)
+			writeError(w, "table and column are required", http.StatusBadRequest)
 			return
 		}
 
@@ -1166,32 +1182,28 @@ func setDateTableHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, m
 		table, ok := schema.Tables[req.Table]
 		if !ok {
 			mu.Unlock()
-			http.Error(w, fmt.Sprintf("unknown table %q", req.Table), http.StatusNotFound)
+			writeError(w, fmt.Sprintf("unknown table %q", req.Table), http.StatusNotFound)
 			return
 		}
 		col, ok := table.Columns[req.Column]
 		if !ok {
 			mu.Unlock()
-			http.Error(w, fmt.Sprintf("unknown column %q in table %q", req.Column, req.Table), http.StatusNotFound)
+			writeError(w, fmt.Sprintf("unknown column %q in table %q", req.Column, req.Table), http.StatusNotFound)
 			return
 		}
 		if !isDateColumnType(col.DataType) {
 			mu.Unlock()
-			http.Error(w, fmt.Sprintf("column %q has type %s — a DATE or TIMESTAMP column is required", req.Column, col.DataType), http.StatusBadRequest)
+			writeError(w, fmt.Sprintf("column %q has type %s — a DATE or TIMESTAMP column is required", req.Column, col.DataType), http.StatusBadRequest)
 			return
 		}
-		previous := clearDateTables(schema)
+		if err := metaDB.ReplaceDateTable(strings.ToLower(req.Table), col.Name); err != nil {
+			mu.Unlock()
+			writeError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		clearDateTables(schema)
 		schema.SetDateTable(req.Table, col.Name)
 		mu.Unlock()
-
-		if err := dropDateTables(metaDB, previous); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := metaDB.SaveDateTable(strings.ToLower(req.Table), col.Name); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
 
 		w.WriteHeader(http.StatusCreated)
 	}
@@ -1201,13 +1213,13 @@ func setDateTableHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, m
 func deleteDateTableHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		previous := clearDateTables(schema)
-		mu.Unlock()
-
-		if err := dropDateTables(metaDB, previous); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		if err := metaDB.ClearDateTables(); err != nil {
+			mu.Unlock()
+			writeError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		clearDateTables(schema)
+		mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -1244,11 +1256,11 @@ func hiddenHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *syn
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req hiddenRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if req.Table == "" {
-			http.Error(w, "table is required", http.StatusBadRequest)
+			writeError(w, "table is required", http.StatusBadRequest)
 			return
 		}
 
@@ -1256,7 +1268,18 @@ func hiddenHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *syn
 		colName, status, err := resolveHiddenTarget(schema, req)
 		if err != nil {
 			mu.Unlock()
-			http.Error(w, err.Error(), status)
+			writeError(w, err.Error(), status)
+			return
+		}
+		table, column := strings.ToLower(req.Table), strings.ToLower(colName)
+		if hide {
+			err = metaDB.SaveHidden(table, column)
+		} else {
+			err = metaDB.DeleteHidden(table, column)
+		}
+		if err != nil {
+			mu.Unlock()
+			writeError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		if colName == "" {
@@ -1265,17 +1288,6 @@ func hiddenHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *syn
 			schema.SetColumnHidden(req.Table, colName, hide)
 		}
 		mu.Unlock()
-
-		table, column := strings.ToLower(req.Table), strings.ToLower(colName)
-		if hide {
-			err = metaDB.SaveHidden(table, column)
-		} else {
-			err = metaDB.DeleteHidden(table, column)
-		}
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
 		if hide {
 			w.WriteHeader(http.StatusCreated)
 		} else {
@@ -1332,16 +1344,11 @@ func addRelationshipHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req relationshipRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if req.FromTable == "" || req.FromColumn == "" || req.ToTable == "" || req.ToColumn == "" {
-			http.Error(w, "from_table, from_column, to_table, and to_column are required", http.StatusBadRequest)
-			return
-		}
-
-		if err := metaDB.SaveRelationship(req.FromTable, req.FromColumn, req.ToTable, req.ToColumn, req.Bidirectional); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeError(w, "from_table, from_column, to_table, and to_column are required", http.StatusBadRequest)
 			return
 		}
 
@@ -1370,15 +1377,23 @@ func addRelationshipHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema
 			})
 		}
 		if err := semantic.ValidateBidiPaths(schema); err != nil {
-			// Ambiguous schema — roll back the change.
 			if existing != nil {
 				existing.Bidirectional = prevBidi
 			} else {
 				removeRelationship(schema, req)
 			}
 			mu.Unlock()
-			_ = metaDB.DeleteRelationship(req.FromTable, req.FromColumn, req.ToTable, req.ToColumn)
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := metaDB.SaveRelationship(req.FromTable, req.FromColumn, req.ToTable, req.ToColumn, req.Bidirectional); err != nil {
+			if existing != nil {
+				existing.Bidirectional = prevBidi
+			} else {
+				removeRelationship(schema, req)
+			}
+			mu.Unlock()
+			writeError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		mu.Unlock()
@@ -1393,16 +1408,16 @@ func deleteRelationshipHandler(metaDB *semantic.MetadataDB, schema *semantic.Sch
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req relationshipRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if req.FromTable == "" || req.FromColumn == "" || req.ToTable == "" || req.ToColumn == "" {
-			http.Error(w, "from_table, from_column, to_table, and to_column are required", http.StatusBadRequest)
+			writeError(w, "from_table, from_column, to_table, and to_column are required", http.StatusBadRequest)
 			return
 		}
 
 		if err := metaDB.DeleteRelationship(req.FromTable, req.FromColumn, req.ToTable, req.ToColumn); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -1421,33 +1436,27 @@ func refreshHandler(metaDB *semantic.MetadataDB, db *sql.DB, schema *semantic.Sc
 		// Re-introspect the database to pick up schema changes.
 		fresh, err := semantic.IntrospectDuckDB(db)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("introspect: %v", err), http.StatusInternalServerError)
+			writeError(w, fmt.Sprintf("introspect: %v", err), http.StatusInternalServerError)
 			return
 		}
 
 		// Reload persisted metadata (relationships + measures) from the metadata DB.
 		if err := metaDB.LoadIntoSchema(fresh); err != nil {
-			http.Error(w, fmt.Sprintf("load metadata: %v", err), http.StatusInternalServerError)
+			writeError(w, fmt.Sprintf("load metadata: %v", err), http.StatusInternalServerError)
 			return
 		}
 
 		// Re-apply TOML overlay if the file exists.
 		if _, statErr := os.Stat(tomlPath); statErr == nil {
 			if err := semantic.LoadDuxTOML(tomlPath, fresh); err != nil {
-				http.Error(w, fmt.Sprintf("load toml: %v", err), http.StatusInternalServerError)
+				writeError(w, fmt.Sprintf("load toml: %v", err), http.StatusInternalServerError)
 				return
 			}
 		}
 
 		// Swap the live schema under write lock.
 		mu.Lock()
-		schema.Tables = fresh.Tables
-		schema.Relationships = fresh.Relationships
-		schema.Measures = fresh.Measures
-		schema.DateTables = fresh.DateTables
-		schema.HiddenTables = fresh.HiddenTables
-		schema.HiddenColumns = fresh.HiddenColumns
-		schema.ApplyHiddenFlags()
+		replaceSchema(schema, fresh)
 		mu.Unlock()
 
 		log.Printf("schema refreshed — %d tables, %d relationships", len(fresh.Tables), len(fresh.Relationships))

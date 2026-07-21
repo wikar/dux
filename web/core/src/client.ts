@@ -37,6 +37,17 @@ export interface ExternalFilter {
   tuples?: (string | number)[][];
 }
 
+async function errorText(res: Response): Promise<string> {
+  const text = await res.text();
+  try {
+    const body = JSON.parse(text);
+    if (body && typeof body.error === "string") return body.error;
+  } catch {
+    // Non-JSON responses still occur before the request reaches duxd.
+  }
+  return text || `request failed: ${res.status}`;
+}
+
 async function parseQueryResponse(res: Response): Promise<QueryResponse> {
   const text = await res.text();
   if (!res.ok) {
@@ -65,13 +76,13 @@ export class DuxClient {
   /** Server version and capabilities (feature-gates UI sections, e.g. dashboards). */
   async fetchVersion(): Promise<VersionInfo> {
     const res = await fetch("/version");
-    if (!res.ok) throw new Error(`version fetch failed: ${res.status}`);
+    if (!res.ok) throw new Error(await errorText(res));
     return res.json() as Promise<VersionInfo>;
   }
 
   async fetchSchema(): Promise<Schema> {
     const res = await fetch("/schema");
-    if (!res.ok) throw new Error(`schema fetch failed: ${res.status}`);
+    if (!res.ok) throw new Error(await errorText(res));
     return res.json() as Promise<Schema>;
   }
 
@@ -80,7 +91,7 @@ export class DuxClient {
     const params = new URLSearchParams({ table, column });
     if (q) params.set("q", q);
     const res = await fetch(`/values?${params}`);
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errorText(res));
     return res.json() as Promise<string[]>;
   }
 
@@ -117,7 +128,7 @@ export class DuxClient {
       headers: { "Content-Type": "text/plain" },
       body: text,
     });
-    if (!res.ok) throw new Error(`import failed: ${res.status}`);
+    if (!res.ok) throw new Error(await errorText(res));
   }
 
   exportTomlUrl(): string {
@@ -126,13 +137,13 @@ export class DuxClient {
 
   async refresh(): Promise<void> {
     const res = await fetch("/refresh", { method: "POST" });
-    if (!res.ok) throw new Error(`refresh failed: ${res.status}`);
+    if (!res.ok) throw new Error(await errorText(res));
   }
 
   /** List all measures with their display formats. */
   async fetchMeasures(): Promise<MeasureListItem[]> {
     const res = await fetch("/measures");
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errorText(res));
     return res.json() as Promise<MeasureListItem[]>;
   }
 
@@ -149,7 +160,7 @@ export class DuxClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(format ? { table, name, expression, format } : { table, name, expression }),
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errorText(res));
   }
 
   async deleteMeasure(table: string, name: string): Promise<void> {
@@ -157,7 +168,7 @@ export class DuxClient {
       `/measures/${encodeURIComponent(table)}/${encodeURIComponent(name)}`,
       { method: "DELETE" }
     );
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errorText(res));
   }
 
   /** Designate table/column as the model's date table (replaces any previous). */
@@ -167,13 +178,13 @@ export class DuxClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ table, column }),
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errorText(res));
   }
 
   /** Clear the date-table designation. */
   async clearDateTable(): Promise<void> {
     const res = await fetch("/datetable", { method: "DELETE" });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errorText(res));
   }
 
   /** Mark a table/view (no column) or a single column as hidden. */
@@ -183,7 +194,7 @@ export class DuxClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(column ? { table, column } : { table }),
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errorText(res));
   }
 
   /** Clear a hidden designation for a table/view (no column) or column. */
@@ -193,7 +204,7 @@ export class DuxClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(column ? { table, column } : { table }),
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errorText(res));
   }
 
   async addRelationship(rel: RelInput): Promise<void> {
@@ -202,7 +213,7 @@ export class DuxClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(rel),
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errorText(res));
   }
 
   async deleteRelationship(rel: RelInput): Promise<void> {
@@ -211,7 +222,7 @@ export class DuxClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(rel),
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errorText(res));
   }
 }
 
