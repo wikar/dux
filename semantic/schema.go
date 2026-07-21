@@ -250,15 +250,7 @@ func IntrospectDuckDB(db *sql.DB) (*Schema, error) {
 		if schemaName != "main" && schemaName != "" {
 			schemaPart = schemaName
 		}
-		var parts []string
-		if dbAlias != "" {
-			parts = append(parts, dbAlias)
-		}
-		if schemaPart != "" {
-			parts = append(parts, schemaPart)
-		}
-		parts = append(parts, tableName)
-		key := strings.Join(parts, ".")
+		key := qualifiedTableKey(dbAlias, schemaPart, tableName)
 
 		t, ok := schema.Tables[key]
 		if !ok {
@@ -289,19 +281,26 @@ func IntrospectDuckDB(db *sql.DB) (*Schema, error) {
 func introspectRelationships(db *sql.DB, schema *Schema) error {
 	const q = `
 		SELECT
-			kcu.table_name   AS from_table,
-			kcu.column_name  AS from_column,
-			ccu.table_name   AS to_table,
-			ccu.column_name  AS to_column
+			kcu.table_catalog AS from_catalog,
+			kcu.table_schema  AS from_schema,
+			kcu.table_name    AS from_table,
+			kcu.column_name   AS from_column,
+			ukcu.table_catalog AS to_catalog,
+			ukcu.table_schema  AS to_schema,
+			ukcu.table_name    AS to_table,
+			ukcu.column_name   AS to_column
 		FROM information_schema.referential_constraints rc
 		JOIN information_schema.key_column_usage kcu
-			ON  kcu.constraint_name   = rc.constraint_name
+			ON  kcu.constraint_catalog = rc.constraint_catalog
 			AND kcu.constraint_schema = rc.constraint_schema
-		JOIN information_schema.constraint_column_usage ccu
-			ON  ccu.constraint_name   = rc.unique_constraint_name
-			AND ccu.constraint_schema = rc.unique_constraint_schema
-		WHERE kcu.table_schema = 'main'
-		ORDER BY kcu.table_name, kcu.ordinal_position
+			AND kcu.constraint_name = rc.constraint_name
+		JOIN information_schema.key_column_usage ukcu
+			ON  ukcu.constraint_catalog = rc.unique_constraint_catalog
+			AND ukcu.constraint_schema = rc.unique_constraint_schema
+			AND ukcu.constraint_name = rc.unique_constraint_name
+			AND ukcu.ordinal_position = kcu.position_in_unique_constraint
+		WHERE kcu.table_schema NOT IN ('information_schema', 'pg_catalog')
+		ORDER BY kcu.table_catalog, kcu.table_schema, kcu.table_name, kcu.ordinal_position
 	`
 	rows, err := db.Query(q)
 	if err != nil {
@@ -312,16 +311,29 @@ func introspectRelationships(db *sql.DB, schema *Schema) error {
 	defer rows.Close()
 
 	for rows.Next() {
-		var fromTable, fromColumn, toTable, toColumn string
-		if err := rows.Scan(&fromTable, &fromColumn, &toTable, &toColumn); err != nil {
+		var fromCatalog, fromSchema, fromTable, fromColumn string
+		var toCatalog, toSchema, toTable, toColumn string
+		if err := rows.Scan(&fromCatalog, &fromSchema, &fromTable, &fromColumn,
+			&toCatalog, &toSchema, &toTable, &toColumn); err != nil {
 			return fmt.Errorf("scan relationship row: %w", err)
 		}
 		schema.Relationships = append(schema.Relationships, &Relationship{
-			FromTable:  fromTable,
+			FromTable:  qualifiedTableKey(fromCatalog, fromSchema, fromTable),
 			FromColumn: fromColumn,
-			ToTable:    toTable,
+			ToTable:    qualifiedTableKey(toCatalog, toSchema, toTable),
 			ToColumn:   toColumn,
 		})
 	}
 	return rows.Err()
+}
+
+func qualifiedTableKey(catalog, schemaName, table string) string {
+	parts := make([]string, 0, 3)
+	if catalog != "" && catalog != "memory" {
+		parts = append(parts, catalog)
+	}
+	if schemaName != "" && schemaName != "main" {
+		parts = append(parts, schemaName)
+	}
+	return strings.Join(append(parts, table), ".")
 }

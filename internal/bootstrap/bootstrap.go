@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/danielwikar/dux/semantic"
@@ -120,16 +121,111 @@ func Bootstrap(dbDir, metaPath, tomlPath string) (*semantic.MetadataDB, *sql.DB,
 // metadata DB itself) to db as a read-only named attachment.
 // The attachment alias is the filename stem (e.g. "atp.duckdb" → alias "atp").
 func AttachDataDBs(db *sql.DB, dir, metaPath string) error {
-	absMetaPath, _ := filepath.Abs(metaPath)
+	files, err := dataDBFiles(dir, metaPath)
+	if err != nil {
+		return err
+	}
+	for _, file := range files {
+		if stem, err := AttachDB(db, file.path, file.name); err != nil {
+			log.Printf("warning: attach %q as %q: %v", file.path, stem, err)
+		} else {
+			log.Printf("attached %q as %q (read-only)", file.name, stem)
+		}
+	}
+	return nil
+}
 
+// ReattachDataDBs atomically replaces every data attachment with the current
+// top-level *.duckdb / *.db files in dir. This picks up files replaced under an
+// existing name while preserving the old attachments if any new file fails to
+// attach.
+func ReattachDataDBs(db *sql.DB, dir, metaPath string) error {
+	files, err := dataDBFiles(dir, metaPath)
+	if err != nil {
+		return err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin attachment refresh: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.Query(`
+		SELECT database_name
+		FROM duckdb_databases()
+		WHERE path IS NOT NULL
+		  AND NOT internal
+		  AND database_name <> current_database()
+		ORDER BY database_name
+	`)
+	if err != nil {
+		return fmt.Errorf("list attached databases: %w", err)
+	}
+	var aliases []string
+	for rows.Next() {
+		var alias string
+		if err := rows.Scan(&alias); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan attached database: %w", err)
+		}
+		aliases = append(aliases, alias)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close attached database list: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list attached databases: %w", err)
+	}
+
+	for _, alias := range aliases {
+		if _, err := tx.Exec("DETACH " + quoteIdent(alias)); err != nil {
+			return fmt.Errorf("detach database %q: %w", alias, err)
+		}
+	}
+	for _, file := range files {
+		if _, err := attachDB(tx, file.path, file.name); err != nil {
+			return fmt.Errorf("reattach database %q: %w", file.name, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit attachment refresh: %w", err)
+	}
+	return nil
+}
+
+// AttachDB attaches a single database file to db as a read-only named
+// attachment aliased by the filename stem, which is returned.
+func AttachDB(db *sql.DB, absPath, name string) (string, error) {
+	return attachDB(db, absPath, name)
+}
+
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func attachDB(db execer, absPath, name string) (string, error) {
+	stem := strings.TrimSuffix(name, filepath.Ext(name))
+	escapedPath := strings.ReplaceAll(absPath, "'", "''")
+	_, err := db.Exec(fmt.Sprintf("ATTACH '%s' AS %s (READ_ONLY)", escapedPath, quoteIdent(stem)))
+	return stem, err
+}
+
+type dataDBFile struct {
+	name string
+	path string
+}
+
+func dataDBFiles(dir, metaPath string) ([]dataDBFile, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil // db-dir not created yet — no-op
+			return nil, nil
 		}
-		return fmt.Errorf("read db-dir %q: %w", dir, err)
+		return nil, fmt.Errorf("read db-dir %q: %w", dir, err)
 	}
 
+	var files []dataDBFile
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -139,29 +235,33 @@ func AttachDataDBs(db *sql.DB, dir, metaPath string) error {
 		if ext != ".duckdb" && ext != ".db" {
 			continue
 		}
-
-		absPath, _ := filepath.Abs(filepath.Join(dir, name))
-		if absPath == absMetaPath {
-			continue // skip the metadata DB itself
+		absPath, err := filepath.Abs(filepath.Join(dir, name))
+		if err != nil {
+			return nil, fmt.Errorf("resolve data database %q: %w", name, err)
 		}
-
-		if stem, err := AttachDB(db, absPath, name); err != nil {
-			log.Printf("warning: attach %q as %q: %v", absPath, stem, err)
-		} else {
-			log.Printf("attached %q as %q (read-only)", name, stem)
+		if !samePath(absPath, metaPath) {
+			files = append(files, dataDBFile{name: name, path: absPath})
 		}
 	}
-	return nil
+	return files, nil
 }
 
-// AttachDB attaches a single database file to db as a read-only named
-// attachment aliased by the filename stem, which is returned.
-func AttachDB(db *sql.DB, absPath, name string) (string, error) {
-	stem := strings.TrimSuffix(name, filepath.Ext(name))
-	escapedPath := strings.ReplaceAll(absPath, "'", "''")
-	quotedStem := `"` + strings.ReplaceAll(stem, `"`, `""`) + `"`
-	_, err := db.Exec(fmt.Sprintf("ATTACH '%s' AS %s (READ_ONLY)", escapedPath, quotedStem))
-	return stem, err
+func samePath(a, b string) bool {
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	absA = filepath.Clean(absA)
+	absB = filepath.Clean(absB)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(absA, absB)
+	}
+	return absA == absB
+}
+
+func quoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 // ImportTOML parses a dux.toml file, persists its contents to the metadata

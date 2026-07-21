@@ -62,7 +62,7 @@
       "additionalProperties": false,
       "properties": {
         "id":   { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$", "description": "Unique within the document (server-enforced)." },
-        "type": { "enum": ["bar", "line", "combo", "area", "donut", "table", "pivot", "kpi", "slicer", "text", "image"] },
+        "type": { "enum": ["bar", "line", "combo", "area", "donut", "table", "pivot", "kpi", "slicer", "text", "image", "map"] },
         "layout": {
           "type": "object",
           "required": ["x", "y", "w", "h"],

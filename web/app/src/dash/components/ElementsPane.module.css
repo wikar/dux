@@ -91,6 +91,11 @@
   border-color: var(--blue);
 }
 
+.input::placeholder {
+  color: var(--surface2);
+  opacity: 1;
+}
+
 .textarea {
   width: 100%;
   background: var(--base);

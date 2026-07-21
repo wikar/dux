@@ -41,6 +41,40 @@ func validDoc() string {
 	}`
 }
 
+func TestMapElementRoundTrip(t *testing.T) {
+	ts, _ := newTestServer(t)
+	doc := `{
+		"version": 1,
+		"canvas": { "width": 1280, "height": 720 },
+		"elements": [{
+			"id": "map-1", "type": "map",
+			"layout": { "x": 0, "y": 0, "w": 420, "h": 320 },
+			"query": { "mode": "builder", "filters": [] },
+			"viz": { "layers": [{ "id": "layer-1", "kind": "circle",
+				"lng": { "table": "Store", "name": "Longitude", "kind": "column" },
+				"lat": { "table": "Store", "name": "Latitude", "kind": "column" }
+			}], "center": [18.0686, 59.3293], "zoom": 8 }
+		}]
+	}`
+	url := ts.URL + "/api/dash/dashboards/map"
+	if res := do(t, "PUT", url, doc, nil); res.StatusCode != http.StatusCreated {
+		t.Fatalf("save map: expected 201, got %d", res.StatusCode)
+	}
+	res := do(t, "GET", url+"?raw=1", "", nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("load map: expected 200, got %d", res.StatusCode)
+	}
+	var got map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	elements := got["elements"].([]any)
+	el := elements[0].(map[string]any)
+	if el["type"] != "map" || len(el["viz"].(map[string]any)["layers"].([]any)) != 1 {
+		t.Fatalf("map config did not round-trip: %+v", el)
+	}
+}
+
 func do(t *testing.T, method, url, body string, headers map[string]string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequest(method, url, strings.NewReader(body))

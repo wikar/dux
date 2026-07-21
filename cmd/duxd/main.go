@@ -595,7 +595,7 @@ func main() {
 	mux.HandleFunc("DELETE /datetable", deleteDateTableHandler(metaDB, schema, &schemaMu))
 	mux.HandleFunc("POST /hidden", hiddenHandler(metaDB, schema, &schemaMu, true))
 	mux.HandleFunc("DELETE /hidden", hiddenHandler(metaDB, schema, &schemaMu, false))
-	mux.HandleFunc("POST /refresh", refreshHandler(metaDB, db, schema, &schemaMu, tomlPath))
+	mux.HandleFunc("POST /refresh", refreshHandler(metaDB, db, schema, &schemaMu, dbDir, metaPath, tomlPath))
 
 	dashEnabled := os.Getenv("DUX_DASH") != "0"
 	if dashEnabled {
@@ -710,8 +710,10 @@ func watchDBDir(dir, metaPath string, metaDB *semantic.MetadataDB, schema *seman
 			}
 
 			db := metaDB.DB()
+			mu.Lock()
 			stem, err := bootstrap.AttachDB(db, absPath, name)
 			if err != nil {
+				mu.Unlock()
 				log.Printf("warning: auto-attach %q as %q: %v", absPath, stem, err)
 				continue
 			}
@@ -720,10 +722,10 @@ func watchDBDir(dir, metaPath string, metaDB *semantic.MetadataDB, schema *seman
 			// Re-introspect and merge new tables into the live schema.
 			fresh, err := semantic.IntrospectDuckDB(db)
 			if err != nil {
+				mu.Unlock()
 				log.Printf("warning: re-introspect after attach %q: %v", stem, err)
 				continue
 			}
-			mu.Lock()
 			for k, t := range fresh.Tables {
 				if _, exists := schema.Tables[k]; !exists {
 					schema.Tables[k] = t
@@ -882,12 +884,12 @@ func valuesHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.H
 		}
 
 		mu.RLock()
+		defer mu.RUnlock()
 		table, ok := schema.Tables[tableKey]
 		var col *semantic.Column
 		if ok {
 			col = table.Columns[colName]
 		}
-		mu.RUnlock()
 		if !ok {
 			writeError(w, fmt.Sprintf("unknown table %q", tableKey), http.StatusNotFound)
 			return
@@ -1429,10 +1431,18 @@ func deleteRelationshipHandler(metaDB *semantic.MetadataDB, schema *semantic.Sch
 	}
 }
 
-// refreshHandler serves POST /refresh — re-introspects all attached
-// databases and reloads persisted metadata and TOML configuration.
-func refreshHandler(metaDB *semantic.MetadataDB, db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex, tomlPath string) http.HandlerFunc {
+// refreshHandler serves POST /refresh — reconciles data attachments with the
+// database directory, then re-introspects them and reloads metadata and TOML.
+func refreshHandler(metaDB *semantic.MetadataDB, db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex, dbDir, metaPath, tomlPath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if err := bootstrap.ReattachDataDBs(db, dbDir, metaPath); err != nil {
+			writeError(w, fmt.Sprintf("refresh attachments: %v", err), http.StatusInternalServerError)
+			return
+		}
+
 		// Re-introspect the database to pick up schema changes.
 		fresh, err := semantic.IntrospectDuckDB(db)
 		if err != nil {
@@ -1454,10 +1464,8 @@ func refreshHandler(metaDB *semantic.MetadataDB, db *sql.DB, schema *semantic.Sc
 			}
 		}
 
-		// Swap the live schema under write lock.
-		mu.Lock()
+		// Swap the live schema while queries remain blocked.
 		replaceSchema(schema, fresh)
-		mu.Unlock()
 
 		log.Printf("schema refreshed — %d tables, %d relationships", len(fresh.Tables), len(fresh.Relationships))
 		_, _ = io.WriteString(w, "schema refreshed")

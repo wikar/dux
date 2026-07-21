@@ -9,6 +9,14 @@
   color: var(--th-text, var(--text));
 }
 
+.map {
+  background: transparent;
+}
+
+.map .titleBar {
+  background: linear-gradient(var(--th-title-bg, transparent), var(--th-title-bg, transparent)), var(--th-el-bg, var(--mantle));
+}
+
 .editing {
   cursor: move;
   user-select: none;

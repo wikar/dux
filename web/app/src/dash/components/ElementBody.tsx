@@ -34,6 +34,7 @@ import {
 } from "../charts/ChartKit";
 import PivotBody from "./PivotBody";
 import SlicerBody from "./SlicerBody";
+import MapBody from "./MapBody";
 import { downloadIcon, funnelIcon, typeIcon } from "./typeIcons";
 
 /** CSV download in the title bar (rendered by ElementView for query types).
@@ -127,8 +128,20 @@ export default function ElementBody({ el }: { el: DashElement }) {
   }
   if (el.type === "image") return <ImageBody el={el} />;
   if (el.type === "slicer") return <SlicerBody el={el} />;
+  if (el.type === "map") return <MapElementBody el={el} />;
   if (QUERY_TYPES.has(el.type)) return <DataBody el={el} />;
   return <Placeholder el={el} note="unknown type" />;
+}
+
+function MapElementBody({ el }: { el: DashElement }) {
+  const showFunnel = useDocStore((s) => s.doc?.controls?.funnel) !== false;
+  const titleless = el.title?.show === false || !el.title?.text;
+  return (
+    <div className={styles.dataWrap}>
+      <MapBody el={el} />
+      {showFunnel && titleless && <FunnelButton el={el} floating />}
+    </div>
+  );
 }
 
 function Placeholder({ el, note }: { el: DashElement; note: string }) {

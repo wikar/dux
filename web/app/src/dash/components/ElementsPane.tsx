@@ -7,7 +7,7 @@ import Settings from "./Settings";
 import { typeIcon } from "./typeIcons";
 
 const TYPES: ElementType[] = [
-  "bar", "line", "combo", "area", "donut", "table", "pivot", "kpi", "slicer", "text", "image",
+  "bar", "line", "combo", "area", "donut", "table", "pivot", "kpi", "slicer", "text", "image", "map",
 ];
 
 export default function ElementsPane() {

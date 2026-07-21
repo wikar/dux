@@ -15,18 +15,25 @@ import {
 } from "../data";
 import {
   addFieldToWell,
+  addMapLayer,
   addFilterToElement,
   duplicateElement,
   removeElement,
+  removeMapLayer,
   replaceFieldInWell,
+  reorderFieldsInElement,
+  reorderFiltersInElement,
   removeFieldFromElement,
   removeFilter,
   setFieldAggregate,
+  setMapLayerField,
+  setMapLayerKind,
   swapElementType,
   updateElement,
   updateFilter,
   clamp,
   TYPE_LABEL,
+  type MapFieldSlot,
   type WellId,
 } from "../docOps";
 import { useDocStore } from "../store";
@@ -35,6 +42,8 @@ import type {
   DashElement,
   ElementType,
   ImageFit,
+  MapLayer,
+  MapLayerKind,
   SlicerConfig,
   SlicerKind,
   ThemeTokens,
@@ -142,6 +151,7 @@ function ElementSettings({ el }: { el: DashElement }) {
 
       {QUERY_TYPES.has(el.type) && <DataSection el={el} />}
       {QUERY_TYPES.has(el.type) && <VizSection el={el} />}
+      {el.type === "map" && <MapSection el={el} />}
       {el.type === "slicer" && <SlicerSection el={el} />}
       {el.type === "text" && <TextSection el={el} />}
       {el.type === "image" && <ImageSection el={el} />}
@@ -409,6 +419,78 @@ function DropTarget({
   );
 }
 
+const MAP_SLOTS: { slot: MapFieldSlot; label: string; hint: string }[] = [
+  { slot: "lng", label: "Longitude", hint: "Drop a numeric column" },
+  { slot: "lat", label: "Latitude", hint: "Drop a numeric column" },
+  { slot: "size", label: "Size", hint: "Optional measure or numeric column" },
+  { slot: "category", label: "Category", hint: "Optional column used for filtering" },
+];
+
+function MapSection({ el }: { el: DashElement }) {
+  const layers = el.viz?.layers ?? [];
+  const accepts = (slot: MapFieldSlot, p: DragPayload) => {
+    if (slot === "size") return p.kind === "measure" || isNumeric(p.dataType);
+    if (p.kind !== "column") return false;
+    return slot === "category" || isNumeric(p.dataType);
+  };
+
+  const fieldChip = (layer: MapLayer, slot: MapFieldSlot) => {
+    const field = layer[slot];
+    if (!field) return undefined;
+    return (
+      <div className={styles.fieldChip}>
+        <span className={styles.fieldChipName}>{field.table}[{field.name}]</span>
+        <button className={styles.fieldChipRemove} title="Remove" onClick={() => setMapLayerField(el.id, layer.id, slot, null)}>×</button>
+      </div>
+    );
+  };
+
+  return (
+    <div className={styles.section}>
+      <div className={styles.heading}>Map</div>
+      {layers.map((layer, index) => (
+        <div key={layer.id}>
+          <label className={styles.label}>Layer {index + 1}</label>
+          <div className={styles.row}>
+            <select
+              className={styles.input}
+              value={layer.kind}
+              onChange={(e) => setMapLayerKind(el.id, layer.id, e.target.value as MapLayerKind)}
+            >
+              <option value="circle">Circle</option>
+              <option value="pin">Pin</option>
+              <option value="heatmap">Heatmap</option>
+            </select>
+            <button className={styles.btnDanger} onClick={() => removeMapLayer(el.id, layer.id)}>Remove</button>
+          </div>
+          {MAP_SLOTS.map(({ slot, label, hint }) => (
+            <DropTarget
+              key={slot}
+              label={label}
+              hint={hint}
+              onDrop={(p) => accepts(slot, p) && setMapLayerField(el.id, layer.id, slot, p)}
+            >
+              {fieldChip(layer, slot)}
+            </DropTarget>
+          ))}
+        </div>
+      ))}
+      <button className={styles.btn} disabled={layers.length >= 2} onClick={() => addMapLayer(el.id)}>Add layer</button>
+
+      <button
+        className={styles.btn}
+        title="Save the map's current center and zoom as this visual's default view"
+        onClick={() => window.dispatchEvent(new CustomEvent("dux-map-save-view", { detail: el.id }))}
+      >
+        Use current view
+      </button>
+      {el.viz?.center && <div className={styles.hint}>{el.viz.center.map((v) => v.toFixed(4)).join(", ")} · zoom {(el.viz.zoom ?? 1.2).toFixed(1)}</div>}
+      <FiltersWell el={el} />
+      <IgnoreSlicers el={el} />
+    </div>
+  );
+}
+
 function SlicerSection({ el }: { el: DashElement }) {
   const s = el.slicer;
 
@@ -657,7 +739,7 @@ function Well({
             zone="fields"
             index={i}
             onRemove={() => removeFieldFromElement(el.id, f.name)}
-            onReorder={() => {}}
+            onReorder={(from) => reorderFieldsInElement(el.id, members, from, i)}
             onAggChange={(agg) => setFieldAggregate(el.id, f.name, agg)}
           />
         ))}
@@ -688,7 +770,7 @@ function FiltersWell({ el }: { el: DashElement }) {
             zone="filters"
             index={i}
             onRemove={() => removeFilter(el.id, i)}
-            onReorder={() => {}}
+            onReorder={(from) => reorderFiltersInElement(el.id, from, i)}
             onOpChange={(op) => updateFilter(el.id, i, { op })}
             onValueChange={(value) => updateFilter(el.id, i, { value })}
           />

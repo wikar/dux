@@ -1,6 +1,9 @@
 package semantic
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // star schema: two facts on one dimension, plus a product dim on fact_sales
 // and a bidirectional bridge edge for the bidi case.
@@ -44,5 +47,29 @@ func TestFilterReaches(t *testing.T) {
 		if got := FilterReaches(s, c.src, c.targets); got != c.want {
 			t.Errorf("FilterReaches(%s → %v) = %v, want %v", c.src, c.targets, got, c.want)
 		}
+	}
+}
+
+func TestInferJoinPathRejectsAmbiguousBareTable(t *testing.T) {
+	s := NewSchema()
+	for _, name := range []string{"a.sales", "a.region", "b.sales", "b.region"} {
+		s.Tables[name] = &Table{Name: name, Columns: map[string]*Column{}}
+	}
+	s.Relationships = append(s.Relationships,
+		&Relationship{FromTable: "a.sales", FromColumn: "region_id", ToTable: "a.region", ToColumn: "id"},
+		&Relationship{FromTable: "b.sales", FromColumn: "region_id", ToTable: "b.region", ToColumn: "id"},
+	)
+
+	_, err := InferJoinPath(s, []string{"sales", "a.region"})
+	if err == nil || !strings.Contains(err.Error(), `ambiguous table "sales"`) {
+		t.Fatalf("got %v, want an ambiguous table error", err)
+	}
+
+	path, err := InferJoinPath(s, []string{"a.sales", "a.region"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(path.Steps) != 1 || path.Steps[0].Table != "a.region" {
+		t.Fatalf("unexpected qualified path: %#v", path.Steps)
 	}
 }

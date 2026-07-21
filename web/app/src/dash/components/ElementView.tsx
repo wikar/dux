@@ -66,7 +66,7 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
   return (
     <div
       data-element-id={el.id}
-      className={`${styles.el} ${editing ? styles.editing : ""} ${selected ? styles.selected : ""}`}
+      className={`${styles.el} ${el.type === "map" ? styles.map : ""} ${editing ? styles.editing : ""} ${selected ? styles.selected : ""}`}
       style={{ left: layout.x, top: layout.y, width: layout.w, height: layout.h, zIndex: layout.z ?? 0 }}
       onPointerDown={(e) => begin(e, "move")}
       onPointerMove={move}
@@ -82,7 +82,7 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
       {showTitle && (
         <div className={styles.titleBar}>
           <span className={styles.titleText}>{el.title!.text}</span>
-          {QUERY_TYPES.has(el.type) && showFunnel && <FunnelButton el={el} />}
+          {(QUERY_TYPES.has(el.type) || el.type === "map") && showFunnel && <FunnelButton el={el} />}
           {QUERY_TYPES.has(el.type) && showCsv && <TitleCsvButton el={el} className={styles.titleCsv} />}
         </div>
       )}
@@ -105,4 +105,3 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
     </div>
   );
 }
-

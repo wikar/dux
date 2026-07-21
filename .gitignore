@@ -28,6 +28,7 @@ dashboards/**/*test.json
 db/*.duckdb
 db/*.db
 db/*.wal
+db/*/
 
 # Reference data
 reference/

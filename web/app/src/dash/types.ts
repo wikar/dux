@@ -2,7 +2,7 @@
 
 export type ElementType =
   | "bar" | "line" | "combo" | "area" | "donut" | "table" | "pivot" | "kpi"
-  | "slicer" | "text" | "image";
+  | "slicer" | "text" | "image" | "map";
 
 /** Element types whose body renders a DUX query result. */
 export const QUERY_TYPES: ReadonlySet<ElementType> = new Set([
@@ -30,9 +30,26 @@ export interface BuilderFieldRef {
   aggregate?: string;
 }
 
+export type MapLayerKind = "circle" | "pin" | "heatmap";
+
+export interface MapLayer {
+  id: string;
+  kind: MapLayerKind;
+  lng?: BuilderFieldRef;
+  lat?: BuilderFieldRef;
+  size?: BuilderFieldRef;
+  category?: BuilderFieldRef;
+}
+
+export interface MapViz {
+  layers?: MapLayer[];
+  center?: [number, number];
+  zoom?: number;
+}
+
 /** Chart display settings (element.viz — deliberately open in the schema).
  *  Metric wells reference output column names (measure name / column alias). */
-export interface VizSettings {
+export interface VizSettings extends MapViz {
   /** bar: horizontal renders category on the y axis. */
   orientation?: "vertical" | "horizontal";
   /** bar / area: stack series instead of clustering/overlapping. */

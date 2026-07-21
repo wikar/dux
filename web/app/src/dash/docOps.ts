@@ -4,7 +4,7 @@ import { isMetricField, isNumeric } from "@dux/core";
 import type { Aggregate, DragPayload, DropField } from "@dux/core";
 import { applySlicerSelection } from "./actions";
 import { useDocStore, useUiStore } from "./store";
-import type { BuilderFieldRef, Dashboard, DashElement, ElementType, Layout } from "./types";
+import type { BuilderFieldRef, Dashboard, DashElement, ElementType, Layout, MapLayer, MapLayerKind } from "./types";
 import { QUERY_TYPES } from "./types";
 
 const SNAP = 8;
@@ -31,6 +31,7 @@ const DEFAULT_SIZE: Record<ElementType, { w: number; h: number }> = {
   slicer: { w: 200, h: 240 },
   text: { w: 280, h: 160 },
   image: { w: 200, h: 120 },
+  map: { w: 420, h: 320 },
 };
 
 export const TYPE_LABEL: Record<ElementType, string> = {
@@ -45,6 +46,7 @@ export const TYPE_LABEL: Record<ElementType, string> = {
   slicer: "Slicer",
   text: "Text",
   image: "Image",
+  map: "Map",
 };
 
 /** First free "type-N" id in the document. */
@@ -86,6 +88,10 @@ export function addElement(type: ElementType) {
     } else if (type === "slicer") {
       el.title = { text: TYPE_LABEL[type], show: true };
       el.slicer = { table: "", column: "", kind: "buttons", multi: true };
+    } else if (type === "map") {
+      el.title = { text: TYPE_LABEL.map, show: true };
+      el.query = { mode: "builder", filters: [] };
+      el.viz = { layers: [{ id: "layer-1", kind: "circle" }] };
     } else {
       el.title = { text: TYPE_LABEL[type], show: true };
       if (QUERY_TYPES.has(type)) el.query = { mode: "builder", fields: [] };
@@ -275,6 +281,32 @@ export function removeFieldFromElement(id: string, name: string) {
   updateElement(id, (el) => removeFieldPure(el, name));
 }
 
+export function reorderFieldsInElement(
+  id: string,
+  members: BuilderFieldRef[],
+  from: number,
+  to: number,
+) {
+  if (from === to || !members[from] || !members[to]) return;
+  const ordered = [...members];
+  const [moved] = ordered.splice(from, 1);
+  ordered.splice(to, 0, moved);
+  const memberKeys = new Set(members.map((f) => `${f.table}\0${f.name}`));
+
+  updateElement(id, (el) => {
+    let next = 0;
+    const q = el.query ?? { mode: "builder" as const };
+    return {
+      ...el,
+      query: {
+        ...q,
+        fields: (q.fields ?? []).map((f) =>
+          memberKeys.has(`${f.table}\0${f.name}`) ? ordered[next++] : f),
+      },
+    };
+  });
+}
+
 export function setFieldAggregate(id: string, name: string, aggregate: Aggregate) {
   updateElement(id, (el) => {
     const q = el.query ?? { mode: "builder" as const };
@@ -332,6 +364,61 @@ export function removeFilter(id: string, index: number) {
     const q = el.query ?? { mode: "builder" as const };
     return { ...el, query: { ...q, filters: (q.filters ?? []).filter((_, i) => i !== index) } };
   });
+}
+
+export function reorderFiltersInElement(id: string, from: number, to: number) {
+  if (from === to) return;
+  updateElement(id, (el) => {
+    const q = el.query ?? { mode: "builder" as const };
+    const filters = [...(q.filters ?? [])];
+    if (!filters[from] || !filters[to]) return el;
+    const [moved] = filters.splice(from, 1);
+    filters.splice(to, 0, moved);
+    return { ...el, query: { ...q, filters } };
+  });
+}
+
+export type MapFieldSlot = "lng" | "lat" | "size" | "category";
+
+export function setMapLayerField(id: string, layerId: string, slot: MapFieldSlot, p: DragPayload | null) {
+  updateElement(id, (el) => ({
+    ...el,
+    viz: {
+      ...el.viz,
+      layers: (el.viz?.layers ?? []).map((layer) => {
+        if (layer.id !== layerId) return layer;
+        const next: MapLayer = { ...layer };
+        if (p) next[slot] = { table: p.table, name: p.name, kind: p.kind, dataType: p.dataType };
+        else delete next[slot];
+        return next;
+      }),
+    },
+  }));
+}
+
+export function setMapLayerKind(id: string, layerId: string, kind: MapLayerKind) {
+  updateElement(id, (el) => ({
+    ...el,
+    viz: { ...el.viz, layers: (el.viz?.layers ?? []).map((l) => (l.id === layerId ? { ...l, kind } : l)) },
+  }));
+}
+
+export function addMapLayer(id: string) {
+  updateElement(id, (el) => {
+    const layers = el.viz?.layers ?? [];
+    if (layers.length >= 2) return el;
+    const ids = new Set(layers.map((l) => l.id));
+    let n = 1;
+    while (ids.has(`layer-${n}`)) n++;
+    return { ...el, viz: { ...el.viz, layers: [...layers, { id: `layer-${n}`, kind: "circle" }] } };
+  });
+}
+
+export function removeMapLayer(id: string, layerId: string) {
+  updateElement(id, (el) => ({
+    ...el,
+    viz: { ...el.viz, layers: (el.viz?.layers ?? []).filter((l) => l.id !== layerId) },
+  }));
 }
 
 // ─── Drag/resize gesture math ────────────────────────────────────────────────

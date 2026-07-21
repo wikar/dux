@@ -77,6 +77,12 @@ const ICONS: Record<ElementType, JSX.Element> = {
       <path d="M4 13 L8.5 9 L11 11.5 L13 9.8 L16 12.5" {...stroke} />
     </svg>
   ),
+  map: (
+    <svg {...S}>
+      <path d="M9 1.5 C6 1.5 3.8 3.7 3.8 6.6 C3.8 10.5 9 16.5 9 16.5 C9 16.5 14.2 10.5 14.2 6.6 C14.2 3.7 12 1.5 9 1.5 Z" {...stroke} strokeLinejoin="round" />
+      <circle cx="9" cy="6.6" r="1.8" fill="currentColor" />
+    </svg>
+  ),
 };
 
 export function typeIcon(type: ElementType): JSX.Element {

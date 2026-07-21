@@ -45,8 +45,19 @@ func InferJoinPath(schema *Schema, tables []string) (*JoinPath, error) {
 		return &JoinPath{}, nil
 	}
 
-	primary := tables[0]
-	targets := uniqueSlice(tables[1:])
+	primary, err := resolveTableStrict(schema, tables[0])
+	if err != nil {
+		return nil, err
+	}
+	targets := make([]string, 0, len(tables)-1)
+	for _, table := range tables[1:] {
+		resolved, err := resolveTableStrict(schema, table)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, resolved)
+	}
+	targets = uniqueSlice(targets)
 
 	// joined tracks every table already present in the FROM clause so that
 	// intermediate tables introduced while finding a path to one target are
@@ -55,7 +66,7 @@ func InferJoinPath(schema *Schema, tables []string) (*JoinPath, error) {
 
 	var steps []JoinStep
 	for _, target := range targets {
-		if joined[strings.ToLower(ResolveTable(schema, target))] {
+		if joined[strings.ToLower(target)] {
 			// Already introduced as an intermediate step — nothing to emit.
 			continue
 		}
@@ -113,7 +124,10 @@ func bfsJoin(schema *Schema, from, to string) ([]JoinStep, error) {
 			}
 
 			// Resolve to the canonical schema key (e.g. bare "Sales" → "bev.Sales").
-			nextTable := ResolveTable(schema, nextRaw)
+			nextTable, err := resolveTableStrict(schema, nextRaw)
+			if err != nil {
+				return nil, err
+			}
 			nextLower := strings.ToLower(nextTable)
 			if visited[nextLower] {
 				continue
@@ -223,22 +237,44 @@ func FilterReaches(schema *Schema, src string, targets []string) bool {
 // names. Returns name unchanged if no schema entry is found. Used across the
 // package and by the emitter's measure clustering.
 func ResolveTable(schema *Schema, name string) string {
+	matches := resolveTableMatches(schema, name)
+	if len(matches) == 1 {
+		return matches[0]
+	}
+	return name
+}
+
+func resolveTableStrict(schema *Schema, name string) (string, error) {
+	matches := resolveTableMatches(schema, name)
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	if len(matches) > 1 {
+		sort.Strings(matches)
+		return "", &SemanticError{Message: fmt.Sprintf(
+			"ambiguous table %q; qualify it as one of: %s", name, strings.Join(matches, ", "))}
+	}
+	return name, nil
+}
+
+func resolveTableMatches(schema *Schema, name string) []string {
 	nl := strings.ToLower(name)
 	for key := range schema.Tables {
 		if strings.ToLower(key) == nl {
-			return key
+			return []string{key}
 		}
 	}
+	var matches []string
 	if !strings.Contains(name, ".") {
 		for key := range schema.Tables {
 			if i := strings.LastIndex(key, "."); i >= 0 {
 				if strings.ToLower(key[i+1:]) == nl {
-					return key
+					matches = append(matches, key)
 				}
 			}
 		}
 	}
-	return name
+	return matches
 }
 
 func uniqueSlice(ss []string) []string {
