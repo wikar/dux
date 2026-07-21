@@ -306,13 +306,13 @@ export default function PivotBody({ el, data, formats }: Props) {
             return (
               <div
                 key={vi.key}
-                className={`${styles.pvRow} ${rowClass[dr.kind]} ${selected ? styles.rowSelected : ""}`}
+                className={`${styles.pvRow} ${rowClass[dr.kind]} ${clickable ? styles.pvClickable : ""} ${selected ? styles.rowSelected : ""}`}
                 style={{ position: "absolute", top: 0, left: 0, right: 0, height: ROW_H, transform: `translateY(${vi.start}px)`, cursor: clickable ? "pointer" : undefined }}
                 onClick={clickable ? (e) => toggleCrossMark(el.id, { dims: leafDims(dr) }, e.ctrlKey || e.metaKey) : undefined}
               >
                 <div
                   className={styles.pvRowHead}
-                  style={{ width: HEADER_W, paddingLeft: 8 + dr.indent * 14 }}
+                  style={{ width: HEADER_W, paddingLeft: 10 + dr.indent * 14 }}
                   title={dr.label}
                 >
                   {dr.kind === "group" && (

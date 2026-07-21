@@ -446,6 +446,46 @@ type ResultRow = readonly (string | number | null)[];
 type SortDir = "asc" | "desc";
 
 const TABLE_ROW_H = 25;
+const COL_MEASURE_CAP = 2000; // rows sampled when sizing columns
+const COL_PAD = 22; // horizontal cell padding (10+10) plus a little slack
+const COL_MIN = 44;
+const COL_MAX = 460;
+
+let measureCtx: CanvasRenderingContext2D | null = null;
+
+/** Column widths (px) measured from the header plus a sample of the formatted
+ *  body, so `table-layout: fixed` yields stable, content-accurate columns that
+ *  a virtualized row window can't reflow — the sticky header stops shifting as
+ *  you scroll. Measuring the full data (not just the visible rows) is what
+ *  keeps numeric columns from ever truncating. */
+function measureColWidths(
+  data: QueryResponse,
+  formats: Record<string, MeasureFormat>,
+  fontFamily: string
+): number[] {
+  const cv = (measureCtx ??= document.createElement("canvas").getContext("2d"));
+  const n = data.columns.length;
+  const w = new Array<number>(n).fill(COL_MIN);
+  if (!cv) return w.map(() => 120); // no 2D context — fall back to a fixed width
+  // Headers are semibold and carry a sort caret; leave room for it.
+  cv.font = `600 12px ${fontFamily}`;
+  for (let i = 0; i < n; i++) w[i] = cv.measureText(data.columns[i]).width + 18;
+  // Body sample at regular weight.
+  cv.font = `12px ${fontFamily}`;
+  const rows = data.rows;
+  const step = rows.length > COL_MEASURE_CAP ? Math.ceil(rows.length / COL_MEASURE_CAP) : 1;
+  for (let r = 0; r < rows.length; r += step) {
+    const row = rows[r];
+    for (let i = 0; i < n; i++) {
+      const v = row[i];
+      if (v === null || v === undefined) continue;
+      const fmt = formats[data.columns[i]];
+      const tw = cv.measureText(fmt ? formatValue(v, fmt) : String(v)).width;
+      if (tw > w[i]) w[i] = tw;
+    }
+  }
+  return w.map((x) => Math.max(COL_MIN, Math.min(COL_MAX, Math.ceil(x) + COL_PAD)));
+}
 
 function TableBody({
   el,
@@ -509,6 +549,14 @@ function TableBody({
   }, [data.rows, active?.col, active?.dir]);
 
   const wrapRef = useRef<HTMLDivElement>(null);
+
+  // Fixed column widths measured from the full result (see measureColWidths).
+  const colWidths = useMemo(() => {
+    const ff = wrapRef.current ? getComputedStyle(wrapRef.current).fontFamily : "sans-serif";
+    return measureColWidths(data, formats, ff);
+  }, [data, formats]);
+  const tableWidth = colWidths.reduce((a, b) => a + b, 0);
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => wrapRef.current,
@@ -521,7 +569,12 @@ function TableBody({
 
   return (
     <div className={styles.tableWrap} ref={wrapRef}>
-      <table className={styles.table}>
+      <table className={styles.table} style={{ width: tableWidth, minWidth: "100%" }}>
+        <colgroup>
+          {colWidths.map((w, i) => (
+            <col key={i} style={{ width: w }} />
+          ))}
+        </colgroup>
         <thead>
           <tr>
             {data.columns.map((c, ci) => (
@@ -543,7 +596,7 @@ function TableBody({
         <tbody>
           {padTop > 0 && (
             <tr>
-              <td style={{ height: padTop, padding: 0, border: "none" }} />
+              <td colSpan={data.columns.length} style={{ height: padTop, padding: 0, border: "none" }} />
             </tr>
           )}
           {items.map((vi) => {
@@ -570,7 +623,7 @@ function TableBody({
           })}
           {padBottom > 0 && (
             <tr>
-              <td style={{ height: padBottom, padding: 0, border: "none" }} />
+              <td colSpan={data.columns.length} style={{ height: padBottom, padding: 0, border: "none" }} />
             </tr>
           )}
         </tbody>

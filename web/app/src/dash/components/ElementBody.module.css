@@ -177,46 +177,65 @@
 .tableWrap {
   height: 100%;
   overflow: auto;
+  /* Shared surface tints for the table and pivot so they stay visually
+     identical. All derive from the themed element background (frosted glass);
+     higher % = more opaque. Ordering: header darkest, then grand total, row
+     hover, and subtotal most transparent. */
+  --hdr: color-mix(in srgb, var(--th-el-bg, var(--mantle)) 55%, transparent);
+  --grand: color-mix(in srgb, var(--th-el-bg, var(--mantle)) 38%, transparent);
+  --hover: color-mix(in srgb, var(--th-el-bg, var(--mantle)) 30%, transparent);
+  --subtot: color-mix(in srgb, var(--th-el-bg, var(--mantle)) 18%, transparent);
 }
 
 .table {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
+  /* Fixed layout + measured <col> widths (see TableBody): virtualized row
+     windows can't reflow the columns, so the sticky header never shifts. */
+  table-layout: fixed;
 }
 
 .table th {
   position: sticky;
   top: 0;
-  /* Frosted glass: the sticky header stays transparent (the element
-     background shows through per its alpha) and rows scrolling underneath
-     blur behind a faint tint of the element background. */
-  background: color-mix(in srgb, var(--th-el-bg, var(--mantle)) 55%, transparent);
+  /* Frosted glass: the sticky header stays translucent (the element background
+     shows through) and rows scrolling underneath blur behind it. */
+  background: var(--hdr);
   backdrop-filter: blur(8px);
   text-align: left;
   font-weight: 600;
   color: var(--th-text, var(--subtext1));
   padding: 5px 10px;
-  border-bottom: 1px solid var(--th-border, var(--surface1));
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
   user-select: none;
 }
 
 .table td {
   padding: 4px 10px;
-  border-bottom: 1px solid var(--surface0);
   color: inherit;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+/* Frosted hover — lighter and more transparent than the header. */
 .table tbody tr:hover {
-  background: var(--surface0);
+  background: var(--hover);
 }
 
+/* Numeric columns right-align in the body and the header. The header rule
+   needs `.table` specificity to beat `.table th`'s default left-align. */
 .num {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.table th.num {
+  text-align: right;
 }
 
 .tableCap {
@@ -264,8 +283,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   padding: 0;
   border: none;
   border-radius: 3px;
@@ -274,6 +293,12 @@
   cursor: pointer;
   opacity: 0.35;
   transition: opacity 0.12s;
+}
+
+/* Title-bar variant only — the floating variant keeps its larger tap target. */
+.funnelBtn:not(.funnelFloat) svg {
+  width: 16px;
+  height: 16px;
 }
 
 .funnelBtn:hover {
@@ -350,6 +375,11 @@
   background: color-mix(in srgb, var(--blue) 22%, transparent);
 }
 
+/* Frosted hover on clickable pivot rows — matches the table row hover. */
+.pvClickable:not(.rowSelected):hover {
+  background: var(--hover);
+}
+
 /* ── Pivot / matrix ── */
 
 .pvHeader {
@@ -357,9 +387,8 @@
   top: 0;
   z-index: 2;
   /* See .table th — frosted-glass sticky header. */
-  background: color-mix(in srgb, var(--th-el-bg, var(--mantle)) 55%, transparent);
+  background: var(--hdr);
   backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--th-border, var(--surface1));
 }
 
 .pvRow {
@@ -371,7 +400,7 @@
 .pvColHead,
 .pvMetricHead {
   flex: none;
-  padding: 4px 8px;
+  padding: 5px 10px;
   font-weight: 600;
   color: var(--th-text, var(--subtext1));
   white-space: nowrap;
@@ -379,9 +408,11 @@
   text-overflow: ellipsis;
 }
 
+/* Column-dim headers label numeric columns — right-align them like the
+   metric headers and the cells below. Row-dim labels (.pvCorner / .pvRowHead)
+   are text and stay left. */
 .pvColHead {
-  text-align: center;
-  border-left: 1px solid var(--surface0);
+  text-align: right;
 }
 
 .pvMetricHead {
@@ -394,7 +425,7 @@
 
 .pvRowHead {
   flex: none;
-  padding: 4px 8px;
+  padding: 4px 10px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -402,7 +433,7 @@
 
 .pvCell {
   flex: none;
-  padding: 4px 8px;
+  padding: 4px 10px;
   text-align: right;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -411,7 +442,6 @@
 }
 
 .pvTotalCol {
-  border-left: 1px solid var(--surface0);
   font-weight: 600;
 }
 
@@ -446,15 +476,15 @@
 }
 
 .pvSubtotal {
-  color: var(--subtext1);
+  color: var(--th-text, var(--subtext1));
   font-weight: 600;
-  background: rgba(49, 50, 68, 0.35);
+  background: var(--subtot);
 }
 
 .pvGrand {
+  color: var(--th-text, var(--subtext1));
   font-weight: 700;
-  border-top: 1px solid var(--surface1);
-  background: rgba(49, 50, 68, 0.5);
+  background: var(--grand);
 }
 
 /* ── Placeholder for not-yet-implemented element types ── */

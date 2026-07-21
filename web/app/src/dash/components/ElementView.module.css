@@ -35,6 +35,9 @@
 .titleText {
   flex: 1;
   min-width: 0;
+  /* Match the icon-button height so the bar keeps the same height whether or
+     not the funnel/CSV controls are shown. */
+  line-height: 16px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -46,8 +49,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   padding: 0;
   border: none;
   border-radius: 3px;
@@ -57,6 +60,11 @@
   cursor: pointer;
   opacity: 0.35;
   transition: opacity 0.12s;
+}
+
+.titleCsv svg {
+  width: 16px;
+  height: 16px;
 }
 
 .titleCsv:hover {
