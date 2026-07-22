@@ -5,7 +5,7 @@
 EVALUATE
     VAR discounted_sales = FILTER(
         Sales,
-        Sales[DiscountRate] > 0
+        Sales[_DiscountRate] > 0
     )
     RETURN SUMMARIZECOLUMNS(
         discounted_sales[VenueKey],

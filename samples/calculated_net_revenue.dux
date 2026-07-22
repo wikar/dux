@@ -1,5 +1,5 @@
 EVALUATE
     ADDCOLUMNS(
         Sales,
-        "Calculated Net Revenue", Sales[GrossRevenue] - Sales[DiscountAmount]
+        "Calculated Net Revenue", Sales[_GrossSalesAmount] - Sales[_DiscountAmount]
     )

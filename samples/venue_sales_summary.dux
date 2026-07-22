@@ -3,15 +3,15 @@
 
 DEFINE
     MEASURE Sales[Avg Order Value] =
-        AVERAGE(Sales[NetRevenue])
+        AVERAGE(Sales[_NetSalesAmount])
 
 EVALUATE
     VAR discounted_sales = FILTER(
         Sales,
-        Sales[DiscountRate] > 0
+        Sales[_DiscountRate] > 0
     )
     RETURN SUMMARIZECOLUMNS(
         discounted_sales[VenueKey],
         "Orders",          COUNT(discounted_sales[OrderId]),
-        "Avg Order Value", AVERAGE(discounted_sales[NetRevenue])
+        "Avg Order Value", AVERAGE(discounted_sales[_NetSalesAmount])
     )
