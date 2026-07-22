@@ -1,271 +1,347 @@
-// Package bootstrap provides shared startup logic for the dux CLI and duxd
-// server: opening the metadata database, attaching data files, introspecting
-// schemas, and importing/exporting TOML configuration.
+// Package bootstrap owns the common DUX startup sequence.
 package bootstrap
 
 import (
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
+	"sync"
+	"time"
 
+	"github.com/danielwikar/dux/internal/warehouse"
+	"github.com/danielwikar/dux/parser"
 	"github.com/danielwikar/dux/semantic"
 )
 
-// Startup parses the command-line flags shared by dux and duxd, runs the
-// Bootstrap sequence, and handles the --version/--import/--export one-shot
-// flags. exitAfterImport controls whether --import terminates the process
-// (dux) or continues startup (duxd). The returned dbDir, metaPath, and
-// tomlPath are the resolved flag values.
-func Startup(binName, version, usage string, exitAfterImport bool) (metaDB *semantic.MetadataDB, db *sql.DB, schema *semantic.Schema, dbDir, metaPath, tomlPath string) {
+// Runtime is the complete embedded storage runtime used by dux and duxd.
+// duxd opens Owner as the single DuckLake maintenance writer and Query as an
+// independent read-only connection. The CLI opens Query only.
+type Runtime struct {
+	Metadata    *semantic.MetadataDB
+	Owner       *warehouse.Runtime
+	Query       *warehouse.Runtime
+	Schema      *semantic.Schema
+	DBDir       string
+	MetaPath    string
+	CatalogPath string
+	DataPath    string
+	TOMLPath    string
+	statusMu    sync.RWMutex
+	lastRefresh time.Time
+	refreshErr  string
+	refreshWarn string
+}
+
+func (r *Runtime) DB() *sql.DB { return r.Query.DB() }
+
+func (r *Runtime) Close() error {
+	var first error
+	if r.Query != nil {
+		first = r.Query.Close()
+	}
+	if r.Owner != nil {
+		if err := r.Owner.Close(); first == nil {
+			first = err
+		}
+	}
+	if r.Metadata != nil {
+		if err := r.Metadata.Close(); first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+// RefreshSchema re-introspects DuckLake, then overlays DUX metadata and TOML.
+func (r *Runtime) RefreshSchema() (schema *semantic.Schema, err error) {
+	var warning string
+	defer func() {
+		r.statusMu.Lock()
+		defer r.statusMu.Unlock()
+		wasDegraded := r.refreshErr != "" || r.refreshWarn != ""
+		if err != nil {
+			r.refreshErr = err.Error()
+			if !wasDegraded {
+				log.Printf("warehouse schema status changed to degraded: %v", err)
+			}
+			return
+		}
+		r.lastRefresh, r.refreshErr, r.refreshWarn = time.Now().UTC(), "", warning
+		isDegraded := warning != ""
+		if wasDegraded != isDegraded {
+			if isDegraded {
+				log.Printf("warehouse schema status changed to degraded: %s", warning)
+			} else {
+				log.Printf("warehouse schema status recovered to healthy")
+			}
+		}
+	}()
+	schema, err = semantic.IntrospectDuckDB(r.Query.DB())
+	if err != nil {
+		return nil, fmt.Errorf("introspect DuckLake: %w", err)
+	}
+	if err := r.Metadata.LoadIntoSchema(schema); err != nil {
+		return nil, fmt.Errorf("load metadata: %w", err)
+	}
+	if err := semantic.LoadDuxTOML(r.TOMLPath, schema); err != nil {
+		return nil, fmt.Errorf("load dux.toml: %w", err)
+	}
+	if err := semantic.ValidateBidiPaths(schema); err != nil {
+		return nil, fmt.Errorf("schema validation: %w", err)
+	}
+	warning = schemaReferenceWarning(schema)
+	return schema, nil
+}
+
+func (r *Runtime) RefreshStatus() (time.Time, string, string) {
+	r.statusMu.RLock()
+	defer r.statusMu.RUnlock()
+	return r.lastRefresh, r.refreshErr, r.refreshWarn
+}
+
+func schemaReferenceWarning(schema *semantic.Schema) string {
+	var issues []string
+	for _, relationship := range schema.Relationships {
+		from, _ := schema.FindTable(relationship.FromTable)
+		to, _ := schema.FindTable(relationship.ToTable)
+		if from == nil || to == nil {
+			issues = append(issues, fmt.Sprintf("relationship %s[%s] -> %s[%s] references a missing table", relationship.FromTable, relationship.FromColumn, relationship.ToTable, relationship.ToColumn))
+			continue
+		}
+		if _, ok := from.Columns[relationship.FromColumn]; !ok {
+			issues = append(issues, fmt.Sprintf("relationship references missing column %s[%s]", relationship.FromTable, relationship.FromColumn))
+		}
+		if _, ok := to.Columns[relationship.ToColumn]; !ok {
+			issues = append(issues, fmt.Sprintf("relationship references missing column %s[%s]", relationship.ToTable, relationship.ToColumn))
+		}
+	}
+	for owner, measures := range schema.Measures {
+		if table, _ := schema.FindTable(owner); table == nil {
+			for name := range measures {
+				issues = append(issues, fmt.Sprintf("measure %s[%s] belongs to a missing table", owner, name))
+			}
+			continue
+		}
+		for name, measure := range measures {
+			walkMeasureColumns(measure.Expr, func(reference *parser.ColRef) {
+				tableName := semantic.StripSingleQuotes(reference.Table)
+				columnName := semantic.StripBrackets(reference.Column)
+				if tableName == "" {
+					if hasMeasureNamed(schema, columnName) {
+						return
+					}
+					tableName = owner
+				} else if hasTableMeasure(schema, tableName, columnName) {
+					return
+				}
+				table, _ := schema.FindTable(tableName)
+				if table == nil {
+					issues = append(issues, fmt.Sprintf("measure %s[%s] references missing table %s", owner, name, tableName))
+					return
+				}
+				for existing := range table.Columns {
+					if strings.EqualFold(existing, columnName) {
+						return
+					}
+				}
+				issues = append(issues, fmt.Sprintf("measure %s[%s] references missing column %s[%s]", owner, name, tableName, columnName))
+			})
+		}
+	}
+	return strings.Join(issues, "; ")
+}
+
+func walkMeasureColumns(expression *parser.Expr, visit func(*parser.ColRef)) {
+	if expression == nil {
+		return
+	}
+	walkTermColumns(expression.Left, visit)
+	for _, right := range expression.Right {
+		walkTermColumns(right.Right, visit)
+	}
+}
+
+func walkTermColumns(term *parser.Term, visit func(*parser.ColRef)) {
+	if term == nil {
+		return
+	}
+	if term.ColRef != nil {
+		visit(term.ColRef)
+	}
+	if term.SubExpr != nil {
+		walkMeasureColumns(term.SubExpr, visit)
+	}
+	if term.FuncCall != nil {
+		for _, argument := range term.FuncCall.Args {
+			walkMeasureColumns(argument, visit)
+		}
+	}
+	if term.TableConstructor != nil {
+		for _, row := range term.TableConstructor.Rows {
+			for _, value := range row.Values {
+				walkMeasureColumns(value, visit)
+			}
+		}
+	}
+}
+
+func hasMeasureNamed(schema *semantic.Schema, name string) bool {
+	for _, measures := range schema.Measures {
+		for existing := range measures {
+			if strings.EqualFold(existing, name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasTableMeasure(schema *semantic.Schema, table, name string) bool {
+	for owner, measures := range schema.Measures {
+		if !strings.EqualFold(owner, table) {
+			continue
+		}
+		for existing := range measures {
+			if strings.EqualFold(existing, name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Startup parses shared flags and opens the warehouse. owner must be true only
+// for duxd, which owns creation and maintenance.
+func Startup(binName, version, usage string, exitAfterImport, owner bool) *Runtime {
 	showVersion := flag.Bool("version", false, "print version and exit")
-	dbDirFlag := flag.String("db-dir", "db", "directory containing *.duckdb / *.db data files")
-	duxDB := flag.String("dux", "", "path to dux metadata database (default: <db-dir>/dux.duckdb)")
-	tomlFlag := flag.String("toml", "dux.toml", "path to dux.toml configuration file")
-	importPath := flag.String("import", "", "import this dux.toml into the metadata DB")
+	dbDir := flag.String("db-dir", "db", "DUX state directory")
+	duxDB := flag.String("dux", "", "path to DUX SQLite metadata (default: <db-dir>/dux.sqlite)")
+	catalog := flag.String("warehouse-catalog", "", "path to DuckLake SQLite catalog (default: <db-dir>/warehouse.sqlite)")
+	data := flag.String("warehouse-data", "", "path to local DuckLake Parquet data (default: <db-dir>/warehouse)")
+	toml := flag.String("toml", "dux.toml", "path to dux.toml configuration file")
+	importPath := flag.String("import", "", "import this dux.toml into DUX metadata")
 	exportPath := flag.String("export", "", "export measures and schema to this path then exit")
+	retention := flag.Duration("time-travel-retention", 30*24*time.Hour, "DuckLake snapshot time-travel retention")
+	deleteDelay := flag.Duration("file-delete-delay", 7*24*time.Hour, "delay before unreferenced Parquet files are deleted")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, usage)
 		flag.PrintDefaults()
 	}
 	flag.Parse()
-
 	if *showVersion {
 		fmt.Println(binName, version)
 		os.Exit(0)
 	}
 
-	// Resolve metadata DB path.
-	metaPath = *duxDB
-	if metaPath == "" {
-		metaPath = filepath.Join(*dbDirFlag, "dux.duckdb")
+	resolve := func(value, fallback string) string {
+		if value == "" {
+			value = filepath.Join(*dbDir, fallback)
+		}
+		abs, err := filepath.Abs(value)
+		if err != nil {
+			log.Fatalf("resolve %q: %v", value, err)
+		}
+		return abs
+	}
+	r := &Runtime{
+		DBDir:       resolve(*dbDir, "."),
+		MetaPath:    resolve(*duxDB, "dux.sqlite"),
+		CatalogPath: resolve(*catalog, "warehouse.sqlite"),
+		DataPath:    resolve(*data, "warehouse"),
+		TOMLPath:    *toml,
+	}
+	if err := os.MkdirAll(r.DBDir, 0o755); err != nil {
+		log.Fatalf("create db-dir: %v", err)
 	}
 
-	metaDB, db, schema, err := Bootstrap(*dbDirFlag, metaPath, *tomlFlag)
+	var err error
+	r.Metadata, err = semantic.OpenMetadataDB(r.MetaPath)
 	if err != nil {
-		log.Fatalf("%v", err)
+		log.Fatalf("open DUX metadata: %v", err)
+	}
+	cfg := warehouse.Config{
+		CatalogPath:         r.CatalogPath,
+		DataPath:            r.DataPath,
+		TimeTravelRetention: *retention,
+		FileDeleteDelay:     *deleteDelay,
+	}
+	if owner {
+		r.Owner, err = warehouse.OpenOwner(context.Background(), cfg)
+		if err != nil {
+			r.Close()
+			log.Fatalf("open DuckLake owner: %v", err)
+		}
+	}
+	r.Query, err = warehouse.OpenReader(context.Background(), cfg)
+	if err != nil {
+		r.Close()
+		if !owner && os.IsNotExist(err) {
+			log.Fatalf("open DuckLake reader: %v; start duxd once to initialize the warehouse", err)
+		}
+		log.Fatalf("open DuckLake reader: %v", err)
+	}
+	r.Schema, err = r.RefreshSchema()
+	if err != nil {
+		r.Close()
+		log.Fatalf("load schema: %v", err)
 	}
 
 	if *importPath != "" {
-		if err := ImportTOML(metaDB, *importPath, schema); err != nil {
+		if err := ImportTOML(r.Metadata, *importPath, r.Schema); err != nil {
 			log.Fatalf("import: %v", err)
 		}
 		if exitAfterImport {
+			r.Close()
 			os.Exit(0)
 		}
 	}
 	if *exportPath != "" {
-		if err := semantic.WriteDuxTOML(*exportPath, schema); err != nil {
+		if err := semantic.WriteDuxTOML(*exportPath, r.Schema); err != nil {
 			log.Fatalf("export: %v", err)
 		}
 		log.Printf("exported schema to %q", *exportPath)
+		r.Close()
 		os.Exit(0)
 	}
-	return metaDB, db, schema, *dbDirFlag, metaPath, *tomlFlag
+	return r
 }
 
-// Bootstrap performs the common startup sequence shared by both the dux CLI
-// and the duxd server:
-//
-//  1. Open (or create) the metadata database at metaPath.
-//  2. Attach all *.duckdb / *.db files in dbDir (except the metadata DB).
-//  3. Introspect the schema from all attached databases.
-//  4. Load persisted metadata (relationships + measures) from the metadata DB.
-//  5. Load dux.toml (if present) to supplement the metadata DB.
-//
-// The caller is responsible for closing the returned MetadataDB.
-func Bootstrap(dbDir, metaPath, tomlPath string) (*semantic.MetadataDB, *sql.DB, *semantic.Schema, error) {
-	metaDB, err := semantic.OpenMetadataDB(metaPath)
+// Bootstrap is the testable startup path without command-line parsing.
+func Bootstrap(dbDir, metaPath, catalogPath, dataPath, tomlPath string, owner bool) (*Runtime, error) {
+	r := &Runtime{DBDir: dbDir, MetaPath: metaPath, CatalogPath: catalogPath, DataPath: dataPath, TOMLPath: tomlPath}
+	var err error
+	r.Metadata, err = semantic.OpenMetadataDB(metaPath)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("open metadata db: %w", err)
+		return nil, err
 	}
-
-	db := metaDB.DB()
-
-	if err := AttachDataDBs(db, dbDir, metaPath); err != nil {
-		metaDB.Close()
-		return nil, nil, nil, fmt.Errorf("attach data databases: %w", err)
-	}
-
-	schema, err := semantic.IntrospectDuckDB(db)
-	if err != nil {
-		metaDB.Close()
-		return nil, nil, nil, fmt.Errorf("introspect schema: %w", err)
-	}
-
-	if err := metaDB.LoadIntoSchema(schema); err != nil {
-		metaDB.Close()
-		return nil, nil, nil, fmt.Errorf("load metadata: %w", err)
-	}
-
-	if err := semantic.LoadDuxTOML(tomlPath, schema); err != nil {
-		log.Printf("warning: loading dux.toml: %v", err)
-	}
-
-	// Validate bidirectional relationships — ambiguous filter graphs are
-	// rejected at startup rather than producing unpredictable SQL at runtime.
-	if err := semantic.ValidateBidiPaths(schema); err != nil {
-		metaDB.Close()
-		return nil, nil, nil, fmt.Errorf("schema validation: %w", err)
-	}
-
-	return metaDB, db, schema, nil
-}
-
-// AttachDataDBs attaches every *.duckdb and *.db file in dir (except the
-// metadata DB itself) to db as a read-only named attachment.
-// The attachment alias is the filename stem (e.g. "bev.duckdb" → alias "bev").
-func AttachDataDBs(db *sql.DB, dir, metaPath string) error {
-	files, err := dataDBFiles(dir, metaPath)
-	if err != nil {
-		return err
-	}
-	for _, file := range files {
-		if stem, err := AttachDB(db, file.path, file.name); err != nil {
-			log.Printf("warning: attach %q as %q: %v", file.path, stem, err)
-		} else {
-			log.Printf("attached %q as %q (read-only)", file.name, stem)
-		}
-	}
-	return nil
-}
-
-// ReattachDataDBs atomically replaces every data attachment with the current
-// top-level *.duckdb / *.db files in dir. This picks up files replaced under an
-// existing name while preserving the old attachments if any new file fails to
-// attach.
-func ReattachDataDBs(db *sql.DB, dir, metaPath string) error {
-	files, err := dataDBFiles(dir, metaPath)
-	if err != nil {
-		return err
-	}
-
-	tx, err := db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin attachment refresh: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	rows, err := tx.Query(`
-		SELECT database_name
-		FROM duckdb_databases()
-		WHERE path IS NOT NULL
-		  AND NOT internal
-		  AND database_name <> current_database()
-		ORDER BY database_name
-	`)
-	if err != nil {
-		return fmt.Errorf("list attached databases: %w", err)
-	}
-	var aliases []string
-	for rows.Next() {
-		var alias string
-		if err := rows.Scan(&alias); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan attached database: %w", err)
-		}
-		aliases = append(aliases, alias)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close attached database list: %w", err)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("list attached databases: %w", err)
-	}
-
-	for _, alias := range aliases {
-		if _, err := tx.Exec("DETACH " + quoteIdent(alias)); err != nil {
-			return fmt.Errorf("detach database %q: %w", alias, err)
-		}
-	}
-	for _, file := range files {
-		if _, err := attachDB(tx, file.path, file.name); err != nil {
-			return fmt.Errorf("reattach database %q: %w", file.name, err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit attachment refresh: %w", err)
-	}
-	return nil
-}
-
-// AttachDB attaches a single database file to db as a read-only named
-// attachment aliased by the filename stem, which is returned.
-func AttachDB(db *sql.DB, absPath, name string) (string, error) {
-	return attachDB(db, absPath, name)
-}
-
-type execer interface {
-	Exec(query string, args ...any) (sql.Result, error)
-}
-
-func attachDB(db execer, absPath, name string) (string, error) {
-	stem := strings.TrimSuffix(name, filepath.Ext(name))
-	escapedPath := strings.ReplaceAll(absPath, "'", "''")
-	_, err := db.Exec(fmt.Sprintf("ATTACH '%s' AS %s (READ_ONLY)", escapedPath, quoteIdent(stem)))
-	return stem, err
-}
-
-type dataDBFile struct {
-	name string
-	path string
-}
-
-func dataDBFiles(dir, metaPath string) ([]dataDBFile, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read db-dir %q: %w", dir, err)
-	}
-
-	var files []dataDBFile
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		ext := strings.ToLower(filepath.Ext(name))
-		if ext != ".duckdb" && ext != ".db" {
-			continue
-		}
-		absPath, err := filepath.Abs(filepath.Join(dir, name))
+	cfg := warehouse.Config{CatalogPath: catalogPath, DataPath: dataPath, TimeTravelRetention: 30 * 24 * time.Hour, FileDeleteDelay: 7 * 24 * time.Hour}
+	if owner {
+		r.Owner, err = warehouse.OpenOwner(context.Background(), cfg)
 		if err != nil {
-			return nil, fmt.Errorf("resolve data database %q: %w", name, err)
-		}
-		if !samePath(absPath, metaPath) {
-			files = append(files, dataDBFile{name: name, path: absPath})
+			r.Close()
+			return nil, err
 		}
 	}
-	return files, nil
-}
-
-func samePath(a, b string) bool {
-	absA, errA := filepath.Abs(a)
-	absB, errB := filepath.Abs(b)
-	if errA != nil || errB != nil {
-		return false
+	r.Query, err = warehouse.OpenReader(context.Background(), cfg)
+	if err != nil {
+		r.Close()
+		return nil, err
 	}
-	absA = filepath.Clean(absA)
-	absB = filepath.Clean(absB)
-	if runtime.GOOS == "windows" {
-		return strings.EqualFold(absA, absB)
+	r.Schema, err = r.RefreshSchema()
+	if err != nil {
+		r.Close()
+		return nil, err
 	}
-	return absA == absB
+	return r, nil
 }
 
-func quoteIdent(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
-}
-
-// ImportTOML parses a dux.toml file, persists its contents to the metadata
-// database, and reloads the schema with the newly imported data.
+// ImportTOML persists a semantic model and overlays it on the live schema.
 func ImportTOML(metaDB *semantic.MetadataDB, path string, schema *semantic.Schema) error {
 	importSchema := semantic.NewSchema()
 	if err := semantic.LoadDuxTOML(path, importSchema); err != nil {
@@ -277,6 +353,6 @@ func ImportTOML(metaDB *semantic.MetadataDB, path string, schema *semantic.Schem
 	if err := metaDB.LoadIntoSchema(schema); err != nil {
 		return fmt.Errorf("reload schema: %w", err)
 	}
-	log.Printf("imported %q into metadata DB", path)
+	log.Printf("imported %q into DUX metadata", path)
 	return nil
 }

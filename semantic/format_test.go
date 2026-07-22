@@ -107,7 +107,7 @@ expression = "SUM(sales[amount])"
 }
 
 func TestMeasureFormatMetadataRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "meta.duckdb")
+	path := filepath.Join(t.TempDir(), "meta.sqlite")
 	m, err := semantic.OpenMetadataDB(path)
 	if err != nil {
 		t.Fatalf("open metadata db: %v", err)

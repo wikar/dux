@@ -2,13 +2,13 @@
 // Demonstrates: DEFINE MEASURE, VAR, SUMMARIZECOLUMNS with multiple aggregations.
 
 DEFINE
-    MEASURE bev.Sales[Avg Order Value] =
-        AVERAGE(bev.Sales[NetRevenue])
+    MEASURE Sales[Avg Order Value] =
+        AVERAGE(Sales[NetRevenue])
 
 EVALUATE
     VAR discounted_sales = FILTER(
-        bev.Sales,
-        bev.Sales[DiscountRate] > 0
+        Sales,
+        Sales[DiscountRate] > 0
     )
     RETURN SUMMARIZECOLUMNS(
         discounted_sales[VenueKey],

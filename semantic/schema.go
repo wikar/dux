@@ -34,12 +34,13 @@ type Schema struct {
 	HiddenColumns map[string]map[string]bool
 }
 
-// Table represents a table or view in the schema. The database and DuckDB
-// schema qualifiers are encoded in the Tables map key (e.g. "bev.Sales").
+// Table represents a table or view in the schema. SQLName is the fully
+// qualified physical DuckDB name when it differs from the public DUX key.
 type Table struct {
 	Name    string
-	IsView  bool // true when introspected as a VIEW rather than a BASE TABLE
-	Hidden  bool // true when the table is marked hidden
+	SQLName string `json:"-"`
+	IsView  bool   // true when introspected as a VIEW rather than a BASE TABLE
+	Hidden  bool   // true when the table is marked hidden
 	Columns map[string]*Column
 }
 
@@ -250,12 +251,20 @@ func IntrospectDuckDB(db *sql.DB) (*Schema, error) {
 		if schemaName != "main" && schemaName != "" {
 			schemaPart = schemaName
 		}
-		key := qualifiedTableKey(dbAlias, schemaPart, tableName)
+		physicalName := qualifiedTableKey(dbAlias, schemaPart, tableName)
+		key := physicalName
+		if catalog == "warehouse" {
+			// Always retain the full internal catalog and schema even though main
+			// is intentionally omitted from the public DUX name.
+			physicalName = qualifiedTableKeyWithMain(catalog, schemaName, tableName)
+			key = qualifiedTableKey("", schemaPart, tableName)
+		}
 
 		t, ok := schema.Tables[key]
 		if !ok {
 			t = &Table{
 				Name:    tableName,
+				SQLName: physicalName,
 				IsView:  tableType == "VIEW",
 				Columns: make(map[string]*Column),
 			}
@@ -333,6 +342,17 @@ func qualifiedTableKey(catalog, schemaName, table string) string {
 		parts = append(parts, catalog)
 	}
 	if schemaName != "" && schemaName != "main" {
+		parts = append(parts, schemaName)
+	}
+	return strings.Join(append(parts, table), ".")
+}
+
+func qualifiedTableKeyWithMain(catalog, schemaName, table string) string {
+	parts := make([]string, 0, 3)
+	if catalog != "" && catalog != "memory" {
+		parts = append(parts, catalog)
+	}
+	if schemaName != "" {
 		parts = append(parts, schemaName)
 	}
 	return strings.Join(append(parts, table), ".")

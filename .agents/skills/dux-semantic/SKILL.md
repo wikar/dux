@@ -13,17 +13,19 @@ The semantic model is the layer that makes DUX queries work: relationships
 route filter context between tables, named measures are reusable
 expressions, and presentation metadata (formats, hidden flags, date table)
 shapes how clients render results. Everything is persisted in the metadata
-database (`db/dux.duckdb`) and takes effect immediately — no server restart.
+database (`db/dux.sqlite`) and takes effect immediately — no server restart.
 
 ## Database layout
 
-`duxd`/`dux` watch a database directory (`--db-dir`, default `db/`):
+`duxd` owns one DuckLake warehouse under `--db-dir` (default `db/`):
 
-- `dux.duckdb` — the read-write **metadata** store (created automatically).
-- Every other `*.duckdb` / `*.db` file — **data**, attached read-only under
-  its filename: `bev.duckdb` → tables referenced as `bev.Sales`.
-- DuckDB views behave exactly like tables. Objects in a non-default schema
-  carry it as an extra segment: `db.schema.table`.
+- `dux.sqlite` — DUX measures, relationships, presentation metadata, and operation history.
+- `warehouse.sqlite` — DuckLake's catalog. Never edit it directly.
+- `warehouse/` — DuckLake-owned Parquet data. Never edit or delete files directly.
+- A DuckLake table in `main` is public as `Table`; another schema is `schema.Table`.
+- DuckLake views behave exactly like tables. The internal `warehouse.schema.Table` name is never used in DUX model definitions.
+
+DuckLake does not support primary or foreign keys. DUX relationships are semantic metadata persisted in `dux.sqlite`; they do not alter DuckLake tables.
 
 ## Start here: read the schema
 
@@ -46,8 +48,8 @@ A measure is a named DUX expression bound to a home table:
 
 ```
 POST /measures
-{"table": "bev.Sales", "name": "Total Revenue",
- "expression": "SUM(bev.Sales[NetRevenue])",
+{"table": "Sales", "name": "Total Revenue",
+ "expression": "SUM(Sales[NetRevenue])",
  "format": {"kind": "compact"}}
 ```
 
@@ -59,14 +61,14 @@ POST /measures
   required for (and only valid with) the `currency` kind.
 - `DELETE /measures/{table}/{name}` removes one. `GET /measures` lists all.
 - Verify a new measure immediately with a query:
-  `EVALUATE SUMMARIZECOLUMNS("X", bev.Sales[Total Revenue])`.
+  `EVALUATE SUMMARIZECOLUMNS("X", Sales[Total Revenue])`.
 
 ## Relationships
 
 ```
 POST /relationships
-{"from_table": "bev.Sales", "from_column": "ProductKey",
- "to_table": "bev.Product", "to_column": "ProductKey"}
+{"from_table": "Sales", "from_column": "ProductKey",
+ "to_table": "Product", "to_column": "ProductKey"}
 ```
 
 - Direction matters: `from` is the many side, `to` the one side. Filter

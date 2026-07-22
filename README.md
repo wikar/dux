@@ -13,16 +13,21 @@ DUX is more than a query interpreter. It ships with:
 ## Quick start with Docker
 
 ```sh
-docker run -d -v /db:/app/db -v /dashboards:/app/dashboards ghcr.io/wikar/dux:latest
+docker run -d -p 8080:8080 \
+  -v dux-db:/app/db \
+  -v /local/incoming:/app/imports \
+  -v /local/dashboards:/app/dashboards \
+  ghcr.io/wikar/dux:latest
 ```
 
-Mount your database directory to `/app/db` — the container runs `duxd` and listens on port 8080. Mount `/app/dashboards` to persist dashboards (omit it — or set `DUX_DASH=0` — if you don't use them).
+`/app/db` is DUX-owned warehouse state and is the only required warehouse volume; use a Docker named volume or native local Linux path. `/app/imports` is an optional, non-warehouse landing mount and may be a host bridge: data pipelines publish completed Parquet files there and ask DUX to import them. Mount `/app/dashboards` to persist dashboard definitions. Version that mounted directory from the host or a dedicated Git sidecar; Git is not included in the DUX image. Set `DUX_DASH=0` if dashboards are not needed.
 
 ## Requirements
 
 - Go 1.25+
 - A C compiler (required by `go-duckdb` via CGO)
 - [Bun](https://bun.sh) (for building the UI)
+- DuckDB 1.5.4 with its matching DuckLake extension. DUX pins the tested official Go binding rather than following releases automatically. Future versions are adopted and pinned only after extension, concurrency, import, and container compatibility tests pass.
 
 ### Installing a C compiler
 
@@ -78,16 +83,18 @@ go build ./cmd/duxd    # query server
 ## Project layout
 
 ```
-db/                  Data and metadata databases
-  dux.duckdb         Created automatically on first startup (measures, relationships)
-  *.duckdb / *.db    Your data files — attached read-only
+db/                  DUX-owned warehouse state
+  dux.sqlite         Measures, relationships, and operation history
+  warehouse.sqlite   DuckLake catalog
+  warehouse/         DuckLake-managed Parquet files
+  incoming/          Landing directory for controlled Parquet imports
 dashboards/          Dashboard documents (one JSON file each) + theme.json
 dux.toml             Portable export of measures and relationships
 samples/             Example .dux queries
 .agents/skills/      Agent skills (packaged per release)
 ```
 
-Both `dux` and `duxd` share the same database model: `db/dux.duckdb` is the read-write metadata store, and every other `*.duckdb` / `*.db` file in the directory is attached read-only. Tables inside an attachment are referenced with a dot-qualified name (e.g. `bev.Sales`).
+`duxd` creates and owns one DuckLake warehouse. Durable analytical data is Parquet, its transactional catalog is `warehouse.sqlite`, and DUX semantic metadata is isolated in `dux.sqlite`. DuckDB remains the transient embedded query engine; no native `.duckdb` warehouse file is opened or watched.
 
 ## CLI (`dux`)
 
@@ -103,12 +110,18 @@ Interactive REPL — enter a query over multiple lines, then press Enter on a bl
 dux
 ```
 
+The CLI is a read-only warehouse client. Start `duxd` once to initialize an empty warehouse before using `dux`.
+
 **Flags**
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--db-dir` | `db` | Directory containing data and metadata databases |
-| `--dux` | `<db-dir>/dux.duckdb` | Path to the metadata database |
+| `--db-dir` | `db` | DUX state directory |
+| `--dux` | `<db-dir>/dux.sqlite` | DUX semantic metadata SQLite path |
+| `--warehouse-catalog` | `<db-dir>/warehouse.sqlite` | DuckLake SQLite catalog path |
+| `--warehouse-data` | `<db-dir>/warehouse` | DuckLake Parquet directory |
+| `--time-travel-retention` | `720h` (30d) | Expected warehouse snapshot retention |
+| `--file-delete-delay` | `168h` (7d) | Expected unreferenced-file delay |
 | `--toml` | `dux.toml` | Load measures and relationships from a `dux.toml` file |
 | `--export` | — | Write current schema to a `dux.toml` file and exit |
 | `--import` | — | Import a `dux.toml` into the metadata DB and exit |
@@ -128,8 +141,20 @@ Listens on `:8080` (`--listen`).
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--listen` | `:8080` | HTTP listen address |
-| `--db-dir` | `db` | Directory containing data and metadata databases |
-| `--dux` | `<db-dir>/dux.duckdb` | Path to the metadata database |
+| `--db-dir` | `db` | DUX state directory |
+| `--dux` | `<db-dir>/dux.sqlite` | DUX semantic metadata SQLite path |
+| `--warehouse-catalog` | `<db-dir>/warehouse.sqlite` | DuckLake SQLite catalog path |
+| `--warehouse-data` | `<db-dir>/warehouse` | DuckLake Parquet directory |
+| `--import-dir` | `<db-dir>/incoming` | Controlled Parquet landing directory; an explicitly empty value disables imports |
+| `--import-max-files` | `100` | Maximum files in one import request |
+| `--import-timeout` | `30m` | Maximum runtime for one import |
+| `--schema-refresh-interval` | `30s` | Poll for DuckLake DDL changes (`0` disables) |
+| `--maintenance-compact-interval` | `1h` | Scheduled small-file compaction (`0` disables) |
+| `--maintenance-checkpoint-interval` | `24h` | Scheduled checkpoint (`0` disables) |
+| `--maintenance-timeout` | `30m` | Maximum runtime for one maintenance operation |
+| `--maintenance-max-compactions` | `10` | Bound work per compaction call |
+| `--time-travel-retention` | `720h` (30d) | Retain historical snapshots |
+| `--file-delete-delay` | `168h` (7d) | Delay deletion of unreferenced files |
 | `--toml` | `dux.toml` | Load measures and relationships from a `dux.toml` file |
 | `--import` | — | Import a `dux.toml` into the metadata DB on startup |
 | `--export` | — | Export current schema to a `dux.toml` file and exit |
@@ -141,6 +166,11 @@ Set `DUX_DASH=0` to disable the dashboards module (`/dash/` and `/api/dash/` ret
 ## Dashboards (Dash)
 
 `duxd` serves a dashboard designer and viewer at `/dash/`. Each dashboard is **one JSON file** under `dashboards/` — the path is its identity (`dashboards/sales/overview.json` ↔ `/dash/sales/overview`) — so dashboards diff, version, and deploy like code.
+
+For version control, mount `dashboards/` and manage that directory with Git on
+the host or in a dedicated sidecar container. DUX only reads and writes the
+dashboard files; it does not ship Git, run repository commands, or manage
+credentials and remotes.
 
 Capabilities:
 
@@ -160,21 +190,21 @@ The [`dux-dashboards`](.agents/skills/dux-dashboards/) agent skill documents the
 
 ## Agent skills
 
-[`.agents/skills/`](.agents/skills/) contains three [Agent Skills](https://agentskills.io) for AI agents working against a DUX server: **dux-querying** (the query language), **dux-semantic** (measures, relationships, model management), and **dux-dashboards** (building dashboards via JSON + API). Each release attaches them as individual `.zip` files.
+[`.agents/skills/`](.agents/skills/) contains four [Agent Skills](https://agentskills.io) for AI agents working against a DUX server: **dux-querying** (the query language), **dux-semantic** (model management), **dux-dashboards** (dashboard JSON + API), and **dux-ducklake** (Parquet imports, DuckLake maintenance, and pipeline rules). Each release attaches them as an individual `.zip` file.
 
-## Multi-database queries
+## DuckLake tables, schemas, and views
 
-When `bev.duckdb` is present in `db/`, it is attached as `bev`. Tables inside it can be referenced with a dot-qualified name:
+DUX exposes the single DuckLake warehouse without an artificial catalog prefix. A table in `main` is referenced by its table name:
 
 ```dux
-EVALUATE bev.Product
+EVALUATE Product
 ```
 
 ```dux
 EVALUATE
     SUMMARIZECOLUMNS(
-        bev.Product[Category],
-        "Net Revenue", SUM(bev.Sales[NetRevenue])
+        Product[Category],
+        "Net Revenue", SUM(Sales[NetRevenue])
     )
 ```
 
@@ -182,15 +212,109 @@ EVALUATE
 
 DuckDB **views** are introspected alongside tables and behave exactly like them in queries, relationships, and measures. The Explorer marks them with a `VIEW` badge.
 
-Tables and views in a **non-default schema** (anything other than `main`) carry the schema as an extra name segment: `db.schema.table`. The segment is omitted for the default schema.
+Tables and views in a **non-default schema** carry the schema segment as `schema.Table`. The `main` segment is omitted.
 
 ```dux
 EVALUATE
     SUMMARIZECOLUMNS(
-        bev.sales.Customer[name],
-        "Orders", COUNTROWS(RELATEDTABLE(bev.sales.Orders))
+        sales.Customer[name],
+        "Orders", COUNTROWS(RELATEDTABLE(sales.Orders))
     )
 ```
+
+## Loading data with pipelines
+
+Parquet imports and direct DuckLake writes are both first-class production
+paths. Choose based on what the pipeline naturally produces and which storage
+it can safely access.
+
+| Path | Best fit | Pipeline dependencies | Coordination |
+|------|----------|-----------------------|--------------|
+| **Parquet import API** | Pipelines that already produce Parquet files | Parquet writer and HTTP client | `duxd` validates and serializes DuckLake registration |
+| **Direct DuckLake writer** | Pipelines that want native DuckLake SQL and transactions | Compatible DuckDB, DuckLake, and SQLite extensions | Pipeline retries whole transactions during catalog contention |
+
+### Parquet import API
+
+This is the simplest path for a Parquet-native pipeline. The pipeline does not
+need DuckDB or DuckLake and never opens the warehouse catalog. It publishes
+complete Parquet files under `--import-dir`, then asks DUX to import them.
+Paths are relative to the import directory; the API deliberately does not
+upload file contents.
+
+During the request DUX validates and copies each file once into local warehouse
+storage while calculating its SHA-256. Incompatible files fail immediately,
+and content already registered to the target returns `409` with the prior
+import ID. Registration then completes transactionally through the serialized
+warehouse worker.
+
+```sh
+curl -X POST http://localhost:8080/api/warehouse/imports \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: sales-2026-07-22T12:00:00Z' \
+  -d '{"schema":"main","table":"Sales","files":["sales/part-0001.parquet"],"createIfMissing":false}'
+```
+
+An accepted request returns `202`; poll `GET /api/warehouse/imports/{id}` for
+completion. `createIfMissing` creates an empty DuckLake table from the first
+file's schema before registering all files. Existing tables require exactly
+compatible columns and types. Imported files become DuckLake-owned and must
+not be changed afterward. The landing directory may be a Docker host bridge or
+another delivery mount because DUX copies files into native local warehouse
+storage before registration. Set `--import-dir=` explicitly to disable the
+mutating import endpoint.
+
+### Direct DuckLake writers
+
+Use this path when a pipeline wants to manage tables and transactions with
+normal DuckLake SQL. A reasonable number of local pipeline processes may
+attach to the same DuckLake SQLite catalog and write while `duxd` keeps
+querying. The pipeline only needs to know it is writing DuckLake; it does not
+need to know DUX exists.
+
+Keep the SQLite catalog and Parquet directory on one native local filesystem
+visible at the same paths to every process. Do not use SMB, NFS, another
+network filesystem, or a Docker Desktop host-filesystem bridge for concurrent
+direct writers. Use bulk transactions and micro-batches, not row-at-a-time
+commits. Five minutes or more is the recommended ingestion interval; cache and
+batch lower-latency events. Data inlining is disabled. Each pipeline should
+change only its documented schemas/tables; this is currently an operational
+contract, not access-control enforcement.
+
+```sql
+INSTALL ducklake;
+INSTALL sqlite;
+LOAD ducklake;
+LOAD sqlite;
+ATTACH 'ducklake:sqlite:/srv/dux/db/warehouse.sqlite'
+    AS warehouse (DATA_INLINING_ROW_LIMIT 0);
+USE warehouse;
+
+BEGIN;
+INSERT INTO pipeline_sales.orders
+SELECT * FROM read_parquet('/srv/pipeline/batch-20260722.parquet');
+COMMIT;
+DETACH warehouse;
+```
+
+Retry the whole transaction after a temporary SQLite lock or retry-exhaustion
+error. Use backoff with jitter so independent pipelines do not recreate the
+same lock convoy; do not retry individual rows.
+
+`duxd` polls the DuckLake schema and automatically discovers pipeline DDL.
+Public DUX names are `Table` for `main` and `schema.Table` otherwise.
+
+DuckLake does not provide the primary-key/foreign-key relationship metadata
+DUX needs for analytical joins. Define those relationships through the DUX
+semantic API or `dux.toml`; they are semantic metadata, not warehouse
+constraints.
+
+Warehouse health is available at `GET /api/warehouse/status`. Maintenance runs automatically; operators can also post `compact` or `checkpoint` to `/api/warehouse/maintenance` and poll `/api/warehouse/maintenance/{id}`. Snapshot retention governs time-travel history, not current business rows; cleanup only affects files DuckLake has already marked unreferenced.
+
+These mutating warehouse endpoints share DUX's trusted-network boundary. DUX does not yet provide authentication or an administrative role; do not expose `duxd` directly to an untrusted network.
+
+Back up `dux.sqlite`, `warehouse.sqlite`, and `warehouse/` as one logical unit after coordinating writers and completing a checkpoint. Copying only the catalog or only Parquet files is not a valid warehouse backup. Dashboard files are separate and should be backed up/versioned with their mounted directory.
+
+SQLite remains the catalog while this periodic, local workload is reliable. Move the DuckLake catalog to PostgreSQL when direct writers must be remote, more than one `duxd` replica is required, ingestion becomes continuous, writers require hard authorization boundaries, or measured SQLite contention violates the supported workload.
 
 ## HTTP API
 
@@ -200,7 +324,7 @@ EVALUATE
 POST /query
 Content-Type: text/plain
 
-EVALUATE SUMMARIZECOLUMNS(bev.Product[Category], "Net Revenue", SUM(bev.Sales[NetRevenue]))
+EVALUATE SUMMARIZECOLUMNS(Product[Category], "Net Revenue", SUM(Sales[NetRevenue]))
 ```
 
 ```json
@@ -222,7 +346,7 @@ POST /query
 Content-Type: application/json
 
 {"query": "EVALUATE ...", "filters": [
-  {"table": "bev.Product", "column": "Category", "op": "in", "values": ["Water", "Soft Drinks"]}
+  {"table": "Product", "column": "Category", "op": "in", "values": ["Water", "Soft Drinks"]}
 ]}
 ```
 
@@ -232,7 +356,7 @@ Ops: `in`, `between` (`from`/`to`), `=`, `!=`, `<`, `<=`, `>`, `>=`, `contains` 
 
 ```
 GET /version
-→ {"version": "v0.4.0", "capabilities": {"dashboards": true, "externalFilters": true, "measureFormats": true}}
+→ {"version":"v0.4.0","capabilities":{"dashboards":true,"externalFilters":true,"measureFormats":true,"ducklakeWarehouse":true,"warehouseMaintenance":true,"parquetImport":true}}
 ```
 
 ### Schema
@@ -254,10 +378,10 @@ POST /import          ← dux.toml body; replaces all of the above
 
 ```
 GET /measures
-→ [{"table": "bev.Sales", "name": "Total Revenue", "expression": "SUM(bev.Sales[NetRevenue])"}]
+→ [{"table": "Sales", "name": "Total Revenue", "expression": "SUM(Sales[NetRevenue])"}]
 
 POST /measures
-{"table": "bev.Sales", "name": "Total Revenue", "expression": "SUM(bev.Sales[NetRevenue])"}
+{"table": "Sales", "name": "Total Revenue", "expression": "SUM(Sales[NetRevenue])"}
 → 201 Created
 
 DELETE /measures/:table/:name
@@ -269,12 +393,12 @@ DELETE /measures/:table/:name
 ```
 GET /relationships
 → [
-    {"from_table": "bev.Sales", "from_column": "ProductKey", "to_table": "bev.Product", "to_column": "ProductKey"},
+    {"from_table": "Sales", "from_column": "ProductKey", "to_table": "Product", "to_column": "ProductKey"},
     {"from_table": "Bridge", "from_column": "DimBKey", "to_table": "DimB", "to_column": "DimBKey", "bidirectional": true}
   ]
 
 POST /relationships
-{"from_table": "bev.Sales", "from_column": "ProductKey", "to_table": "bev.Product", "to_column": "ProductKey"}
+{"from_table": "Sales", "from_column": "ProductKey", "to_table": "Product", "to_column": "ProductKey"}
 → 201 Created
 
 POST /relationships          (bidirectional)
@@ -282,7 +406,7 @@ POST /relationships          (bidirectional)
 → 201 Created
 
 DELETE /relationships
-{"from_table": "bev.Sales", "from_column": "ProductKey", "to_table": "bev.Product", "to_column": "ProductKey"}
+{"from_table": "Sales", "from_column": "ProductKey", "to_table": "Product", "to_column": "ProductKey"}
 → 204 No Content
 ```
 
@@ -290,15 +414,15 @@ DELETE /relationships
 
 ```
 POST /hidden                 (hide a table or view)
-{"table": "bev.Venue"}
+{"table": "Venue"}
 → 201 Created
 
 POST /hidden                 (hide a single column)
-{"table": "bev.Sales", "column": "OrderId"}
+{"table": "Sales", "column": "OrderId"}
 → 201 Created
 
 DELETE /hidden               (unhide — same body shapes)
-{"table": "bev.Venue"}
+{"table": "Venue"}
 → 204 No Content
 ```
 
@@ -313,13 +437,13 @@ GET /               DUX UI — query builder, Explorer, and dashboards (/dash/)
 
 ## Measures and relationships
 
-All measures and relationships are persisted in `db/dux.duckdb` and are available immediately to every query without restarting the server. They can also be round-tripped as a portable `dux.toml` file:
+All measures and relationships are persisted in `db/dux.sqlite` and are available immediately to every query without restarting the server. They can also be round-tripped as a portable `dux.toml` file:
 
 ```toml
 [[relationship]]
-from_table  = "bev.Sales"
+from_table  = "Sales"
 from_column = "ProductKey"
-to_table    = "bev.Product"
+to_table    = "Product"
 to_column   = "ProductKey"
 
 # Bidirectional — filter context propagates in both directions through Bridge
@@ -331,14 +455,14 @@ to_column      = "DimBKey"
 bidirectional  = true
 
 [[measure]]
-table      = "bev.Sales"
+table      = "Sales"
 name       = "Total Revenue"
-expression = "SUM(bev.Sales[NetRevenue])"
+expression = "SUM(Sales[NetRevenue])"
 
 [[measure]]
-table      = "bev.Sales"
+table      = "Sales"
 name       = "Avg Order Value"
-expression = "AVERAGE(bev.Sales[NetRevenue])"
+expression = "AVERAGE(Sales[NetRevenue])"
 
 # Optional display format — structured enum, rendered locale-aware by the UI
 [measure.format]
@@ -356,16 +480,16 @@ curl -X POST http://localhost/import --data-binary @dux.toml
 
 ## Hiding tables and columns
 
-Tables, views, and individual columns can be marked **hidden**. Hidden objects stay fully queryable — the flag only affects presentation, matching Power BI's "hide in report view" semantics. Like measures and relationships, hidden designations are persisted in `db/dux.duckdb` and round-trip through `dux.toml`:
+Tables, views, and individual columns can be marked **hidden**. Hidden objects stay fully queryable — the flag only affects presentation, matching Power BI's "hide in report view" semantics. Like measures and relationships, hidden designations are persisted in `db/dux.sqlite` and round-trip through `dux.toml`:
 
 ```toml
 # Hide a whole table or view
 [[hidden]]
-table = "bev.Venue"
+table = "Venue"
 
 # Hide a single column
 [[hidden]]
-table  = "bev.Sales"
+table  = "Sales"
 column = "OrderId"
 ```
 
@@ -380,10 +504,10 @@ Every query starts with `EVALUATE`. An optional `DEFINE` block declares reusable
 ```dux
 EVALUATE
     SUMMARIZECOLUMNS(
-        bev.Product[Category],
-        "Net Revenue", SUM(bev.Sales[NetRevenue])
+        Product[Category],
+        "Net Revenue", SUM(Sales[NetRevenue])
     )
-    ORDER BY [Net Revenue] DESC, bev.Product[Category]
+    ORDER BY [Net Revenue] DESC, Product[Category]
 ```
 
 **Aggregate by a column:**
@@ -391,8 +515,8 @@ EVALUATE
 ```dux
 EVALUATE
     SUMMARIZECOLUMNS(
-        bev.Product[Category],
-        "Net Revenue", SUM(bev.Sales[NetRevenue])
+        Product[Category],
+        "Net Revenue", SUM(Sales[NetRevenue])
     )
 ```
 
@@ -401,8 +525,8 @@ EVALUATE
 ```dux
 EVALUATE
     VAR discounted_sales = FILTER(
-        bev.Sales,
-        bev.Sales[DiscountRate] > 0
+        Sales,
+        Sales[DiscountRate] > 0
     )
     RETURN SUMMARIZECOLUMNS(
         discounted_sales[VenueKey],
@@ -414,13 +538,13 @@ EVALUATE
 
 ```dux
 DEFINE
-    MEASURE bev.Sales[Avg Order Value] =
-        AVERAGE(bev.Sales[NetRevenue])
+    MEASURE Sales[Avg Order Value] =
+        AVERAGE(Sales[NetRevenue])
 
 EVALUATE
     SUMMARIZECOLUMNS(
-        bev.Product[Category],
-        "Avg Order Value", bev.Sales[Avg Order Value]
+        Product[Category],
+        "Avg Order Value", Sales[Avg Order Value]
     )
 ```
 
@@ -482,7 +606,7 @@ Table arguments compose: any table function accepts a nested table expression wh
 EVALUATE
     TOPN(
         5,
-        SUMMARIZECOLUMNS(bev.Venue[Venue], "Net Revenue", SUM(bev.Sales[NetRevenue])),
+        SUMMARIZECOLUMNS(Venue[Venue], "Net Revenue", SUM(Sales[NetRevenue])),
         [Net Revenue]
     )
 ```
@@ -503,11 +627,11 @@ Inside `CALCULATE`, a plain predicate on a column **replaces** any existing filt
 ```dux
 EVALUATE
     SUMMARIZECOLUMNS(
-        bev.Product[Category],
-        "Net Revenue", SUM(bev.Sales[NetRevenue]),
+        Product[Category],
+        "Net Revenue", SUM(Sales[NetRevenue]),
         "Share",   DIVIDE(
-            SUM(bev.Sales[NetRevenue]),
-            CALCULATE(SUM(bev.Sales[NetRevenue]), ALL(bev.Product))
+            SUM(Sales[NetRevenue]),
+            CALCULATE(SUM(Sales[NetRevenue]), ALL(Product))
         )
     )
 ```

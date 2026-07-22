@@ -36,9 +36,8 @@ func ErrorDetails(err error) (line, col int, msg string, ok bool) {
 	return 0, 0, "", false
 }
 
-// ParseMeasures parses a standalone measures file that contains only a DEFINE
-// block — typically a committed `measures.dux` file that seeds the global
-// central measure store at startup.
+// ParseMeasures parses a standalone DEFINE block, including expressions loaded
+// from dux.sqlite or dux.toml into the semantic model.
 //
 // Because the grammar requires an EVALUATE clause, a stub `EVALUATE x` is
 // unconditionally appended. Only the DEFINE declarations are returned;

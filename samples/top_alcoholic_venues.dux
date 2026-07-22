@@ -4,8 +4,8 @@
 
 EVALUATE
     VAR venue_revenue = SUMMARIZECOLUMNS(
-        bev.Venue[Venue],
-        TREATAS({"Alcoholic Beverages"}, bev.Product[Category]),
-        "Revenue", SUM(bev.Sales[NetRevenue])
+        Venue[Venue],
+        TREATAS({"Alcoholic Beverages"}, Product[Category]),
+        "Revenue", SUM(Sales[NetRevenue])
     )
     RETURN TOPN(10, venue_revenue, venue_revenue[Revenue])

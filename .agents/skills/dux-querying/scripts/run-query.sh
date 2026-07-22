@@ -3,7 +3,7 @@
 #
 # Usage:
 #   run-query.sh [-s http://host:port] query.dux
-#   echo 'EVALUATE bev.Product' | run-query.sh [-s ...]
+#   echo 'EVALUATE Product' | run-query.sh [-s ...]
 #
 # Requires: curl. Output is the raw JSON result ({"columns":[...],"rows":[...]})
 # or the server's JSON error ({"error":"...","line":N,"column":N,"stage":"..."}).

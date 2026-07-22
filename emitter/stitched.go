@@ -411,7 +411,7 @@ func (e *Emitter) stitchedClusterFrom(tables []string, needed map[string]bool, p
 		return out
 	}
 	if len(tables) == 1 {
-		return sqlIdent(tables[0]), predSQL(preds), nil
+		return e.sqlTable(tables[0]), predSQL(preds), nil
 	}
 	if e.Schema == nil {
 		return "", nil, fmt.Errorf("SUMMARIZECOLUMNS: multi-table measures require a schema for join inference")
@@ -447,7 +447,7 @@ func (e *Emitter) stitchedClusterFrom(tables []string, needed map[string]bool, p
 	var chains []*existsChain
 
 	var fromBuf strings.Builder
-	fromBuf.WriteString(sqlIdent(tables[0]))
+	fromBuf.WriteString(e.sqlTable(tables[0]))
 	for _, s := range jp.Steps {
 		fl, tl := lower(s.FromTable), lower(s.Table)
 		if ch := inChain[fl]; ch != nil {
@@ -464,9 +464,9 @@ func (e *Emitter) stitchedClusterFrom(tables []string, needed map[string]bool, p
 			continue
 		}
 		fmt.Fprintf(&fromBuf, "\nLEFT JOIN %s ON %s.%s = %s.%s",
-			sqlIdent(s.Table),
-			sqlIdent(s.FromTable), s.OnFromCol,
-			sqlIdent(s.Table), s.OnToCol,
+			e.sqlTable(s.Table),
+			e.sqlTable(s.FromTable), s.OnFromCol,
+			e.sqlTable(s.Table), s.OnToCol,
 		)
 	}
 
@@ -474,18 +474,18 @@ func (e *Emitter) stitchedClusterFrom(tables []string, needed map[string]bool, p
 	predUsed := make([]bool, len(preds))
 	for _, ch := range chains {
 		var b strings.Builder
-		fmt.Fprintf(&b, "EXISTS (SELECT 1 FROM %s", sqlIdent(ch.anchor.Table))
+		fmt.Fprintf(&b, "EXISTS (SELECT 1 FROM %s", e.sqlTable(ch.anchor.Table))
 		for _, s := range ch.steps {
 			fmt.Fprintf(&b, " JOIN %s ON %s.%s = %s.%s",
-				sqlIdent(s.Table),
-				sqlIdent(s.FromTable), s.OnFromCol,
-				sqlIdent(s.Table), s.OnToCol,
+				e.sqlTable(s.Table),
+				e.sqlTable(s.FromTable), s.OnFromCol,
+				e.sqlTable(s.Table), s.OnToCol,
 			)
 		}
 		// Correlate the chain's bridge key back to the outer FROM.
 		fmt.Fprintf(&b, " WHERE %s.%s = %s.%s",
-			sqlIdent(ch.anchor.Table), ch.anchor.OnToCol,
-			sqlIdent(ch.anchor.FromTable), ch.anchor.OnFromCol,
+			e.sqlTable(ch.anchor.Table), ch.anchor.OnToCol,
+			e.sqlTable(ch.anchor.FromTable), ch.anchor.OnFromCol,
 		)
 		for pi, p := range preds {
 			if ch.tables[lower(p.table)] {

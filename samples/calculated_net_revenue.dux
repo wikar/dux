@@ -1,5 +1,5 @@
 EVALUATE
     ADDCOLUMNS(
-        bev.Sales,
-        "Calculated Net Revenue", bev.Sales[GrossRevenue] - bev.Sales[DiscountAmount]
+        Sales,
+        "Calculated Net Revenue", Sales[GrossRevenue] - Sales[DiscountAmount]
     )

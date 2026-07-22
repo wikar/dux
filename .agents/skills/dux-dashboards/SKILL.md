@@ -28,6 +28,10 @@ PUTting it to the API — no UI interaction needed.
    returns 422 with the reason on invalid documents.
 5. Open `/dash/{path}` (add `?fullscreen` for a chrome-less wall display).
 
+Use table names exactly as `/schema` returns them: `Table` for DuckLake
+`main`, or `schema.Table` otherwise. Dashboards always query the latest
+committed DuckLake snapshot and never coordinate imports or maintenance.
+
 `scripts/put-dashboard.sh` and `scripts/get-dashboard.sh` wrap the API; the
 authoritative document schema is served at `GET /api/dash/schema.json`.
 Full endpoint semantics (ETags, conflicts, raw download):
@@ -73,8 +77,8 @@ A query-backed element in builder mode:
   "query": {
     "mode": "builder",
     "fields": [
-      { "table": "bev.Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
-      { "table": "bev.Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
+      { "table": "Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
+      { "table": "Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
     ],
     "sort": [{ "field": "NetRevenue", "dir": "desc" }],
     "topN": 5

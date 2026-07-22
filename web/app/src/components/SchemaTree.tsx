@@ -242,7 +242,7 @@ function AddMeasureModal(props: {
         value={expression}
         onChange={setExpression}
         schema={props.schema}
-        placeholder="SUM(bev.Sales[NetRevenue])"
+        placeholder="SUM(Sales[NetRevenue])"
         excludeMetaTables
       />
 

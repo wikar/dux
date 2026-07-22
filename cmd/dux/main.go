@@ -42,13 +42,13 @@ Flags:
 `
 
 func main() {
-	metaDB, db, schema, _, _, _ := bootstrap.Startup("dux", version, usage, true)
-	defer metaDB.Close()
+	runtime := bootstrap.Startup("dux", version, usage, true, false)
+	defer runtime.Close()
 
 	if args := flag.Args(); len(args) > 0 {
-		runFile(db, schema, args[0])
+		runFile(runtime.DB(), runtime.Schema, args[0])
 	} else {
-		runREPL(db, schema)
+		runREPL(runtime.DB(), runtime.Schema)
 	}
 }
 

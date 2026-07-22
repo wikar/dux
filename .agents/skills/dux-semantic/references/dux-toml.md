@@ -9,9 +9,9 @@ and `--import` / `--export` flags do one-shot conversions.
 
 ```toml
 [[relationship]]
-from_table  = "bev.Sales"       # many side
+from_table  = "Sales"       # many side
 from_column = "ProductKey"
-to_table    = "bev.Product"     # one side
+to_table    = "Product"     # one side
 to_column   = "ProductKey"
 
 # Bidirectional — filter context propagates both ways (bridge pattern)
@@ -27,9 +27,9 @@ bidirectional  = true
 
 ```toml
 [[measure]]
-table      = "bev.Sales"
+table      = "Sales"
 name       = "Total Revenue"
-expression = "SUM(bev.Sales[NetRevenue])"
+expression = "SUM(Sales[NetRevenue])"
 
 # Optional display format (structured enum, validated server-side)
 [measure.format]
@@ -43,11 +43,11 @@ kind     = "compact"            # number | decimal | percent | currency | compac
 ```toml
 # Hide a whole table or view
 [[hidden]]
-table = "bev.Venue"
+table = "Venue"
 
 # Hide a single column
 [[hidden]]
-table  = "bev.Sales"
+table  = "Sales"
 column = "OrderId"
 ```
 
@@ -57,7 +57,7 @@ Hidden objects stay queryable — presentation only.
 
 ```toml
 [[date_table]]
-table  = "bev.Date"
+table  = "Date"
 column = "Date"
 ```
 

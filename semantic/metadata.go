@@ -4,22 +4,49 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 )
 
-// MetadataDB wraps the read-write dux.duckdb connection and provides
+// MetadataDB wraps a transient DuckDB connection with dux.sqlite attached and provides
 // helpers to persist and load measures and relationships.
 type MetadataDB struct {
 	db *sql.DB
 }
 
-// OpenMetadataDB opens (or creates) a DuckDB database at path for use as the
-// dux metadata store. The two metadata tables are created if they do not exist.
+// OpenMetadataDB opens (or creates) a SQLite database at path through DuckDB's
+// SQLite extension. No native DuckDB file is persisted.
 func OpenMetadataDB(path string) (*MetadataDB, error) {
-	db, err := sql.Open("duckdb", path)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("create metadata directory: %w", err)
+	}
+	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return nil, fmt.Errorf("open metadata db %q: %w", path, err)
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`LOAD sqlite`); err != nil {
+		if _, err := db.Exec(`INSTALL sqlite`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("install SQLite extension: %w", err)
+		}
+		if _, err := db.Exec(`LOAD sqlite`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("load SQLite extension: %w", err)
+		}
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("resolve metadata db %q: %w", path, err)
+	}
+	quotedPath := "'" + strings.ReplaceAll(filepath.ToSlash(absPath), "'", "''") + "'"
+	if _, err := db.Exec(`ATTACH ` + quotedPath + ` AS dux_meta (TYPE sqlite)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("attach metadata db %q: %w", path, err)
 	}
 	m := &MetadataDB{db: db}
 	if err := m.initSchema(); err != nil {
@@ -34,8 +61,7 @@ func (m *MetadataDB) Close() error {
 	return m.db.Close()
 }
 
-// DB returns the underlying *sql.DB for use as the primary query connection
-// when dux.duckdb acts as the main database and data DBs are attached to it.
+// DB returns the transient connection used to access the attached SQLite store.
 func (m *MetadataDB) DB() *sql.DB {
 	return m.db
 }
@@ -43,7 +69,7 @@ func (m *MetadataDB) DB() *sql.DB {
 // initSchema creates the metadata tables if they do not already exist.
 func (m *MetadataDB) initSchema() error {
 	const ddl = `
-	CREATE TABLE IF NOT EXISTS dux_relationships (
+	CREATE TABLE IF NOT EXISTS dux_meta.dux_relationships (
 		id          INTEGER PRIMARY KEY,
 		from_table  TEXT NOT NULL,
 		from_column TEXT NOT NULL,
@@ -53,35 +79,70 @@ func (m *MetadataDB) initSchema() error {
 		UNIQUE (from_table, from_column, to_table, to_column)
 	);
 
-	CREATE SEQUENCE IF NOT EXISTS dux_relationships_id_seq START 1;
-
-	CREATE TABLE IF NOT EXISTS dux_measures (
+	CREATE TABLE IF NOT EXISTS dux_meta.dux_measures (
 		id         INTEGER PRIMARY KEY,
 		table_name TEXT NOT NULL,
 		name       TEXT NOT NULL,
 		expression TEXT NOT NULL,
+		format     TEXT,
 		UNIQUE (table_name, name)
 	);
 
-	CREATE SEQUENCE IF NOT EXISTS dux_measures_id_seq START 1;
-
-	CREATE TABLE IF NOT EXISTS dux_date_tables (
+	CREATE TABLE IF NOT EXISTS dux_meta.dux_date_tables (
 		table_name  TEXT PRIMARY KEY,
 		column_name TEXT NOT NULL
 	);
 
-	CREATE TABLE IF NOT EXISTS dux_hidden (
+	CREATE TABLE IF NOT EXISTS dux_meta.dux_hidden (
 		table_name  TEXT NOT NULL,
 		column_name TEXT NOT NULL DEFAULT '',
 		PRIMARY KEY (table_name, column_name)
 	);
+
+	CREATE TABLE IF NOT EXISTS dux_meta.dux_maintenance_runs (
+		id TEXT PRIMARY KEY,
+		operation TEXT NOT NULL,
+		source TEXT NOT NULL,
+		status TEXT NOT NULL,
+		requested_at TEXT NOT NULL,
+		started_at TEXT,
+		finished_at TEXT,
+		summary_json TEXT,
+		error TEXT
+	);
+
+	CREATE TABLE IF NOT EXISTS dux_meta.dux_imports (
+		id TEXT PRIMARY KEY,
+		idempotency_key TEXT UNIQUE,
+		request_hash TEXT NOT NULL,
+		schema_name TEXT NOT NULL,
+		table_name TEXT NOT NULL,
+		status TEXT NOT NULL,
+		create_if_missing BOOLEAN NOT NULL,
+		file_count INTEGER NOT NULL,
+		requested_at TEXT NOT NULL,
+		started_at TEXT,
+		finished_at TEXT,
+		files_json TEXT NOT NULL,
+		summary_json TEXT,
+		error TEXT
+	);
+
+	CREATE TABLE IF NOT EXISTS dux_meta.dux_import_files (
+		import_id TEXT NOT NULL,
+		schema_name TEXT NOT NULL,
+		table_name TEXT NOT NULL,
+		source_path TEXT NOT NULL,
+		target_path TEXT NOT NULL,
+		sha256 TEXT NOT NULL,
+		size_bytes BIGINT NOT NULL,
+		row_count BIGINT NOT NULL,
+		PRIMARY KEY (import_id, target_path),
+		UNIQUE (schema_name, table_name, sha256)
+	);
 	`
 	if _, err := m.db.Exec(ddl); err != nil {
 		return fmt.Errorf("init metadata schema: %w", err)
-	}
-	// Migration for databases created before measure formats existed.
-	if _, err := m.db.Exec(`ALTER TABLE dux_measures ADD COLUMN IF NOT EXISTS format TEXT`); err != nil {
-		return fmt.Errorf("migrate dux_measures.format: %w", err)
 	}
 	return nil
 }
@@ -106,7 +167,7 @@ func (m *MetadataDB) LoadIntoSchema(schema *Schema) error {
 // loadHidden reads the hidden designations. An empty column_name marks the
 // whole table (or view) as hidden.
 func (m *MetadataDB) loadHidden(schema *Schema) error {
-	rows, err := m.db.Query(`SELECT table_name, column_name FROM dux_hidden ORDER BY table_name, column_name`)
+	rows, err := m.db.Query(`SELECT table_name, column_name FROM dux_meta.dux_hidden ORDER BY table_name, column_name`)
 	if err != nil {
 		return fmt.Errorf("load hidden: %w", err)
 	}
@@ -127,7 +188,7 @@ func (m *MetadataDB) loadHidden(schema *Schema) error {
 }
 
 func (m *MetadataDB) loadDateTables(schema *Schema) error {
-	rows, err := m.db.Query(`SELECT table_name, column_name FROM dux_date_tables ORDER BY table_name`)
+	rows, err := m.db.Query(`SELECT table_name, column_name FROM dux_meta.dux_date_tables ORDER BY table_name`)
 	if err != nil {
 		return fmt.Errorf("load date tables: %w", err)
 	}
@@ -146,7 +207,7 @@ func (m *MetadataDB) loadDateTables(schema *Schema) error {
 func (m *MetadataDB) loadRelationships(schema *Schema) error {
 	rows, err := m.db.Query(`
 		SELECT from_table, from_column, to_table, to_column, bidirectional
-		FROM dux_relationships
+		FROM dux_meta.dux_relationships
 		ORDER BY id
 	`)
 	if err != nil {
@@ -174,7 +235,7 @@ func (m *MetadataDB) loadRelationships(schema *Schema) error {
 func (m *MetadataDB) loadMeasures(schema *Schema) error {
 	rows, err := m.db.Query(`
 		SELECT table_name, name, expression, format
-		FROM dux_measures
+		FROM dux_meta.dux_measures
 		ORDER BY table_name, name
 	`)
 	if err != nil {
@@ -206,15 +267,31 @@ func (m *MetadataDB) loadMeasures(schema *Schema) error {
 
 // SaveRelationship inserts or replaces a relationship in the metadata DB.
 func (m *MetadataDB) SaveRelationship(fromTable, fromColumn, toTable, toColumn string, bidirectional bool) error {
-	_, err := m.db.Exec(`
-		INSERT INTO dux_relationships (id, from_table, from_column, to_table, to_column, bidirectional)
-		VALUES (nextval('dux_relationships_id_seq'), ?, ?, ?, ?, ?)
-		ON CONFLICT (from_table, from_column, to_table, to_column) DO UPDATE SET bidirectional = excluded.bidirectional
-	`, fromTable, fromColumn, toTable, toColumn, bidirectional)
+	tx, err := m.db.Begin()
 	if err != nil {
 		return fmt.Errorf("save relationship: %w", err)
 	}
-	return nil
+	defer tx.Rollback() //nolint:errcheck
+	result, err := tx.Exec(`
+		UPDATE dux_meta.dux_relationships SET bidirectional = ?
+		WHERE from_table = ? AND from_column = ? AND to_table = ? AND to_column = ?
+	`, bidirectional, fromTable, fromColumn, toTable, toColumn)
+	if err != nil {
+		return fmt.Errorf("save relationship: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("save relationship: %w", err)
+	}
+	if affected == 0 {
+		if _, err := tx.Exec(`
+			INSERT INTO dux_meta.dux_relationships (from_table, from_column, to_table, to_column, bidirectional)
+			VALUES (?, ?, ?, ?, ?)
+		`, fromTable, fromColumn, toTable, toColumn, bidirectional); err != nil {
+			return fmt.Errorf("save relationship: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // SaveMeasure inserts or replaces a measure in the metadata DB.
@@ -229,40 +306,65 @@ func (m *MetadataDB) SaveMeasure(tableName, name, expression string, format *Mea
 		}
 		formatJSON = string(data)
 	}
-	_, err := m.db.Exec(`
-		INSERT INTO dux_measures (id, table_name, name, expression, format)
-		VALUES (nextval('dux_measures_id_seq'), ?, ?, ?, ?)
-		ON CONFLICT (table_name, name) DO UPDATE SET
-			expression = excluded.expression,
-			format     = excluded.format
-	`, tableName, name, expression, formatJSON)
+	tx, err := m.db.Begin()
 	if err != nil {
 		return fmt.Errorf("save measure: %w", err)
 	}
-	return nil
+	defer tx.Rollback() //nolint:errcheck
+	result, err := tx.Exec(`
+		UPDATE dux_meta.dux_measures SET expression = ?, format = ?
+		WHERE table_name = ? AND name = ?
+	`, expression, formatJSON, tableName, name)
+	if err != nil {
+		return fmt.Errorf("save measure: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("save measure: %w", err)
+	}
+	if affected == 0 {
+		if _, err := tx.Exec(`
+			INSERT INTO dux_meta.dux_measures (table_name, name, expression, format)
+			VALUES (?, ?, ?, ?)
+		`, tableName, name, expression, formatJSON); err != nil {
+			return fmt.Errorf("save measure: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // DeleteMeasure removes a measure from the metadata DB.
 func (m *MetadataDB) DeleteMeasure(tableName, name string) error {
-	_, err := m.db.Exec(`DELETE FROM dux_measures WHERE table_name = ? AND name = ?`, tableName, name)
+	_, err := m.db.Exec(`DELETE FROM dux_meta.dux_measures WHERE table_name = ? AND name = ?`, tableName, name)
 	return err
 }
 
 // SaveDateTable inserts or replaces a date-table designation in the metadata DB.
 func (m *MetadataDB) SaveDateTable(tableName, columnName string) error {
-	_, err := m.db.Exec(`
-		INSERT INTO dux_date_tables (table_name, column_name) VALUES (?, ?)
-		ON CONFLICT (table_name) DO UPDATE SET column_name = excluded.column_name
-	`, tableName, columnName)
+	tx, err := m.db.Begin()
 	if err != nil {
 		return fmt.Errorf("save date table: %w", err)
 	}
-	return nil
+	defer tx.Rollback() //nolint:errcheck
+	result, err := tx.Exec(`UPDATE dux_meta.dux_date_tables SET column_name = ? WHERE table_name = ?`, columnName, tableName)
+	if err != nil {
+		return fmt.Errorf("save date table: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("save date table: %w", err)
+	}
+	if affected == 0 {
+		if _, err := tx.Exec(`INSERT INTO dux_meta.dux_date_tables (table_name, column_name) VALUES (?, ?)`, tableName, columnName); err != nil {
+			return fmt.Errorf("save date table: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // DeleteDateTable removes a date-table designation from the metadata DB.
 func (m *MetadataDB) DeleteDateTable(tableName string) error {
-	_, err := m.db.Exec(`DELETE FROM dux_date_tables WHERE table_name = ?`, tableName)
+	_, err := m.db.Exec(`DELETE FROM dux_meta.dux_date_tables WHERE table_name = ?`, tableName)
 	return err
 }
 
@@ -273,10 +375,10 @@ func (m *MetadataDB) ReplaceDateTable(tableName, columnName string) error {
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck
-	if _, err := tx.Exec(`DELETE FROM dux_date_tables`); err != nil {
+	if _, err := tx.Exec(`DELETE FROM dux_meta.dux_date_tables`); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO dux_date_tables (table_name, column_name) VALUES (?, ?)`, tableName, columnName); err != nil {
+	if _, err := tx.Exec(`INSERT INTO dux_meta.dux_date_tables (table_name, column_name) VALUES (?, ?)`, tableName, columnName); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -284,16 +386,19 @@ func (m *MetadataDB) ReplaceDateTable(tableName, columnName string) error {
 
 // ClearDateTables atomically removes every date-table designation.
 func (m *MetadataDB) ClearDateTables() error {
-	_, err := m.db.Exec(`DELETE FROM dux_date_tables`)
+	_, err := m.db.Exec(`DELETE FROM dux_meta.dux_date_tables`)
 	return err
 }
 
 // SaveHidden marks a table (columnName == "") or a single column as hidden.
 func (m *MetadataDB) SaveHidden(tableName, columnName string) error {
 	_, err := m.db.Exec(`
-		INSERT INTO dux_hidden (table_name, column_name) VALUES (?, ?)
-		ON CONFLICT (table_name, column_name) DO NOTHING
-	`, tableName, columnName)
+		INSERT INTO dux_meta.dux_hidden (table_name, column_name)
+		SELECT ?, ?
+		WHERE NOT EXISTS (
+			SELECT 1 FROM dux_meta.dux_hidden WHERE table_name = ? AND column_name = ?
+		)
+	`, tableName, columnName, tableName, columnName)
 	if err != nil {
 		return fmt.Errorf("save hidden: %w", err)
 	}
@@ -302,14 +407,14 @@ func (m *MetadataDB) SaveHidden(tableName, columnName string) error {
 
 // DeleteHidden removes a hidden designation for a table (columnName == "") or column.
 func (m *MetadataDB) DeleteHidden(tableName, columnName string) error {
-	_, err := m.db.Exec(`DELETE FROM dux_hidden WHERE table_name = ? AND column_name = ?`, tableName, columnName)
+	_, err := m.db.Exec(`DELETE FROM dux_meta.dux_hidden WHERE table_name = ? AND column_name = ?`, tableName, columnName)
 	return err
 }
 
 // DeleteRelationship removes a relationship from the metadata DB.
 func (m *MetadataDB) DeleteRelationship(fromTable, fromColumn, toTable, toColumn string) error {
 	_, err := m.db.Exec(`
-		DELETE FROM dux_relationships
+		DELETE FROM dux_meta.dux_relationships
 		WHERE from_table = ? AND from_column = ? AND to_table = ? AND to_column = ?
 	`, fromTable, fromColumn, toTable, toColumn)
 	return err
@@ -326,23 +431,23 @@ func (m *MetadataDB) ReplaceAllFromSchema(schema *Schema) error {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if _, err := tx.Exec(`DELETE FROM dux_relationships`); err != nil {
+	if _, err := tx.Exec(`DELETE FROM dux_meta.dux_relationships`); err != nil {
 		return fmt.Errorf("clear relationships: %w", err)
 	}
-	if _, err := tx.Exec(`DELETE FROM dux_measures`); err != nil {
+	if _, err := tx.Exec(`DELETE FROM dux_meta.dux_measures`); err != nil {
 		return fmt.Errorf("clear measures: %w", err)
 	}
-	if _, err := tx.Exec(`DELETE FROM dux_date_tables`); err != nil {
+	if _, err := tx.Exec(`DELETE FROM dux_meta.dux_date_tables`); err != nil {
 		return fmt.Errorf("clear date tables: %w", err)
 	}
-	if _, err := tx.Exec(`DELETE FROM dux_hidden`); err != nil {
+	if _, err := tx.Exec(`DELETE FROM dux_meta.dux_hidden`); err != nil {
 		return fmt.Errorf("clear hidden: %w", err)
 	}
 
 	for _, r := range schema.Relationships {
 		if _, err := tx.Exec(`
-			INSERT INTO dux_relationships (id, from_table, from_column, to_table, to_column, bidirectional)
-			VALUES (nextval('dux_relationships_id_seq'), ?, ?, ?, ?, ?)
+			INSERT INTO dux_meta.dux_relationships (from_table, from_column, to_table, to_column, bidirectional)
+			VALUES (?, ?, ?, ?, ?)
 		`, r.FromTable, r.FromColumn, r.ToTable, r.ToColumn, r.Bidirectional); err != nil {
 			return fmt.Errorf("insert relationship: %w", err)
 		}
@@ -359,8 +464,8 @@ func (m *MetadataDB) ReplaceAllFromSchema(schema *Schema) error {
 				formatJSON = string(data)
 			}
 			if _, err := tx.Exec(`
-				INSERT INTO dux_measures (id, table_name, name, expression, format)
-				VALUES (nextval('dux_measures_id_seq'), ?, ?, ?, ?)
+				INSERT INTO dux_meta.dux_measures (table_name, name, expression, format)
+				VALUES (?, ?, ?, ?)
 			`, tableName, measureName, def.Expression, formatJSON); err != nil {
 				return fmt.Errorf("insert measure %q: %w", measureName, err)
 			}
@@ -369,7 +474,7 @@ func (m *MetadataDB) ReplaceAllFromSchema(schema *Schema) error {
 
 	for tableName, columnName := range schema.DateTables {
 		if _, err := tx.Exec(`
-			INSERT INTO dux_date_tables (table_name, column_name) VALUES (?, ?)
+			INSERT INTO dux_meta.dux_date_tables (table_name, column_name) VALUES (?, ?)
 		`, tableName, columnName); err != nil {
 			return fmt.Errorf("insert date table %q: %w", tableName, err)
 		}
@@ -377,7 +482,7 @@ func (m *MetadataDB) ReplaceAllFromSchema(schema *Schema) error {
 
 	for tableName := range schema.HiddenTables {
 		if _, err := tx.Exec(`
-			INSERT INTO dux_hidden (table_name, column_name) VALUES (?, '')
+			INSERT INTO dux_meta.dux_hidden (table_name, column_name) VALUES (?, '')
 		`, tableName); err != nil {
 			return fmt.Errorf("insert hidden table %q: %w", tableName, err)
 		}
@@ -385,7 +490,7 @@ func (m *MetadataDB) ReplaceAllFromSchema(schema *Schema) error {
 	for tableName, cols := range schema.HiddenColumns {
 		for columnName := range cols {
 			if _, err := tx.Exec(`
-				INSERT INTO dux_hidden (table_name, column_name) VALUES (?, ?)
+				INSERT INTO dux_meta.dux_hidden (table_name, column_name) VALUES (?, ?)
 			`, tableName, columnName); err != nil {
 				return fmt.Errorf("insert hidden column %q.%q: %w", tableName, columnName, err)
 			}

@@ -5,19 +5,18 @@ go 1.25.0
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/alecthomas/participle/v2 v2.1.1
-	github.com/duckdb/duckdb-go/v2 v2.10501.0
-	github.com/fsnotify/fsnotify v1.10.0
+	github.com/duckdb/duckdb-go/v2 v2.10504.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 )
 
 require (
 	github.com/apache/arrow-go/v18 v18.5.1 // indirect
-	github.com/duckdb/duckdb-go-bindings v0.10501.0 // indirect
-	github.com/duckdb/duckdb-go-bindings/lib/darwin-amd64 v0.10501.0 // indirect
-	github.com/duckdb/duckdb-go-bindings/lib/darwin-arm64 v0.10501.0 // indirect
-	github.com/duckdb/duckdb-go-bindings/lib/linux-amd64 v0.10501.0 // indirect
-	github.com/duckdb/duckdb-go-bindings/lib/linux-arm64 v0.10501.0 // indirect
-	github.com/duckdb/duckdb-go-bindings/lib/windows-amd64 v0.10501.0 // indirect
+	github.com/duckdb/duckdb-go-bindings v0.10504.0 // indirect
+	github.com/duckdb/duckdb-go-bindings/lib/darwin-amd64 v0.10504.0 // indirect
+	github.com/duckdb/duckdb-go-bindings/lib/darwin-arm64 v0.10504.0 // indirect
+	github.com/duckdb/duckdb-go-bindings/lib/linux-amd64 v0.10504.0 // indirect
+	github.com/duckdb/duckdb-go-bindings/lib/linux-arm64 v0.10504.0 // indirect
+	github.com/duckdb/duckdb-go-bindings/lib/windows-amd64 v0.10504.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect

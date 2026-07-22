@@ -85,7 +85,7 @@ func (e *Emitter) timeAnchor(agg, table, col string) string {
 		for _, gk := range e.groupCtx.keys {
 			if strings.EqualFold(gk.table, table) {
 				conds = append(conds, fmt.Sprintf("%s.%s = %s.%s",
-					alias, gk.col, sqlIdent(gk.table), gk.col))
+					alias, gk.col, e.sqlTable(gk.table), gk.col))
 			}
 		}
 		for _, p := range e.groupCtx.preds {
@@ -94,7 +94,7 @@ func (e *Emitter) timeAnchor(agg, table, col string) string {
 			}
 		}
 	}
-	s := fmt.Sprintf("(SELECT %s(%s.%s) FROM %s AS %s", agg, alias, col, sqlIdent(table), alias)
+	s := fmt.Sprintf("(SELECT %s(%s.%s) FROM %s AS %s", agg, alias, col, e.sqlTable(table), alias)
 	if len(conds) > 0 {
 		s += " WHERE " + strings.Join(conds, " AND ")
 	}
@@ -246,7 +246,7 @@ func (e *Emitter) emitTimeIntelTable(fc *parser.FuncCall) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("(SELECT DISTINCT %s FROM %s WHERE %s)",
-		tf.col, sqlIdent(tf.table), pred), nil
+		tf.col, e.sqlTable(tf.table), pred), nil
 }
 
 // emitTotalPeriod rewrites TOTALYTD/TOTALQTD/TOTALMTD(expr, dates[, filters...])
@@ -312,7 +312,7 @@ func (e *Emitter) emitCalendarAuto(fc *parser.FuncCall) (string, error) {
 			if dt == "DATE" || strings.HasPrefix(dt, "TIMESTAMP") {
 				scans = append(scans, fmt.Sprintf(
 					"SELECT MIN(%s) AS mn, MAX(%s) AS mx FROM %s",
-					table.Columns[c].Name, table.Columns[c].Name, sqlIdent(tk)))
+					table.Columns[c].Name, table.Columns[c].Name, e.sqlTable(tk)))
 			}
 		}
 	}

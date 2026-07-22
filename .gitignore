@@ -29,12 +29,16 @@ dashboards/**/*test.json
 db/*.duckdb
 db/*.db
 db/*.wal
+db/*.sqlite
 db/*/
 
 # Reference data
 reference/
-docs/
+docs/*
 TDD*
 
 # Import / Export
 *.toml
+
+# Samples
+samples/*/

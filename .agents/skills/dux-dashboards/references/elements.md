@@ -43,9 +43,9 @@ metric out into one series each (PBI's Legend well):
 
 ```json
 "query": { "fields": [
-  { "table": "bev.Date", "name": "MonthName", "kind": "column", "dataType": "VARCHAR" },
-  { "table": "bev.Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
-  { "table": "bev.Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
+  { "table": "Date", "name": "MonthName", "kind": "column", "dataType": "VARCHAR" },
+  { "table": "Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
+  { "table": "Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
 ]},
 "viz": { "series": "Category", "stacked": true }
 ```
@@ -88,10 +88,10 @@ While active, extra metrics are ignored; NULL/empty series values label as
 {
   "type": "pivot",
   "query": { "mode": "builder", "fields": [
-    { "table": "bev.Region", "name": "RegionName", "kind": "column", "dataType": "VARCHAR" },
-    { "table": "bev.Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
-    { "table": "bev.Customer", "name": "CustomerType", "kind": "column", "dataType": "VARCHAR" },
-    { "table": "bev.Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
+    { "table": "Region", "name": "RegionName", "kind": "column", "dataType": "VARCHAR" },
+    { "table": "Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
+    { "table": "Customer", "name": "CustomerType", "kind": "column", "dataType": "VARCHAR" },
+    { "table": "Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
   ]},
   "viz": { "cols": ["CustomerType"] }
 }
@@ -105,12 +105,12 @@ While active, extra metrics are ignored; NULL/empty series values label as
   "layout": { "x": 16, "y": 300, "w": 200, "h": 240 },
   "title": { "text": "Category", "show": true },
   "slicer": {
-    "table": "bev.Product", "column": "Category",
+    "table": "Product", "column": "Category",
     "dataType": "VARCHAR",
     "kind": "buttons",
     "multi": true,
     "limit": 20,
-    "measure": { "table": "bev.Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
+    "measure": { "table": "Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
   }
 }
 ```

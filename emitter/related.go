@@ -36,7 +36,7 @@ func (e *Emitter) emitRelated(fc *parser.FuncCall) (string, error) {
 	outer := e.rowRef(rel.FromTable)
 	alias := e.nextAlias("__rel")
 	return fmt.Sprintf("(SELECT %s.%s FROM %s AS %s WHERE %s.%s = %s.%s)",
-		alias, col, sqlIdent(rel.ToTable), alias,
+		alias, col, e.sqlTable(rel.ToTable), alias,
 		alias, rel.ToColumn, outer, rel.FromColumn), nil
 }
 
@@ -60,7 +60,7 @@ func (e *Emitter) emitRelatedTable(fc *parser.FuncCall) (string, error) {
 	outer := e.rowRef(rel.ToTable)
 	alias := e.nextAlias("__rel")
 	return fmt.Sprintf("(SELECT * FROM %s AS %s WHERE %s.%s = %s.%s)",
-		sqlIdent(rel.FromTable), alias,
+		e.sqlTable(rel.FromTable), alias,
 		alias, rel.FromColumn, outer, rel.ToColumn), nil
 }
 
@@ -102,5 +102,5 @@ func (e *Emitter) rowRef(table string) string {
 	if alias, ok := e.rowCtx.ResolveAlias(table); ok {
 		return alias
 	}
-	return sqlIdent(table)
+	return e.sqlTable(table)
 }

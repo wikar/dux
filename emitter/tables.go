@@ -27,7 +27,7 @@ type tableSource struct {
 func (e *Emitter) tableSourceFromExpr(expr *parser.Expr) (*tableSource, error) {
 	name, nameErr := e.tableNameFromExpr(expr)
 	if nameErr == nil {
-		return &tableSource{sql: sqlIdent(name), name: name}, nil
+		return &tableSource{sql: e.sqlTable(name), name: name}, nil
 	}
 	if expr != nil && expr.Left != nil && expr.Left.FuncCall != nil {
 		sub, err := e.emitExprAsTable(expr)

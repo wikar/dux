@@ -74,13 +74,12 @@ func (e *Emitter) emitTableExpr(t *parser.TableExpr) (string, error) {
 		return e.emitFuncCall(t.Func)
 	}
 	if t.QualifiedTable != "" {
-		// db.table syntax — emit as-is; DuckDB resolves the attachment alias.
-		return fmt.Sprintf("SELECT * FROM %s", sqlQualifiedIdent(t.QualifiedTable)), nil
+		return fmt.Sprintf("SELECT * FROM %s", e.sqlTable(t.QualifiedTable)), nil
 	}
 	if t.QuotedTable != "" {
-		return fmt.Sprintf("SELECT * FROM %s", sqlIdent(semantic.StripSingleQuotes(t.QuotedTable))), nil
+		return fmt.Sprintf("SELECT * FROM %s", e.sqlTable(semantic.StripSingleQuotes(t.QuotedTable))), nil
 	}
-	return fmt.Sprintf("SELECT * FROM %s", strings.ToLower(t.Table)), nil
+	return fmt.Sprintf("SELECT * FROM %s", e.sqlTable(t.Table)), nil
 }
 
 // ─── Expression emission ─────────────────────────────────────────────────────
@@ -144,10 +143,10 @@ func (e *Emitter) emitTermBase(t *parser.Term) (string, error) {
 		return "(" + s + ")", nil
 	case t.QuotedIdent != "":
 		// Single-quoted table name as a bare term (e.g. 'Order Lines' argument).
-		return sqlIdent(semantic.StripSingleQuotes(t.QuotedIdent)), nil
+		return e.sqlTable(semantic.StripSingleQuotes(t.QuotedIdent)), nil
 	case t.QualifiedIdent != "":
 		// db.table as a bare term (e.g. first argument of FILTER(bev.Sales, ...)).
-		return sqlQualifiedIdent(t.QualifiedIdent), nil
+		return e.sqlTable(t.QualifiedIdent), nil
 	case t.Ident != "":
 		// Check scalar VAR substitution before treating as a table name.
 		if e.ScalarVars != nil {
@@ -156,7 +155,7 @@ func (e *Emitter) emitTermBase(t *parser.Term) (string, error) {
 			}
 		}
 		// Bare table name as a term (e.g. first argument of FILTER/ADDCOLUMNS).
-		return strings.ToLower(t.Ident), nil
+		return e.sqlTable(t.Ident), nil
 	}
 	return "", fmt.Errorf("empty term node")
 }
@@ -641,7 +640,7 @@ func (e *Emitter) emitCalculate(fc *parser.FuncCall) (string, error) {
 		filters = append(filters, f)
 	}
 	for _, tf := range cm.timeFilters {
-		pred, err := e.emitTimeIntelPred(tf, sqlIdent(tf.table)+"."+tf.col)
+		pred, err := e.emitTimeIntelPred(tf, e.sqlTable(tf.table)+"."+tf.col)
 		if err != nil {
 			return "", err
 		}
@@ -677,12 +676,12 @@ func (e *Emitter) emitCalculate(fc *parser.FuncCall) (string, error) {
 // through the schema when more than one table is involved.
 func (e *Emitter) calcFromClause(allTables []string) (string, error) {
 	if len(allTables) == 1 {
-		return sqlIdent(allTables[0]), nil
+		return e.sqlTable(allTables[0]), nil
 	}
 	if e.Schema == nil {
 		parts := make([]string, len(allTables))
 		for i, t := range allTables {
-			parts[i] = sqlIdent(t)
+			parts[i] = e.sqlTable(t)
 		}
 		return strings.Join(parts, ", "), nil
 	}
@@ -690,19 +689,19 @@ func (e *Emitter) calcFromClause(allTables []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return emitFlatJoins(allTables[0], jp), nil
+	return e.emitFlatJoins(allTables[0], jp), nil
 }
 
 // emitFlatJoins renders a single flat LEFT JOIN tree rooted at primary,
 // following the inferred join path in order.
-func emitFlatJoins(primary string, jp *semantic.JoinPath) string {
+func (e *Emitter) emitFlatJoins(primary string, jp *semantic.JoinPath) string {
 	var fbuf strings.Builder
-	fbuf.WriteString(sqlIdent(primary))
+	fbuf.WriteString(e.sqlTable(primary))
 	for _, step := range jp.Steps {
 		fmt.Fprintf(&fbuf, "\nLEFT JOIN %s ON %s.%s = %s.%s",
-			sqlIdent(step.Table),
-			sqlIdent(step.FromTable), step.OnFromCol,
-			sqlIdent(step.Table), step.OnToCol,
+			e.sqlTable(step.Table),
+			e.sqlTable(step.FromTable), step.OnFromCol,
+			e.sqlTable(step.Table), step.OnToCol,
 		)
 	}
 	return fbuf.String()
@@ -794,7 +793,7 @@ func (e *Emitter) emitTreatas(fc *parser.FuncCall) (string, error) {
 			return "", fmt.Errorf("TREATAS: VALUES argument must be a column reference")
 		}
 		srcCol := e.resolveColName(semantic.StripSingleQuotes(vcr.ColRef.Table), semantic.StripBrackets(vcr.ColRef.Column))
-		srcTable := sqlIdent(semantic.StripSingleQuotes(vcr.ColRef.Table))
+		srcTable := e.sqlTable(semantic.StripSingleQuotes(vcr.ColRef.Table))
 		return fmt.Sprintf("%s IN (SELECT DISTINCT %s FROM %s)", cols[0], srcCol, srcTable), nil
 
 	default:
@@ -838,7 +837,7 @@ func (e *Emitter) emitAll(fc *parser.FuncCall) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", name, err)
 		}
-		return fmt.Sprintf("SELECT * FROM %s", sqlIdent(table)), nil
+		return fmt.Sprintf("SELECT * FROM %s", e.sqlTable(table)), nil
 	}
 
 	// Column form: one or more column references from the same table.
@@ -861,7 +860,7 @@ func (e *Emitter) emitAll(fc *parser.FuncCall) (string, error) {
 		}
 		cols = append(cols, e.resolveColName(tbl, semantic.StripBrackets(t.ColRef.Column)))
 	}
-	return fmt.Sprintf("(SELECT DISTINCT %s FROM %s)", strings.Join(cols, ", "), sqlIdent(table)), nil
+	return fmt.Sprintf("(SELECT DISTINCT %s FROM %s)", strings.Join(cols, ", "), e.sqlTable(table)), nil
 }
 
 func (e *Emitter) emitValuesOrDistinct(name string, fc *parser.FuncCall) (string, error) {
@@ -878,7 +877,7 @@ func (e *Emitter) emitValuesOrDistinct(name string, fc *parser.FuncCall) (string
 	if table == "" {
 		return "", fmt.Errorf("%s: cannot determine source table from argument", name)
 	}
-	return fmt.Sprintf("(SELECT DISTINCT %s FROM %s)", col, sqlIdent(table)), nil
+	return fmt.Sprintf("(SELECT DISTINCT %s FROM %s)", col, e.sqlTable(table)), nil
 }
 
 // ─── Table functions ─────────────────────────────────────────────────────────
@@ -1350,6 +1349,17 @@ func sqlIdent(name string) string {
 	return strings.ToLower(name)
 }
 
+// sqlTable maps the public DUX table key to its physical DuckDB name. Unit
+// schemas and transient tables have no SQLName and keep the historical form.
+func (e *Emitter) sqlTable(name string) string {
+	if e != nil && e.Schema != nil {
+		if table, _ := e.Schema.FindTable(name); table != nil && table.SQLName != "" {
+			return sqlQualifiedIdent(table.SQLName)
+		}
+	}
+	return sqlQualifiedIdent(name)
+}
+
 // sqlQualifiedIdent returns a DuckDB-safe SQL identifier for a qualified
 // table name with any number of segments (e.g. "bev.Sales" → bev.Sales,
 // "bev.sales.Customer" → bev.sales.customer, "my db.my table" → "my db"."my table").
@@ -1666,7 +1676,7 @@ func (e *Emitter) EmitScalarQuery(expr *parser.Expr) (string, error) {
 	if table == "" {
 		return "SELECT " + sql, nil
 	}
-	return fmt.Sprintf("SELECT %s FROM %s", sql, sqlIdent(table)), nil
+	return fmt.Sprintf("SELECT %s FROM %s", sql, e.sqlTable(table)), nil
 }
 
 // emitCountRowsScalar emits COUNTROWS as a standalone scalar SELECT.

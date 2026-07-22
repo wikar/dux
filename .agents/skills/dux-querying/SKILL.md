@@ -20,20 +20,20 @@ before it (reusable measures) and `ORDER BY` after it.
 
 ```dux
 DEFINE
-    MEASURE bev.Sales[Avg Order Value] = AVERAGE(bev.Sales[NetRevenue])
+    MEASURE Sales[Avg Order Value] = AVERAGE(Sales[NetRevenue])
 
 EVALUATE
     SUMMARIZECOLUMNS(
-        bev.Product[Category],
-        "Avg Order Value", bev.Sales[Avg Order Value]
+        Product[Category],
+        "Avg Order Value", Sales[Avg Order Value]
     )
-    ORDER BY [Avg Order Value] DESC, bev.Product[Category]
+    ORDER BY [Avg Order Value] DESC, Product[Category]
 ```
 
 References:
-- Column: `table[column]`. Table names are dot-qualified per attached
-  database: `bev.Sales`, and carry the schema when non-default:
-  `db.schema.table`. Views behave exactly like tables.
+- Column: `table[column]`. DuckLake `main` tables use `Table`; non-default
+  schemas use `schema.Table`. Views behave exactly like tables. Never add the
+  internal `warehouse` catalog prefix to a DUX query.
 - Stored measure: `table[Measure Name]` (looks like a column ref; the model
   resolves it).
 - Output alias: `[Alias]` — valid in `ORDER BY` and as the `TOPN` key.
@@ -49,17 +49,17 @@ alias/expression pairs.
 ```dux
 EVALUATE
     SUMMARIZECOLUMNS(
-        bev.Product[Category],
-        TREATAS({"Water", "Soft Drinks"}, bev.Product[Category]),
-        "Orders",    COUNT(bev.Sales[OrderId]),
-        "Avg Value", AVERAGE(bev.Sales[NetRevenue])
+        Product[Category],
+        TREATAS({"Water", "Soft Drinks"}, Product[Category]),
+        "Orders",    COUNT(Sales[OrderId]),
+        "Avg Value", AVERAGE(Sales[NetRevenue])
     )
 ```
 
 Filter arguments:
 - `TREATAS({v1, v2}, table[col])` — equality on a value set.
 - `FILTER(table, predicate)` — arbitrary predicate,
-  e.g. `FILTER(bev.Sales, bev.Sales[Quantity] >= 10)`.
+  e.g. `FILTER(Sales, Sales[Quantity] >= 10)`.
 
 Top-N (always highest-first by the key expression):
 
@@ -74,11 +74,11 @@ Percent of total:
 ```dux
 EVALUATE
     SUMMARIZECOLUMNS(
-        bev.Product[Category],
-        "Net Revenue", SUM(bev.Sales[NetRevenue]),
+        Product[Category],
+        "Net Revenue", SUM(Sales[NetRevenue]),
         "Share",   DIVIDE(
-            SUM(bev.Sales[NetRevenue]),
-            CALCULATE(SUM(bev.Sales[NetRevenue]), ALL(bev.Product))
+            SUM(Sales[NetRevenue]),
+            CALCULATE(SUM(Sales[NetRevenue]), ALL(Product))
         )
     )
 ```
@@ -87,14 +87,14 @@ Filter then aggregate with a VAR:
 
 ```dux
 EVALUATE
-    VAR discounted = FILTER(bev.Sales, bev.Sales[DiscountRate] > 0)
+    VAR discounted = FILTER(Sales, Sales[DiscountRate] > 0)
     RETURN SUMMARIZECOLUMNS(
         discounted[VenueKey],
         "Orders", COUNT(discounted[OrderId])
     )
 ```
 
-Whole-table dump (small tables only): `EVALUATE bev.Product`.
+Whole-table dump (small tables only): `EVALUATE Product`.
 
 For the complete function catalog (aggregations, iterators, table functions,
 CALCULATE/filter-context semantics, time intelligence, scalar library), read
@@ -139,7 +139,7 @@ position). Typical causes:
 - A measure referenced as `[Name]` outside ORDER BY/TOPN → use
   `table[Name]` in expressions.
 - Aggregating without a group (no dims, bare `[Measure]` refs) → reference
-  measures table-qualified: `SUMMARIZECOLUMNS("X", bev.Sales[X])`.
+  measures table-qualified: `SUMMARIZECOLUMNS("X", Sales[X])`.
 - A filter that reaches none of the measure tables → error by design
   (filters must relate to what they filter).
 

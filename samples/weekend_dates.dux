@@ -1,5 +1,5 @@
 EVALUATE
     FILTER(
-        bev.Date,
-        bev.Date[Weekend] = "Yes"
+        Date,
+        Date[Weekend] = "Yes"
     )

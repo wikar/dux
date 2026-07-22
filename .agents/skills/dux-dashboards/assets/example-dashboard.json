@@ -10,7 +10,7 @@
       "title": { "text": "Total Revenue", "show": true },
       "query": {
         "mode": "builder",
-        "fields": [{ "table": "bev.Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }]
+        "fields": [{ "table": "Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }]
       }
     },
     {
@@ -21,8 +21,8 @@
       "query": {
         "mode": "builder",
         "fields": [
-          { "table": "bev.Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
-          { "table": "bev.Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
+          { "table": "Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
+          { "table": "Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
         ],
         "sort": [{ "field": "NetRevenue", "dir": "desc" }]
       }
@@ -35,9 +35,9 @@
       "query": {
         "mode": "builder",
         "fields": [
-          { "table": "bev.Date", "name": "MonthName", "kind": "column", "dataType": "VARCHAR" },
-          { "table": "bev.Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
-          { "table": "bev.Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
+          { "table": "Date", "name": "MonthName", "kind": "column", "dataType": "VARCHAR" },
+          { "table": "Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
+          { "table": "Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
         ]
       },
       "viz": { "series": "Category", "stacked": true }
@@ -50,10 +50,10 @@
       "query": {
         "mode": "builder",
         "fields": [
-          { "table": "bev.Region", "name": "RegionName", "kind": "column", "dataType": "VARCHAR" },
-          { "table": "bev.Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
-          { "table": "bev.Customer", "name": "CustomerType", "kind": "column", "dataType": "VARCHAR" },
-          { "table": "bev.Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
+          { "table": "Region", "name": "RegionName", "kind": "column", "dataType": "VARCHAR" },
+          { "table": "Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
+          { "table": "Customer", "name": "CustomerType", "kind": "column", "dataType": "VARCHAR" },
+          { "table": "Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
         ]
       },
       "viz": { "cols": ["CustomerType"] }
@@ -64,7 +64,7 @@
       "layout": { "x": 16, "y": 136, "w": 200, "h": 240, "z": 5 },
       "title": { "text": "Category", "show": true },
       "slicer": {
-        "table": "bev.Product",
+        "table": "Product",
         "column": "Category",
         "dataType": "VARCHAR",
         "kind": "buttons",

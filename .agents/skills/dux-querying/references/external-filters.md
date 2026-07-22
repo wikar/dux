@@ -11,10 +11,10 @@ Content-Type: application/json
 
 ```json
 {
-  "query": "EVALUATE SUMMARIZECOLUMNS(bev.Product[Category], \"Net Revenue\", SUM(bev.Sales[NetRevenue]))",
+  "query": "EVALUATE SUMMARIZECOLUMNS(Product[Category], \"Net Revenue\", SUM(Sales[NetRevenue]))",
   "filters": [
-    { "table": "bev.Product", "column": "Category", "op": "in", "values": ["Water", "Soft Drinks"] },
-    { "table": "bev.Sales", "column": "Quantity", "op": ">=", "value": 10 }
+    { "table": "Product", "column": "Category", "op": "in", "values": ["Water", "Soft Drinks"] },
+    { "table": "Sales", "column": "Quantity", "op": ">=", "value": 10 }
   ]
 }
 ```
@@ -42,8 +42,8 @@ value rows; `table`/`column`/`values` are omitted.
 {
   "op": "in_tuples",
   "columns": [
-    { "table": "bev.Sales", "column": "RegionKey" },
-    { "table": "bev.Sales", "column": "VenueKey" }
+    { "table": "Sales", "column": "RegionKey" },
+    { "table": "Sales", "column": "VenueKey" }
   ],
   "tuples": [ [1, 10], [2, 24] ]
 }

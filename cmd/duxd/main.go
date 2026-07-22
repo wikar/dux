@@ -8,18 +8,19 @@
 //	GET  /schema  — returns tables, columns, and relationships as JSON
 //	GET  /export  — exports measures and relationships as TOML
 //	POST /import  — imports a dux.toml body, updates the metadata DB
-//	POST /refresh — re-introspects attached databases and reloads metadata
+//	POST /refresh — re-introspects DuckLake and reloads metadata
 //	GET  /docs    — Scalar API reference UI
 //	GET  /        — DUX UI (builder, explorer, dashboards at /dash/;
 //	                /api/dash/ backend, DUX_DASH=0 disables dashboards)
 //
 // Usage:
 //
-//	duxd [--db-dir <dir>] [--dux <metadata.duckdb>] [--toml <dux.toml>]
+//	duxd [--db-dir <dir>] [--dux <dux.sqlite>] [--toml <dux.toml>]
 //	     [--import <file>] [--export <file>]
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -30,20 +31,22 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-
-	"github.com/fsnotify/fsnotify"
+	"syscall"
+	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 
 	"github.com/danielwikar/dux/dash"
 	"github.com/danielwikar/dux/executor"
 	"github.com/danielwikar/dux/internal/bootstrap"
+	"github.com/danielwikar/dux/internal/warehouse"
 	"github.com/danielwikar/dux/parser"
 	"github.com/danielwikar/dux/semantic"
 	"github.com/danielwikar/dux/web"
@@ -52,12 +55,35 @@ import (
 // version is overridden at build time via -ldflags="-X main.version=..."
 var version = "dev"
 
+type optionalPathFlag struct {
+	value string
+	set   bool
+}
+
+func (f *optionalPathFlag) String() string { return f.value }
+func (f *optionalPathFlag) Set(value string) error {
+	f.value, f.set = value, true
+	return nil
+}
+
 // Server flags (registered before bootstrap's flag.Parse).
 // Setting the env var DUX_DASH=0 disables the dashboards module entirely.
 var (
-	listenAddr = flag.String("listen", ":8080", "HTTP listen address")
-	dashDir    = flag.String("dash-dir", "dashboards", "dashboard file store directory")
+	listenAddr         = flag.String("listen", ":8080", "HTTP listen address")
+	dashDir            = flag.String("dash-dir", "dashboards", "dashboard file store directory")
+	importDir          optionalPathFlag
+	importMaxFiles     = flag.Int("import-max-files", 100, "maximum Parquet files in one import manifest")
+	importTimeout      = flag.Duration("import-timeout", 30*time.Minute, "maximum Parquet import runtime")
+	schemaInterval     = flag.Duration("schema-refresh-interval", 30*time.Second, "DuckLake schema polling interval (0 disables)")
+	compactInterval    = flag.Duration("maintenance-compact-interval", time.Hour, "scheduled DuckLake compaction interval (0 disables)")
+	checkpointInterval = flag.Duration("maintenance-checkpoint-interval", 24*time.Hour, "scheduled DuckLake checkpoint interval (0 disables)")
+	maintenanceTimeout = flag.Duration("maintenance-timeout", 30*time.Minute, "maximum maintenance runtime")
+	maxCompactions     = flag.Int("maintenance-max-compactions", 10, "maximum files compacted per maintenance call")
 )
+
+func init() {
+	flag.Var(&importDir, "import-dir", "controlled Parquet import directory (default: <db-dir>/incoming; empty disables imports)")
+}
 
 const maxRequestBodyBytes = 4 << 20
 
@@ -67,7 +93,7 @@ const openAPISpec = `{
   "info": {
     "title": "DUX Query API",
     "version": "1.0.0",
-    "description": "Execute DUX queries against an embedded DuckDB database. Tables in attached databases are referenced with dot-qualified names (e.g. bev.Sales)."
+    "description": "Execute DUX queries against the DUX DuckLake warehouse. Main-schema tables use Table; other schemas use schema.Table. Mutating warehouse endpoints assume a trusted network and provide no authentication in this release."
   },
   "paths": {
     "/query": {
@@ -79,7 +105,7 @@ const openAPISpec = `{
           "content": {
             "text/plain": {
               "schema": { "type": "string" },
-              "example": "EVALUATE SUMMARIZECOLUMNS(bev.Product[Category], \"Net Revenue\", SUM(bev.Sales[NetRevenue]))"
+              "example": "EVALUATE SUMMARIZECOLUMNS(Product[Category], \"Net Revenue\", SUM(Sales[NetRevenue]))"
             },
             "application/json": {
               "schema": {
@@ -106,7 +132,7 @@ const openAPISpec = `{
                   }
                 }
               },
-              "example": { "query": "EVALUATE SUMMARIZECOLUMNS(bev.Product[Category], \"Net Revenue\", SUM(bev.Sales[NetRevenue]))", "filters": [ { "table": "bev.Product", "column": "Category", "op": "in", "values": ["Water", "Soft Drinks"] } ] }
+              "example": { "query": "EVALUATE SUMMARIZECOLUMNS(Product[Category], \"Net Revenue\", SUM(Sales[NetRevenue]))", "filters": [ { "table": "Product", "column": "Category", "op": "in", "values": ["Water", "Soft Drinks"] } ] }
             }
           }
         },
@@ -186,7 +212,7 @@ const openAPISpec = `{
           "content": {
             "text/plain": {
               "schema": { "type": "string" },
-              "example": "[[relationship]]\nfrom_table = \"bev.Sales\"\nfrom_column = \"ProductKey\"\nto_table = \"bev.Product\"\nto_column = \"ProductKey\"\n\n[[measure]]\ntable = \"bev.Sales\"\nname = \"Total Revenue\"\nexpression = \"SUM(bev.Sales[NetRevenue])\""
+              "example": "[[relationship]]\nfrom_table = \"Sales\"\nfrom_column = \"ProductKey\"\nto_table = \"Product\"\nto_column = \"ProductKey\"\n\n[[measure]]\ntable = \"Sales\"\nname = \"Total Revenue\"\nexpression = \"SUM(Sales[NetRevenue])\""
             }
           }
         },
@@ -232,9 +258,9 @@ const openAPISpec = `{
                 "type": "object",
                 "required": ["table", "name", "expression"],
                 "properties": {
-                  "table":      { "type": "string", "example": "bev.Sales" },
+                  "table":      { "type": "string", "example": "Sales" },
                   "name":       { "type": "string", "example": "Total Revenue" },
-                  "expression": { "type": "string", "example": "SUM(bev.Sales[NetRevenue])" }
+                  "expression": { "type": "string", "example": "SUM(Sales[NetRevenue])" }
                 }
               }
             }
@@ -297,9 +323,9 @@ const openAPISpec = `{
                 "type": "object",
                 "required": ["from_table", "from_column", "to_table", "to_column"],
                 "properties": {
-                  "from_table":    { "type": "string", "example": "bev.Sales" },
+                  "from_table":    { "type": "string", "example": "Sales" },
                   "from_column":   { "type": "string", "example": "ProductKey" },
-                  "to_table":      { "type": "string", "example": "bev.Product" },
+                  "to_table":      { "type": "string", "example": "Product" },
                   "to_column":     { "type": "string", "example": "ProductKey" },
                   "bidirectional": { "type": "boolean", "default": false, "description": "When true, filter context propagates bidirectionally through this edge. Rejected at schema load if it creates an ambiguous filter graph." }
                 }
@@ -382,7 +408,7 @@ const openAPISpec = `{
                 "type": "object",
                 "required": ["table"],
                 "properties": {
-                  "table":  { "type": "string", "example": "bev.Sales" },
+                  "table":  { "type": "string", "example": "Sales" },
                   "column": { "type": "string", "example": "OrderId", "description": "Omit to hide the whole table or view." }
                 }
               }
@@ -423,11 +449,49 @@ const openAPISpec = `{
     "/refresh": {
       "post": {
         "summary": "Refresh schema metadata",
-        "description": "Re-introspect all attached databases and reload persisted metadata and TOML configuration. Use this after the underlying database schema has changed.",
+        "description": "Re-introspect DuckLake and reload persisted metadata and TOML configuration. Automatic schema polling normally makes this unnecessary.",
         "responses": {
           "200": { "description": "Schema refreshed successfully" },
           "500": { "description": "Introspection or reload error" }
         }
+      }
+    },
+    "/api/warehouse/status": {
+      "get": {
+        "summary": "Get DuckLake warehouse status",
+        "responses": { "200": { "description": "Versions, snapshot/schema state, local paths, and scheduler configuration" } }
+      }
+    },
+    "/api/warehouse/imports": {
+      "post": {
+        "summary": "Import completed Parquet files",
+        "description": "Files must be relative to --import-dir. DUX validates and copies them once while hashing, then registers them transactionally. Idempotency-Key is required. The endpoint returns 404 when imports are disabled.",
+        "parameters": [{ "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "maxLength": 256 } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["table", "files"], "properties": { "schema": { "type": "string", "default": "main", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }, "table": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }, "files": { "type": "array", "minItems": 1, "description": "Bounded by --import-max-files (default 100)", "items": { "type": "string", "maxLength": 1024 } }, "createIfMissing": { "type": "boolean", "default": false } } } } } },
+        "responses": { "202": { "description": "Import validated, copied, and accepted for transactional registration" }, "400": { "description": "Invalid path, Parquet file, or schema" }, "404": { "description": "Imports disabled" }, "409": { "description": "Warehouse busy, conflicting idempotency key, or content already imported; error identifies the active/prior import" } }
+      }
+    },
+    "/api/warehouse/imports/{id}": {
+      "get": {
+        "summary": "Get an import job",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Import job" }, "404": { "description": "Not found" } }
+      }
+    },
+    "/api/warehouse/maintenance": {
+      "get": { "summary": "List maintenance runs", "responses": { "200": { "description": "Recent maintenance runs" } } },
+      "post": {
+        "summary": "Start warehouse maintenance",
+        "description": "Operation is compact or checkpoint.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["operation"], "properties": { "operation": { "type": "string", "enum": ["compact", "checkpoint"] } } } } } },
+        "responses": { "202": { "description": "Maintenance job accepted" }, "409": { "description": "Warehouse operation busy" } }
+      }
+    },
+    "/api/warehouse/maintenance/{id}": {
+      "get": {
+        "summary": "Get a maintenance job",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Maintenance job" }, "404": { "description": "Not found" } }
       }
     },
     "/api/dash/dashboards": {
@@ -562,7 +626,7 @@ Endpoints served on :80:
   DELETE /datetable    Clear the date-table designation
   POST /hidden         Mark a table, view, or column as hidden
   DELETE /hidden       Clear a hidden designation
-  POST /refresh        Refresh schema from attached databases
+  POST /refresh        Refresh schema from DuckLake
   GET  /docs           Scalar interactive API reference
   GET  /               DUX UI (builder, explorer, and dashboards at /dash/)
   *    /api/dash/      Dashboards API (documents, assets, theme, schema);
@@ -572,11 +636,46 @@ Flags:
 `
 
 func main() {
-	metaDB, db, schema, dbDir, metaPath, tomlPath := bootstrap.Startup("duxd", version, usage, false)
-	defer metaDB.Close()
+	runtime := bootstrap.Startup("duxd", version, usage, false, true)
+	defer runtime.Close()
+	metaDB, db, schema := runtime.Metadata, runtime.DB(), runtime.Schema
 
 	// Schema is shared between HTTP handlers; protect mutations with a mutex.
 	var schemaMu sync.RWMutex
+	refreshSchema := func() {
+		schemaMu.Lock()
+		defer schemaMu.Unlock()
+		fresh, err := runtime.RefreshSchema()
+		if err != nil {
+			log.Printf("warning: automatic schema refresh: %v", err)
+			return
+		}
+		replaceSchema(schema, fresh)
+		log.Printf("schema refreshed — %d tables, %d relationships", len(fresh.Tables), len(fresh.Relationships))
+		if _, _, warning := runtime.RefreshStatus(); warning != "" {
+			log.Printf("warning: semantic model degraded after schema refresh: %s", warning)
+		}
+	}
+	resolvedImportDir := importDir.value
+	if !importDir.set {
+		resolvedImportDir = filepath.Join(runtime.DBDir, "incoming")
+	}
+	warehouseService, err := warehouse.NewService(warehouse.ServiceConfig{
+		Owner: runtime.Owner, Metadata: metaDB.DB(), DataPath: runtime.DataPath,
+		ImportPath: resolvedImportDir, MaintenanceTimeout: *maintenanceTimeout, ImportTimeout: *importTimeout,
+		MaxCompactions: *maxCompactions, MaxImportFiles: *importMaxFiles,
+		OrphanDelay: runtime.Owner.FileDeleteDelay(),
+	})
+	if err != nil {
+		log.Fatalf("warehouse service: %v", err)
+	}
+	defer warehouseService.Close()
+	schedule := warehouseSchedule{SchemaRefresh: *schemaInterval, Compact: *compactInterval, Checkpoint: *checkpointInterval, StartedAt: time.Now().UTC()}
+	backgroundCtx, cancelBackground := context.WithCancel(context.Background())
+	defer cancelBackground()
+	go monitorWarehouseSchema(backgroundCtx, runtime, *schemaInterval, refreshSchema)
+	go scheduleWarehouseMaintenance(backgroundCtx, warehouseService, "compact", *compactInterval)
+	go scheduleWarehouseMaintenance(backgroundCtx, warehouseService, "checkpoint", *checkpointInterval)
 
 	mux := http.NewServeMux()
 
@@ -595,7 +694,19 @@ func main() {
 	mux.HandleFunc("DELETE /datetable", deleteDateTableHandler(metaDB, schema, &schemaMu))
 	mux.HandleFunc("POST /hidden", hiddenHandler(metaDB, schema, &schemaMu, true))
 	mux.HandleFunc("DELETE /hidden", hiddenHandler(metaDB, schema, &schemaMu, false))
-	mux.HandleFunc("POST /refresh", refreshHandler(metaDB, db, schema, &schemaMu, dbDir, metaPath, tomlPath))
+	mux.HandleFunc("POST /refresh", refreshHandler(runtime, schema, &schemaMu))
+	mux.HandleFunc("GET /api/warehouse/status", warehouseStatusHandler(runtime, warehouseService, schedule))
+	mux.HandleFunc("GET /api/warehouse/maintenance", maintenanceCollectionHandler(warehouseService))
+	mux.HandleFunc("POST /api/warehouse/maintenance", maintenanceCollectionHandler(warehouseService))
+	mux.HandleFunc("GET /api/warehouse/maintenance/{id}", maintenanceJobHandler(warehouseService))
+	if warehouseService.ImportsEnabled() {
+		mux.HandleFunc("POST /api/warehouse/imports", importCollectionHandler(warehouseService))
+	} else {
+		mux.HandleFunc("POST /api/warehouse/imports", func(w http.ResponseWriter, _ *http.Request) {
+			writeError(w, "Parquet imports are disabled", http.StatusNotFound)
+		})
+	}
+	mux.HandleFunc("GET /api/warehouse/imports/{id}", importJobHandler(warehouseService))
 
 	dashEnabled := os.Getenv("DUX_DASH") != "0"
 	if dashEnabled {
@@ -618,9 +729,12 @@ func main() {
 		writeJSON(w, map[string]any{
 			"version": version,
 			"capabilities": map[string]bool{
-				"externalFilters": true,
-				"measureFormats":  true,
-				"dashboards":      dashEnabled,
+				"externalFilters":      true,
+				"measureFormats":       true,
+				"dashboards":           dashEnabled,
+				"ducklakeWarehouse":    true,
+				"warehouseMaintenance": true,
+				"parquetImport":        warehouseService.ImportsEnabled(),
 			},
 		})
 	})
@@ -643,11 +757,21 @@ func main() {
 	}
 	mux.Handle("/", spaFileServer("/", distFS))
 
-	// Watch db-dir for new database files and auto-attach them.
-	go watchDBDir(dbDir, metaPath, metaDB, schema, &schemaMu)
-
-	log.Printf("duxd %s listening on %s  (metadata: %s)", version, *listenAddr, metaPath)
-	log.Fatal(http.ListenAndServe(*listenAddr, mux))
+	log.Printf("duxd %s listening on %s (metadata: %s, DuckLake: %s)", version, *listenAddr, runtime.MetaPath, runtime.CatalogPath)
+	server := &http.Server{Addr: *listenAddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	shutdown, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	go func() {
+		<-shutdown.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("warning: HTTP shutdown: %v", err)
+		}
+	}()
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatal(err)
+	}
 }
 
 // spaFileServer serves a single-page app from fsys under prefix: real files
@@ -665,84 +789,6 @@ func spaFileServer(prefix string, fsys fs.FS) http.Handler {
 		}
 		http.ServeFileFS(w, r, fsys, "index.html")
 	})
-}
-
-// watchDBDir monitors dir for new *.duckdb and *.db files, attaching them
-// to the metadata DB and merging their tables into the live schema.
-func watchDBDir(dir, metaPath string, metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		log.Printf("warning: db-dir watcher: %v", err)
-		return
-	}
-	defer watcher.Close()
-
-	// Ensure the directory exists before watching.
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		log.Printf("warning: db-dir watcher: create %q: %v", dir, err)
-		return
-	}
-	if err := watcher.Add(dir); err != nil {
-		log.Printf("warning: db-dir watcher: watch %q: %v", dir, err)
-		return
-	}
-
-	absMetaPath, _ := filepath.Abs(metaPath)
-	log.Printf("watching %q for new databases", dir)
-
-	for {
-		select {
-		case ev, ok := <-watcher.Events:
-			if !ok {
-				return
-			}
-			if !ev.Has(fsnotify.Create) {
-				continue
-			}
-			name := filepath.Base(ev.Name)
-			ext := strings.ToLower(filepath.Ext(name))
-			if ext != ".duckdb" && ext != ".db" {
-				continue
-			}
-			absPath, _ := filepath.Abs(ev.Name)
-			if absPath == absMetaPath {
-				continue
-			}
-
-			db := metaDB.DB()
-			mu.Lock()
-			stem, err := bootstrap.AttachDB(db, absPath, name)
-			if err != nil {
-				mu.Unlock()
-				log.Printf("warning: auto-attach %q as %q: %v", absPath, stem, err)
-				continue
-			}
-			log.Printf("auto-attached %q as %q (read-only)", name, stem)
-
-			// Re-introspect and merge new tables into the live schema.
-			fresh, err := semantic.IntrospectDuckDB(db)
-			if err != nil {
-				mu.Unlock()
-				log.Printf("warning: re-introspect after attach %q: %v", stem, err)
-				continue
-			}
-			for k, t := range fresh.Tables {
-				if _, exists := schema.Tables[k]; !exists {
-					schema.Tables[k] = t
-				}
-			}
-			mergeRelationships(schema, fresh.Relationships)
-			schema.ApplyHiddenFlags()
-			mu.Unlock()
-			log.Printf("schema refreshed — %d tables, %d relationships total", len(schema.Tables), len(schema.Relationships))
-
-		case err, ok := <-watcher.Errors:
-			if !ok {
-				return
-			}
-			log.Printf("warning: db-dir watcher: %v", err)
-		}
-	}
 }
 
 func mergeRelationships(schema *semantic.Schema, incoming []*semantic.Relationship) {
@@ -903,9 +949,13 @@ func valuesHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.H
 		// data files with mis-encoded text (hash DISTINCT and scans do not).
 		// The result is sorted in Go instead.
 		colSQL := quoteIdent(col.Name)
+		physicalName := table.SQLName
+		if physicalName == "" {
+			physicalName = tableKey
+		}
 		query := fmt.Sprintf(
 			"SELECT CAST(v AS VARCHAR) FROM (SELECT DISTINCT %s AS v FROM %s WHERE %s IS NOT NULL",
-			colSQL, quoteTableKey(tableKey), colSQL)
+			colSQL, quoteTableKey(physicalName), colSQL)
 		var args []any
 		if q != "" {
 			query += fmt.Sprintf(` AND CAST(%s AS VARCHAR) ILIKE ? ESCAPE '\'`, colSQL)
@@ -953,7 +1003,7 @@ func quoteIdent(name string) string {
 }
 
 // quoteTableKey quotes each dot-separated segment of a schema table key
-// (e.g. "bev.Sales" → "bev"."Sales").
+// (e.g. "warehouse.main.Sales" → "warehouse"."main"."Sales").
 func quoteTableKey(key string) string {
 	parts := strings.Split(key, ".")
 	for i, p := range parts {
@@ -1433,35 +1483,15 @@ func deleteRelationshipHandler(metaDB *semantic.MetadataDB, schema *semantic.Sch
 
 // refreshHandler serves POST /refresh — reconciles data attachments with the
 // database directory, then re-introspects them and reloads metadata and TOML.
-func refreshHandler(metaDB *semantic.MetadataDB, db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex, dbDir, metaPath, tomlPath string) http.HandlerFunc {
+func refreshHandler(runtime *bootstrap.Runtime, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 
-		if err := bootstrap.ReattachDataDBs(db, dbDir, metaPath); err != nil {
-			writeError(w, fmt.Sprintf("refresh attachments: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		// Re-introspect the database to pick up schema changes.
-		fresh, err := semantic.IntrospectDuckDB(db)
+		fresh, err := runtime.RefreshSchema()
 		if err != nil {
-			writeError(w, fmt.Sprintf("introspect: %v", err), http.StatusInternalServerError)
+			writeError(w, fmt.Sprintf("refresh: %v", err), http.StatusInternalServerError)
 			return
-		}
-
-		// Reload persisted metadata (relationships + measures) from the metadata DB.
-		if err := metaDB.LoadIntoSchema(fresh); err != nil {
-			writeError(w, fmt.Sprintf("load metadata: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		// Re-apply TOML overlay if the file exists.
-		if _, statErr := os.Stat(tomlPath); statErr == nil {
-			if err := semantic.LoadDuxTOML(tomlPath, fresh); err != nil {
-				writeError(w, fmt.Sprintf("load toml: %v", err), http.StatusInternalServerError)
-				return
-			}
 		}
 
 		// Swap the live schema while queries remain blocked.

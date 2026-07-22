@@ -321,7 +321,7 @@ func (e *Emitter) emitCalculateGrouped(fc *parser.FuncCall) (string, error) {
 	// FROM clause: every table aliased so correlation predicates can reference
 	// the outer query's tables by their unaliased names.
 	var from strings.Builder
-	fmt.Fprintf(&from, "%s AS %s", sqlIdent(tables[0]), calcAlias(tables[0]))
+	fmt.Fprintf(&from, "%s AS %s", e.sqlTable(tables[0]), calcAlias(tables[0]))
 	if len(tables) > 1 {
 		if e.Schema != nil {
 			jp, jpErr := semantic.InferJoinPath(e.Schema, tables)
@@ -330,14 +330,14 @@ func (e *Emitter) emitCalculateGrouped(fc *parser.FuncCall) (string, error) {
 			}
 			for _, step := range jp.Steps {
 				fmt.Fprintf(&from, "\nLEFT JOIN %s AS %s ON %s.%s = %s.%s",
-					sqlIdent(step.Table), calcAlias(step.Table),
+					e.sqlTable(step.Table), calcAlias(step.Table),
 					calcAlias(step.FromTable), step.OnFromCol,
 					calcAlias(step.Table), step.OnToCol,
 				)
 			}
 		} else {
 			for _, t := range tables[1:] {
-				fmt.Fprintf(&from, ", %s AS %s", sqlIdent(t), calcAlias(t))
+				fmt.Fprintf(&from, ", %s AS %s", e.sqlTable(t), calcAlias(t))
 			}
 		}
 	}
@@ -348,7 +348,7 @@ func (e *Emitter) emitCalculateGrouped(fc *parser.FuncCall) (string, error) {
 	}
 	for _, gk := range keptKeys {
 		conds = append(conds, fmt.Sprintf("%s.%s = %s.%s",
-			calcAlias(gk.table), gk.col, sqlIdent(gk.table), gk.col))
+			calcAlias(gk.table), gk.col, e.sqlTable(gk.table), gk.col))
 	}
 	for _, p := range cm.preds {
 		s, err := e.emitExpr(p)
