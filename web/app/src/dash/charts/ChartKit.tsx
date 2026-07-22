@@ -115,13 +115,10 @@ export function toSeriesData(
 
 type Formats = Record<string, MeasureFormat>;
 
-const compact = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
-
-/** Axis tick formatter using the first series' measure format (falls back
- *  to compact notation so large values stay readable). */
+/** Axis tick formatter using the first series' measure format. */
 function tickFormatter(formats: Formats, series: string[]) {
   const fmt = series.map((s) => formats[s]).find(Boolean);
-  return (v: number) => (fmt ? formatValue(v, fmt) : compact.format(v));
+  return (v: number) => formatValue(v, fmt);
 }
 
 function tooltipFormatter(formats: Formats) {
@@ -435,7 +432,7 @@ export function DonutChartViz({ data, metric, palette, formats, legend, interact
         />
         {legend && <Legend wrapperStyle={{ fontSize: 11 }} />}
         <text x="50%" y="50%" textAnchor="middle" dominantBaseline="middle" fill={AXIS} fontSize={13} fontWeight={600}>
-          {fmt ? formatValue(total, fmt) : compact.format(total)}
+          {formatValue(total, fmt)}
         </text>
       </PieChart>
     </ResponsiveContainer>

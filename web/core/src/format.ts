@@ -2,8 +2,8 @@
 // structured format enum stored on measures in the semantic model (M0).
 import type { MeasureFormat } from "./types";
 
-/** Format a numeric value per the measure's format. Non-numeric values and
- *  missing formats fall back to String(value). Percent values are ratios
+/** Format numeric values with locale-aware grouping. Explicit measure formats
+ *  override the default number format. Percent values are ratios
  *  (0.153 → "15.3%"). Locale defaults to the browser locale. */
 export function formatValue(
   value: string | number | null,
@@ -11,10 +11,17 @@ export function formatValue(
   locale?: string
 ): string {
   if (value === null) return "";
-  if (!format) return String(value);
+  if (typeof value === "string" && value.trim() === "") return value;
   const n = typeof value === "number" ? value : Number(value);
   if (isNaN(n)) return String(value);
 
+  if (!format) {
+    try {
+      return new Intl.NumberFormat(locale, { maximumFractionDigits: 20 }).format(n);
+    } catch {
+      return String(value);
+    }
+  }
   const d = format.decimals;
   const opts: Intl.NumberFormatOptions = {};
   switch (format.kind) {

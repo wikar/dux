@@ -148,13 +148,12 @@ export default function ResultTable(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** Render a cell: measure columns with a stored format use it (raw values
-   *  keep driving sort/copy); everything else renders verbatim. */
+  /** Render a cell without changing the raw value used by sort/copy. */
   function renderCell(cell: string | number | null, ci: number) {
     if (cell === null) return <span className={styles.null}>null</span>;
     if (!data) return String(cell);
     const fmt = measureCols.has(ci) ? formats[data.columns[ci]] : undefined;
-    return fmt ? formatValue(cell, fmt) : String(cell);
+    return formatValue(cell, fmt);
   }
 
   return (

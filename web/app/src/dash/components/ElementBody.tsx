@@ -493,7 +493,7 @@ function measureColWidths(
       const v = row[i];
       if (v === null || v === undefined) continue;
       const fmt = formats[data.columns[i]];
-      const tw = cv.measureText(fmt ? formatValue(v, fmt) : String(v)).width;
+      const tw = cv.measureText(formatValue(v, fmt)).width;
       if (tw > w[i]) w[i] = tw;
     }
   }
@@ -627,7 +627,7 @@ function TableBody({
                   const fmt = formats[col];
                   return (
                     <td key={j} className={fmt || typeof v === "number" ? styles.num : undefined}>
-                      {v === null || v === undefined ? "" : fmt ? formatValue(v, fmt) : String(v)}
+                      {v === null || v === undefined ? "" : formatValue(v, fmt)}
                     </td>
                   );
                 })}
