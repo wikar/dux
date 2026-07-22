@@ -43,11 +43,11 @@ metric out into one series each (PBI's Legend well):
 
 ```json
 "query": { "fields": [
-  { "table": "atp.matches", "name": "round",   "kind": "column", "dataType": "VARCHAR" },
-  { "table": "atp.matches", "name": "surface", "kind": "column", "dataType": "VARCHAR" },
-  { "table": "atp.matches", "name": "Matches", "kind": "measure" }
+  { "table": "bev.Date", "name": "MonthName", "kind": "column", "dataType": "VARCHAR" },
+  { "table": "bev.Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
+  { "table": "bev.Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
 ]},
-"viz": { "series": "surface", "stacked": true }
+"viz": { "series": "Category", "stacked": true }
 ```
 
 While active, extra metrics are ignored; NULL/empty series values label as
@@ -88,12 +88,12 @@ While active, extra metrics are ignored; NULL/empty series values label as
 {
   "type": "pivot",
   "query": { "mode": "builder", "fields": [
-    { "table": "atp.matches", "name": "tourney_level", "kind": "column", "dataType": "VARCHAR" },
-    { "table": "atp.matches", "name": "surface", "kind": "column", "dataType": "VARCHAR" },
-    { "table": "atp.matches", "name": "best_of", "kind": "column", "dataType": "BIGINT", "aggregate": "VALUES" },
-    { "table": "atp.matches", "name": "Matches", "kind": "measure" }
+    { "table": "bev.Region", "name": "RegionName", "kind": "column", "dataType": "VARCHAR" },
+    { "table": "bev.Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
+    { "table": "bev.Customer", "name": "CustomerType", "kind": "column", "dataType": "VARCHAR" },
+    { "table": "bev.Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
   ]},
-  "viz": { "cols": ["best_of"] }
+  "viz": { "cols": ["CustomerType"] }
 }
 ```
 
@@ -103,14 +103,14 @@ While active, extra metrics are ignored; NULL/empty series values label as
 {
   "id": "slicer-1", "type": "slicer",
   "layout": { "x": 16, "y": 300, "w": 200, "h": 240 },
-  "title": { "text": "tourney_level", "show": true },
+  "title": { "text": "Category", "show": true },
   "slicer": {
-    "table": "atp.matches", "column": "tourney_level",
+    "table": "bev.Product", "column": "Category",
     "dataType": "VARCHAR",
     "kind": "buttons",
     "multi": true,
     "limit": 20,
-    "measure": { "table": "atp.matches", "name": "Matches", "kind": "measure" }
+    "measure": { "table": "bev.Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
   }
 }
 ```

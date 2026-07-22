@@ -15,19 +15,19 @@ type Query struct {
 //
 //	MEASURE Sales[Total Revenue] = SUMX(Sales, Sales[Quantity] * Sales[UnitPrice])
 //	MEASURE 'Order Lines'[Amount] = SUM('Order Lines'[Amount])
-//	MEASURE atp.matches[Total] = COUNT(atp.matches[match_num])
+//	MEASURE bev.Sales[Total Revenue] = SUM(bev.Sales[NetRevenue])
 type MeasureDefinition struct {
 	// Table is the table name that owns this measure. For tables with spaces it
 	// is stored with surrounding single quotes (e.g. "'Order Lines'"); use
 	// semantic.StripSingleQuotes to obtain the bare name. For db-qualified tables
-	// it is stored as "db.table" (e.g. "atp.matches").
+	// it is stored as "db.table" (e.g. "bev.Sales").
 	Table string `parser:"'MEASURE' @( QualifiedIdent | Ident | QuotedIdent )"`
 	// Column is the raw ColRef token (e.g. "[Total Revenue]"). Brackets are
 	// stripped by the semantic resolver.
 	Column string `parser:"@ColRef '='"`
 	Expr   *Expr  `parser:"@@"`
 	// Expression holds the raw DUX expression string as entered by the user
-	// (e.g. "COUNT(matches[match_num])"). Populated at load time; not parsed.
+	// (e.g. "SUM(bev.Sales[NetRevenue])"). Populated at load time; not parsed.
 	Expression string `parser:""`
 }
 
@@ -35,7 +35,7 @@ type MeasureDefinition struct {
 // (FILTER, SUMMARIZECOLUMNS, ADDCOLUMNS, etc.) or a bare table reference.
 // Bare references may be a plain Ident (e.g. Sales), a QuotedIdent for
 // table names that contain spaces (e.g. 'Order Lines'), or a QualifiedIdent
-// for db-qualified names (e.g. atp.matches).
+// for db-qualified names (e.g. bev.Sales).
 type TableExpr struct {
 	// Pos is the 1-based source position, auto-filled by participle.
 	Pos            participelexer.Position
@@ -65,7 +65,7 @@ type OpExpr struct {
 // TREATAS, enumerating a literal filter list. Each element is a bare scalar
 // (single-column set) or a parenthesised tuple (multi-column set).
 //
-//	{"Clay", "Grass"}          — single column
+//	{"Water", "Soft Drinks"}  — single column
 //	{100, 200, 300}            — single column
 //	{("SE", 2020), ("NO", 21)} — two columns (multi-column TREATAS)
 type TableConstructor struct {
@@ -113,7 +113,7 @@ type FuncCall struct {
 //
 //	Sales[Amount]          → Table="Sales",         Column="[Amount]"
 //	'Order Lines'[Amount]  → Table="'Order Lines'",  Column="[Amount]"
-//	atp.matches[Amount]    → Table="atp.matches",    Column="[Amount]"
+//	bev.Sales[NetRevenue]  → Table="bev.Sales",      Column="NetRevenue"
 //	[Amount]               → Table="",               Column="[Amount]"
 //
 // No dot separator is used between the table name and the column bracket.
@@ -162,7 +162,7 @@ type OrderByExpr struct {
 
 // VarBinding is a single VAR declaration inside an EVALUATE clause.
 //
-//	VAR GrassMatches = FILTER(matches, matches[surface] = "Grass")
+//	VAR Discounted = FILTER(bev.Sales, bev.Sales[DiscountRate] > 0)
 //
 // The Name is the plain identifier used to reference this result in subsequent
 // VARs or in the RETURN expression. The Expr is the table expression whose

@@ -74,7 +74,7 @@ function TableGroup(props: {
   const measures = (() => {
     const m = props.schema.Measures;
     if (!m) return [];
-    // Measures may be keyed by bare name ("matches") or qualified ("atp.matches").
+    // Measures may be keyed by bare name ("Sales") or qualified ("bev.Sales").
     // Try both so qualified table names in the schema panel still find their measures.
     const dot = props.tableName.indexOf(".");
     const bare = dot >= 0 ? props.tableName.slice(dot + 1) : props.tableName;
@@ -242,7 +242,7 @@ function AddMeasureModal(props: {
         value={expression}
         onChange={setExpression}
         schema={props.schema}
-        placeholder="COUNT(matches[match_num])"
+        placeholder="SUM(bev.Sales[NetRevenue])"
         excludeMetaTables
       />
 

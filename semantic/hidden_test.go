@@ -9,8 +9,8 @@ import (
 
 func TestHiddenTOMLRoundTrip(t *testing.T) {
 	schema := semantic.NewSchema()
-	schema.SetTableHidden("atp.rounds", true)
-	schema.SetColumnHidden("atp.matches", "winner_id", true)
+	schema.SetTableHidden("bev.Venue", true)
+	schema.SetColumnHidden("bev.Sales", "OrderId", true)
 
 	data, err := semantic.ExportDuxTOML(schema)
 	if err != nil {
@@ -25,48 +25,48 @@ func TestHiddenTOMLRoundTrip(t *testing.T) {
 	if err := semantic.LoadDuxTOMLBytes(data, reloaded); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if !reloaded.HiddenTables["atp.rounds"] {
+	if !reloaded.HiddenTables["bev.venue"] {
 		t.Errorf("table hidden flag lost in round trip")
 	}
-	if !reloaded.HiddenColumns["atp.matches"]["winner_id"] {
+	if !reloaded.HiddenColumns["bev.sales"]["orderid"] {
 		t.Errorf("column hidden flag lost in round trip")
 	}
 }
 
 func TestSetHiddenStampsLiveTables(t *testing.T) {
 	schema := semantic.NewSchema()
-	schema.Tables["atp.Matches"] = &semantic.Table{
-		Name: "Matches",
+	schema.Tables["bev.Sales"] = &semantic.Table{
+		Name: "Sales",
 		Columns: map[string]*semantic.Column{
-			"Winner_ID": {Name: "Winner_ID", DataType: "BIGINT"},
+			"OrderId": {Name: "OrderId", DataType: "VARCHAR"},
 		},
 	}
 
 	// Case-insensitive application onto the live structs.
-	schema.SetTableHidden("ATP.MATCHES", true)
-	schema.SetColumnHidden("atp.matches", "winner_id", true)
-	if !schema.Tables["atp.Matches"].Hidden {
+	schema.SetTableHidden("BEV.SALES", true)
+	schema.SetColumnHidden("bev.sales", "orderid", true)
+	if !schema.Tables["bev.Sales"].Hidden {
 		t.Errorf("table Hidden flag not stamped")
 	}
-	if !schema.Tables["atp.Matches"].Columns["Winner_ID"].Hidden {
+	if !schema.Tables["bev.Sales"].Columns["OrderId"].Hidden {
 		t.Errorf("column Hidden flag not stamped")
 	}
 
-	schema.SetTableHidden("atp.Matches", false)
-	if schema.Tables["atp.Matches"].Hidden {
+	schema.SetTableHidden("bev.Sales", false)
+	if schema.Tables["bev.Sales"].Hidden {
 		t.Errorf("table Hidden flag not cleared")
 	}
 
 	schema.ClearHidden()
-	if schema.Tables["atp.Matches"].Columns["Winner_ID"].Hidden {
+	if schema.Tables["bev.Sales"].Columns["OrderId"].Hidden {
 		t.Errorf("ClearHidden did not clear column flag")
 	}
 
 	// ApplyHiddenFlags re-stamps from the maps after re-introspection.
-	schema.SetColumnHidden("atp.matches", "winner_id", true)
-	schema.Tables["atp.Matches"].Columns["Winner_ID"].Hidden = false
+	schema.SetColumnHidden("bev.sales", "orderid", true)
+	schema.Tables["bev.Sales"].Columns["OrderId"].Hidden = false
 	schema.ApplyHiddenFlags()
-	if !schema.Tables["atp.Matches"].Columns["Winner_ID"].Hidden {
+	if !schema.Tables["bev.Sales"].Columns["OrderId"].Hidden {
 		t.Errorf("ApplyHiddenFlags did not re-stamp column flag")
 	}
 }

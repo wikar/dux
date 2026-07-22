@@ -1,5 +1,0 @@
-EVALUATE
-    SUMMARIZECOLUMNS(
-        matches[surface],
-        "Matches", COUNT(matches[match_num])
-    )

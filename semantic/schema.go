@@ -35,7 +35,7 @@ type Schema struct {
 }
 
 // Table represents a table or view in the schema. The database and DuckDB
-// schema qualifiers are encoded in the Tables map key (e.g. "atp.matches").
+// schema qualifiers are encoded in the Tables map key (e.g. "bev.Sales").
 type Table struct {
 	Name    string
 	IsView  bool // true when introspected as a VIEW rather than a BASE TABLE
@@ -238,7 +238,7 @@ func IntrospectDuckDB(db *sql.DB) (*Schema, error) {
 		// segment: "db.schema.table" (or "schema.table" for the primary db).
 		dbAlias := ""
 		if catalog != "memory" && catalog != "" {
-			// catalog holds the attachment alias (e.g. "atp") for attached databases,
+			// catalog holds the attachment alias (e.g. "bev") for attached databases,
 			// and the filename stem for the primary. We distinguish them by checking
 			// whether the catalog matches the reserved primary marker stored in the
 			// schema — but since we don't know the primary name here, we key ALL

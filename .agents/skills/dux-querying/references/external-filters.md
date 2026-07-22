@@ -11,10 +11,10 @@ Content-Type: application/json
 
 ```json
 {
-  "query": "EVALUATE SUMMARIZECOLUMNS(atp.matches[surface], \"Matches\", COUNT(atp.matches[match_num]))",
+  "query": "EVALUATE SUMMARIZECOLUMNS(bev.Product[Category], \"Net Revenue\", SUM(bev.Sales[NetRevenue]))",
   "filters": [
-    { "table": "atp.matches", "column": "tourney_level", "op": "in", "values": ["G", "M"] },
-    { "table": "atp.matches", "column": "draw_size", "op": ">=", "value": 32 }
+    { "table": "bev.Product", "column": "Category", "op": "in", "values": ["Water", "Soft Drinks"] },
+    { "table": "bev.Sales", "column": "Quantity", "op": ">=", "value": 10 }
   ]
 }
 ```
@@ -42,15 +42,15 @@ value rows; `table`/`column`/`values` are omitted.
 {
   "op": "in_tuples",
   "columns": [
-    { "table": "sales", "column": "region" },
-    { "table": "sales", "column": "product" }
+    { "table": "bev.Sales", "column": "RegionKey" },
+    { "table": "bev.Sales", "column": "VenueKey" }
   ],
-  "tuples": [ ["North", "Widget"], ["South", "Gadget"] ]
+  "tuples": [ [1, 10], [2, 24] ]
 }
 ```
 
 Compiles to a multi-column `TREATAS` emitted as OR-of-ANDs
-(`(region='North' AND product='Widget') OR (region='South' AND product='Gadget')`).
+(`(RegionKey=1 AND VenueKey=10) OR (RegionKey=2 AND VenueKey=24)`).
 **Constraint:** all `columns` must belong to **one table** so the predicate
 routes to a single cluster; a cross-table request is rejected (callers should
 fall back to per-column `in` filters, an approximate cross-product).

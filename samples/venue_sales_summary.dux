@@ -1,0 +1,17 @@
+// Average discounted order value alongside order count by venue.
+// Demonstrates: DEFINE MEASURE, VAR, SUMMARIZECOLUMNS with multiple aggregations.
+
+DEFINE
+    MEASURE bev.Sales[Avg Order Value] =
+        AVERAGE(bev.Sales[NetRevenue])
+
+EVALUATE
+    VAR discounted_sales = FILTER(
+        bev.Sales,
+        bev.Sales[DiscountRate] > 0
+    )
+    RETURN SUMMARIZECOLUMNS(
+        discounted_sales[VenueKey],
+        "Orders",          COUNT(discounted_sales[OrderId]),
+        "Avg Order Value", AVERAGE(discounted_sales[NetRevenue])
+    )

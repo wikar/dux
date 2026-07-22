@@ -1,0 +1,11 @@
+// Top 10 venues by alcoholic-beverage revenue.
+// Aggregates with a category filter, then ranks with TOPN.
+// Demonstrates: VAR, TREATAS, SUMMARIZECOLUMNS, TOPN.
+
+EVALUATE
+    VAR venue_revenue = SUMMARIZECOLUMNS(
+        bev.Venue[Venue],
+        TREATAS({"Alcoholic Beverages"}, bev.Product[Category]),
+        "Revenue", SUM(bev.Sales[NetRevenue])
+    )
+    RETURN TOPN(10, venue_revenue, venue_revenue[Revenue])

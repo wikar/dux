@@ -9,10 +9,10 @@ and `--import` / `--export` flags do one-shot conversions.
 
 ```toml
 [[relationship]]
-from_table  = "atp.matches"     # many side
-from_column = "winner_id"
-to_table    = "atp.players"     # one side
-to_column   = "player_id"
+from_table  = "bev.Sales"       # many side
+from_column = "ProductKey"
+to_table    = "bev.Product"     # one side
+to_column   = "ProductKey"
 
 # Bidirectional — filter context propagates both ways (bridge pattern)
 [[relationship]]
@@ -27,9 +27,9 @@ bidirectional  = true
 
 ```toml
 [[measure]]
-table      = "atp.matches"
-name       = "Total Matches"
-expression = "COUNT(atp.matches[match_num])"
+table      = "bev.Sales"
+name       = "Total Revenue"
+expression = "SUM(bev.Sales[NetRevenue])"
 
 # Optional display format (structured enum, validated server-side)
 [measure.format]
@@ -43,12 +43,12 @@ kind     = "compact"            # number | decimal | percent | currency | compac
 ```toml
 # Hide a whole table or view
 [[hidden]]
-table = "atp.rounds"
+table = "bev.Venue"
 
 # Hide a single column
 [[hidden]]
-table  = "atp.matches"
-column = "winner_id"
+table  = "bev.Sales"
+column = "OrderId"
 ```
 
 Hidden objects stay queryable — presentation only.
@@ -57,8 +57,8 @@ Hidden objects stay queryable — presentation only.
 
 ```toml
 [[date_table]]
-table  = "dates"
-column = "date"
+table  = "bev.Date"
+column = "Date"
 ```
 
 Only one table can be the date table. On it, time-intelligence functions

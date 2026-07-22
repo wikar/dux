@@ -146,7 +146,7 @@ func (e *Emitter) emitTermBase(t *parser.Term) (string, error) {
 		// Single-quoted table name as a bare term (e.g. 'Order Lines' argument).
 		return sqlIdent(semantic.StripSingleQuotes(t.QuotedIdent)), nil
 	case t.QualifiedIdent != "":
-		// db.table as a bare term (e.g. first argument of FILTER(atp.matches, ...)).
+		// db.table as a bare term (e.g. first argument of FILTER(bev.Sales, ...)).
 		return sqlQualifiedIdent(t.QualifiedIdent), nil
 	case t.Ident != "":
 		// Check scalar VAR substitution before treating as a table name.
@@ -711,11 +711,11 @@ func emitFlatJoins(primary string, jp *semantic.JoinPath) string {
 // emitTreatas emits TREATAS(source, t[col], ...) as a SQL predicate for use
 // inside CALCULATE filter arguments.
 //
-//	Pattern A: TREATAS({"Clay","Grass"}, matches[surface])
-//	         → surface IN ('Clay', 'Grass')
+//	Pattern A: TREATAS({"Water","Soft Drinks"}, Product[Category])
+//	         → Category IN ('Water', 'Soft Drinks')
 //
-//	Pattern B: TREATAS(VALUES(players[player_id]), matches[winner_id])
-//	         → winner_id IN (SELECT DISTINCT player_id FROM players)
+//	Pattern B: TREATAS(VALUES(Product[ProductKey]), Sales[ProductKey])
+//	         → ProductKey IN (SELECT DISTINCT ProductKey FROM Product)
 //
 //	Pattern C: TREATAS({("SE",2020),("NO",2021)}, sales[country], sales[year])
 //	         → ((country = 'SE' AND year = 2020) OR (country = 'NO' AND year = 2021))
@@ -732,7 +732,7 @@ func (e *Emitter) emitTreatas(fc *parser.FuncCall) (string, error) {
 	for i, a := range fc.Args[1:] {
 		t := a.Left
 		if t == nil || t.ColRef == nil || len(a.Right) > 0 {
-			return "", fmt.Errorf("TREATAS: target arguments must be column references (e.g. matches[surface])")
+			return "", fmt.Errorf("TREATAS: target arguments must be column references (e.g. Product[Category])")
 		}
 		cols[i] = e.resolveColName(semantic.StripSingleQuotes(t.ColRef.Table), semantic.StripBrackets(t.ColRef.Column))
 	}
@@ -1351,7 +1351,7 @@ func sqlIdent(name string) string {
 }
 
 // sqlQualifiedIdent returns a DuckDB-safe SQL identifier for a qualified
-// table name with any number of segments (e.g. "atp.matches" → atp.matches,
+// table name with any number of segments (e.g. "bev.Sales" → bev.Sales,
 // "bev.sales.Customer" → bev.sales.customer, "my db.my table" → "my db"."my table").
 func sqlQualifiedIdent(name string) string {
 	parts := strings.Split(name, ".")

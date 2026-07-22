@@ -1,0 +1,5 @@
+EVALUATE
+    SUMMARIZECOLUMNS(
+        bev.Product[Category],
+        "Net Revenue", SUM(bev.Sales[NetRevenue])
+    )

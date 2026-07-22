@@ -119,7 +119,7 @@ func Bootstrap(dbDir, metaPath, tomlPath string) (*semantic.MetadataDB, *sql.DB,
 
 // AttachDataDBs attaches every *.duckdb and *.db file in dir (except the
 // metadata DB itself) to db as a read-only named attachment.
-// The attachment alias is the filename stem (e.g. "atp.duckdb" → alias "atp").
+// The attachment alias is the filename stem (e.g. "bev.duckdb" → alias "bev").
 func AttachDataDBs(db *sql.DB, dir, metaPath string) error {
 	files, err := dataDBFiles(dir, metaPath)
 	if err != nil {

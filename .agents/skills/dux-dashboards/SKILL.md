@@ -69,14 +69,14 @@ A query-backed element in builder mode:
 {
   "id": "bar-1", "type": "bar",
   "layout": { "x": 16, "y": 16, "w": 400, "h": 240, "z": 1 },
-  "title": { "text": "Matches by surface", "show": true },
+  "title": { "text": "Revenue by category", "show": true },
   "query": {
     "mode": "builder",
     "fields": [
-      { "table": "atp.matches", "name": "surface", "kind": "column", "dataType": "VARCHAR" },
-      { "table": "atp.matches", "name": "Matches", "kind": "measure" }
+      { "table": "bev.Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
+      { "table": "bev.Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
     ],
-    "sort": [{ "field": "Matches", "dir": "desc" }],
+    "sort": [{ "field": "NetRevenue", "dir": "desc" }],
     "topN": 5
   },
   "viz": { "stacked": false, "legend": true }
@@ -105,7 +105,7 @@ stored in the document** — they live in the page URL's `?f=` parameter,
 which is also the deep-link/share mechanism:
 
 ```
-/dash/sales/overview?f={"slicer-1":["G"],"slicer-2":["Grass"]}
+/dash/sales/overview?f={"slicer-1":["Water"],"slicer-2":["B2C"]}
 ```
 
 Selections fan out to every other element as external filters (AND

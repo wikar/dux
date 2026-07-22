@@ -219,7 +219,7 @@ func (r *Resolver) resolveTerm(t *parser.Term) error {
 	case t.SubExpr != nil:
 		return r.resolveExpr(t.SubExpr)
 	case t.QualifiedIdent != "":
-		// db.table as a bare term (e.g. first arg of FILTER(atp.matches, ...))
+		// db.table as a bare term (e.g. first arg of FILTER(bev.Sales, ...))
 		return nil
 	case t.Ident != "":
 		// Bare identifier: VAR names and unknown idents are accepted at runtime.
@@ -298,7 +298,7 @@ func (r *Resolver) resolveColRef(cr *parser.ColRef) error {
 
 // tableExists reports whether tableName is present in the schema. It checks
 // both the raw key and, for unqualified names, scans all qualified keys so
-// that "matches" resolves when tables are keyed as "atp.matches".
+// that "Sales" resolves when tables are keyed as "bev.Sales".
 func (r *Resolver) tableExists(tableName string) bool {
 	if _, ok := r.Schema.Tables[tableName]; ok {
 		return true

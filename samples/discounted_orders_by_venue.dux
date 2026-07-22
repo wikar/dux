@@ -1,0 +1,13 @@
+// Discounted order counts per venue.
+// Uses a VAR to pre-filter Sales, then groups the filtered rows by venue key.
+// Demonstrates: VAR, FILTER, SUMMARIZECOLUMNS.
+
+EVALUATE
+    VAR discounted_sales = FILTER(
+        bev.Sales,
+        bev.Sales[DiscountRate] > 0
+    )
+    RETURN SUMMARIZECOLUMNS(
+        discounted_sales[VenueKey],
+        "Discounted Orders", COUNT(discounted_sales[OrderId])
+    )

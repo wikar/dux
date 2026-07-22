@@ -67,7 +67,7 @@ const openAPISpec = `{
   "info": {
     "title": "DUX Query API",
     "version": "1.0.0",
-    "description": "Execute DUX queries against an embedded DuckDB database. Tables in attached databases are referenced with dot-qualified names (e.g. atp.matches)."
+    "description": "Execute DUX queries against an embedded DuckDB database. Tables in attached databases are referenced with dot-qualified names (e.g. bev.Sales)."
   },
   "paths": {
     "/query": {
@@ -79,7 +79,7 @@ const openAPISpec = `{
           "content": {
             "text/plain": {
               "schema": { "type": "string" },
-              "example": "EVALUATE SUMMARIZECOLUMNS(atp.matches[surface], \"Matches\", COUNT(atp.matches[match_num]))"
+              "example": "EVALUATE SUMMARIZECOLUMNS(bev.Product[Category], \"Net Revenue\", SUM(bev.Sales[NetRevenue]))"
             },
             "application/json": {
               "schema": {
@@ -106,7 +106,7 @@ const openAPISpec = `{
                   }
                 }
               },
-              "example": { "query": "EVALUATE SUMMARIZECOLUMNS(atp.matches[surface], \"Matches\", COUNT(atp.matches[match_num]))", "filters": [ { "table": "atp.matches", "column": "surface", "op": "in", "values": ["Clay", "Grass"] } ] }
+              "example": { "query": "EVALUATE SUMMARIZECOLUMNS(bev.Product[Category], \"Net Revenue\", SUM(bev.Sales[NetRevenue]))", "filters": [ { "table": "bev.Product", "column": "Category", "op": "in", "values": ["Water", "Soft Drinks"] } ] }
             }
           }
         },
@@ -186,7 +186,7 @@ const openAPISpec = `{
           "content": {
             "text/plain": {
               "schema": { "type": "string" },
-              "example": "[[relationship]]\nfrom_table = \"atp.matches\"\nfrom_column = \"winner_id\"\nto_table = \"atp.players\"\nto_column = \"player_id\"\n\n[[measure]]\ntable = \"atp.matches\"\nname = \"Total Matches\"\nexpression = \"COUNT(atp.matches[match_num])\""
+              "example": "[[relationship]]\nfrom_table = \"bev.Sales\"\nfrom_column = \"ProductKey\"\nto_table = \"bev.Product\"\nto_column = \"ProductKey\"\n\n[[measure]]\ntable = \"bev.Sales\"\nname = \"Total Revenue\"\nexpression = \"SUM(bev.Sales[NetRevenue])\""
             }
           }
         },
@@ -232,9 +232,9 @@ const openAPISpec = `{
                 "type": "object",
                 "required": ["table", "name", "expression"],
                 "properties": {
-                  "table":      { "type": "string", "example": "atp.matches" },
-                  "name":       { "type": "string", "example": "Total Matches" },
-                  "expression": { "type": "string", "example": "COUNT(atp.matches[match_num])" }
+                  "table":      { "type": "string", "example": "bev.Sales" },
+                  "name":       { "type": "string", "example": "Total Revenue" },
+                  "expression": { "type": "string", "example": "SUM(bev.Sales[NetRevenue])" }
                 }
               }
             }
@@ -297,10 +297,10 @@ const openAPISpec = `{
                 "type": "object",
                 "required": ["from_table", "from_column", "to_table", "to_column"],
                 "properties": {
-                  "from_table":    { "type": "string", "example": "atp.matches" },
-                  "from_column":   { "type": "string", "example": "winner_id" },
-                  "to_table":      { "type": "string", "example": "atp.players" },
-                  "to_column":     { "type": "string", "example": "player_id" },
+                  "from_table":    { "type": "string", "example": "bev.Sales" },
+                  "from_column":   { "type": "string", "example": "ProductKey" },
+                  "to_table":      { "type": "string", "example": "bev.Product" },
+                  "to_column":     { "type": "string", "example": "ProductKey" },
                   "bidirectional": { "type": "boolean", "default": false, "description": "When true, filter context propagates bidirectionally through this edge. Rejected at schema load if it creates an ambiguous filter graph." }
                 }
               }
@@ -382,8 +382,8 @@ const openAPISpec = `{
                 "type": "object",
                 "required": ["table"],
                 "properties": {
-                  "table":  { "type": "string", "example": "atp.matches" },
-                  "column": { "type": "string", "example": "winner_id", "description": "Omit to hide the whole table or view." }
+                  "table":  { "type": "string", "example": "bev.Sales" },
+                  "column": { "type": "string", "example": "OrderId", "description": "Omit to hide the whole table or view." }
                 }
               }
             }

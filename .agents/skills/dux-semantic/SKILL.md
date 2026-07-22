@@ -21,7 +21,7 @@ database (`db/dux.duckdb`) and takes effect immediately — no server restart.
 
 - `dux.duckdb` — the read-write **metadata** store (created automatically).
 - Every other `*.duckdb` / `*.db` file — **data**, attached read-only under
-  its filename: `atp.duckdb` → tables referenced as `atp.matches`.
+  its filename: `bev.duckdb` → tables referenced as `bev.Sales`.
 - DuckDB views behave exactly like tables. Objects in a non-default schema
   carry it as an extra segment: `db.schema.table`.
 
@@ -46,8 +46,8 @@ A measure is a named DUX expression bound to a home table:
 
 ```
 POST /measures
-{"table": "atp.matches", "name": "Total Matches",
- "expression": "COUNT(atp.matches[match_num])",
+{"table": "bev.Sales", "name": "Total Revenue",
+ "expression": "SUM(bev.Sales[NetRevenue])",
  "format": {"kind": "compact"}}
 ```
 
@@ -59,14 +59,14 @@ POST /measures
   required for (and only valid with) the `currency` kind.
 - `DELETE /measures/{table}/{name}` removes one. `GET /measures` lists all.
 - Verify a new measure immediately with a query:
-  `EVALUATE SUMMARIZECOLUMNS("X", atp.matches[Total Matches])`.
+  `EVALUATE SUMMARIZECOLUMNS("X", bev.Sales[Total Revenue])`.
 
 ## Relationships
 
 ```
 POST /relationships
-{"from_table": "atp.matches", "from_column": "winner_id",
- "to_table": "atp.players", "to_column": "player_id"}
+{"from_table": "bev.Sales", "from_column": "ProductKey",
+ "to_table": "bev.Product", "to_column": "ProductKey"}
 ```
 
 - Direction matters: `from` is the many side, `to` the one side. Filter

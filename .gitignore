@@ -1,5 +1,6 @@
 # Binaries
 *.exe
+*.exe~
 
 # Test binary and coverage output
 *.test

@@ -87,7 +87,7 @@ samples/             Example .dux queries
 .agents/skills/      Agent skills (packaged per release)
 ```
 
-Both `dux` and `duxd` share the same database model: `db/dux.duckdb` is the read-write metadata store, and every other `*.duckdb` / `*.db` file in the directory is attached read-only. Tables inside an attachment are referenced with a dot-qualified name (e.g. `atp.matches`).
+Both `dux` and `duxd` share the same database model: `db/dux.duckdb` is the read-write metadata store, and every other `*.duckdb` / `*.db` file in the directory is attached read-only. Tables inside an attachment are referenced with a dot-qualified name (e.g. `bev.Sales`).
 
 ## CLI (`dux`)
 
@@ -164,17 +164,17 @@ The [`dux-dashboards`](.agents/skills/dux-dashboards/) agent skill documents the
 
 ## Multi-database queries
 
-When `atp.duckdb` is present in `db/`, it is attached as `atp`. Tables inside it can be referenced with a dot-qualified name:
+When `bev.duckdb` is present in `db/`, it is attached as `bev`. Tables inside it can be referenced with a dot-qualified name:
 
 ```dux
-EVALUATE atp.matches
+EVALUATE bev.Product
 ```
 
 ```dux
 EVALUATE
     SUMMARIZECOLUMNS(
-        atp.matches[surface],
-        "Matches", COUNT(atp.matches[match_num])
+        bev.Product[Category],
+        "Net Revenue", SUM(bev.Sales[NetRevenue])
     )
 ```
 
@@ -200,16 +200,17 @@ EVALUATE
 POST /query
 Content-Type: text/plain
 
-EVALUATE SUMMARIZECOLUMNS(atp.matches[surface], "Matches", COUNT(atp.matches[match_num]))
+EVALUATE SUMMARIZECOLUMNS(bev.Product[Category], "Net Revenue", SUM(bev.Sales[NetRevenue]))
 ```
 
 ```json
 {
-  "columns": ["surface", "Matches"],
+  "columns": ["Category", "Net Revenue"],
   "rows": [
-    ["Clay", 1247],
-    ["Grass", 892],
-    ["Hard", 3105]
+    ["Alcoholic Beverages", "438382489.54"],
+    ["Juices", "44347794.1"],
+    ["Soft Drinks", "27590614.7"],
+    ["Water", "16330017.07"]
   ]
 }
 ```
@@ -221,7 +222,7 @@ POST /query
 Content-Type: application/json
 
 {"query": "EVALUATE ...", "filters": [
-  {"table": "atp.matches", "column": "tourney_level", "op": "in", "values": ["G", "M"]}
+  {"table": "bev.Product", "column": "Category", "op": "in", "values": ["Water", "Soft Drinks"]}
 ]}
 ```
 
@@ -253,10 +254,10 @@ POST /import          ← dux.toml body; replaces all of the above
 
 ```
 GET /measures
-→ [{"table": "atp.matches", "name": "Total Matches", "expression": "COUNT(atp.matches[match_num])"}]
+→ [{"table": "bev.Sales", "name": "Total Revenue", "expression": "SUM(bev.Sales[NetRevenue])"}]
 
 POST /measures
-{"table": "atp.matches", "name": "Total Matches", "expression": "COUNT(atp.matches[match_num])"}
+{"table": "bev.Sales", "name": "Total Revenue", "expression": "SUM(bev.Sales[NetRevenue])"}
 → 201 Created
 
 DELETE /measures/:table/:name
@@ -268,12 +269,12 @@ DELETE /measures/:table/:name
 ```
 GET /relationships
 → [
-    {"from_table": "atp.matches", "from_column": "winner_id", "to_table": "atp.players", "to_column": "player_id"},
+    {"from_table": "bev.Sales", "from_column": "ProductKey", "to_table": "bev.Product", "to_column": "ProductKey"},
     {"from_table": "Bridge", "from_column": "DimBKey", "to_table": "DimB", "to_column": "DimBKey", "bidirectional": true}
   ]
 
 POST /relationships
-{"from_table": "atp.matches", "from_column": "winner_id", "to_table": "atp.players", "to_column": "player_id"}
+{"from_table": "bev.Sales", "from_column": "ProductKey", "to_table": "bev.Product", "to_column": "ProductKey"}
 → 201 Created
 
 POST /relationships          (bidirectional)
@@ -281,7 +282,7 @@ POST /relationships          (bidirectional)
 → 201 Created
 
 DELETE /relationships
-{"from_table": "atp.matches", "from_column": "winner_id", "to_table": "atp.players", "to_column": "player_id"}
+{"from_table": "bev.Sales", "from_column": "ProductKey", "to_table": "bev.Product", "to_column": "ProductKey"}
 → 204 No Content
 ```
 
@@ -289,15 +290,15 @@ DELETE /relationships
 
 ```
 POST /hidden                 (hide a table or view)
-{"table": "atp.matches"}
+{"table": "bev.Venue"}
 → 201 Created
 
 POST /hidden                 (hide a single column)
-{"table": "atp.matches", "column": "winner_id"}
+{"table": "bev.Sales", "column": "OrderId"}
 → 201 Created
 
 DELETE /hidden               (unhide — same body shapes)
-{"table": "atp.matches"}
+{"table": "bev.Venue"}
 → 204 No Content
 ```
 
@@ -316,10 +317,10 @@ All measures and relationships are persisted in `db/dux.duckdb` and are availabl
 
 ```toml
 [[relationship]]
-from_table  = "atp.matches"
-from_column = "winner_id"
-to_table    = "atp.players"
-to_column   = "player_id"
+from_table  = "bev.Sales"
+from_column = "ProductKey"
+to_table    = "bev.Product"
+to_column   = "ProductKey"
 
 # Bidirectional — filter context propagates in both directions through Bridge
 [[relationship]]
@@ -330,14 +331,14 @@ to_column      = "DimBKey"
 bidirectional  = true
 
 [[measure]]
-table      = "atp.matches"
-name       = "Total Matches"
-expression = "COUNT(atp.matches[match_num])"
+table      = "bev.Sales"
+name       = "Total Revenue"
+expression = "SUM(bev.Sales[NetRevenue])"
 
 [[measure]]
-table      = "atp.matches"
-name       = "Avg Winner Age"
-expression = "AVERAGE(atp.matches[winner_age])"
+table      = "bev.Sales"
+name       = "Avg Order Value"
+expression = "AVERAGE(bev.Sales[NetRevenue])"
 
 # Optional display format — structured enum, rendered locale-aware by the UI
 [measure.format]
@@ -360,12 +361,12 @@ Tables, views, and individual columns can be marked **hidden**. Hidden objects s
 ```toml
 # Hide a whole table or view
 [[hidden]]
-table = "atp.rounds"
+table = "bev.Venue"
 
 # Hide a single column
 [[hidden]]
-table  = "atp.matches"
-column = "winner_id"
+table  = "bev.Sales"
+column = "OrderId"
 ```
 
 In the UI, the **Show hidden** toggle in the navbar (off by default) controls whether hidden objects are displayed at all — when shown, they render with muted colors. Every table header and column row has an eye-off toggle to hide or unhide it, styled like the date-table calendar toggle: hover a row to reveal it, yellow when active. Works on both the Home schema tree and the Explorer canvas.
@@ -379,10 +380,10 @@ Every query starts with `EVALUATE`. An optional `DEFINE` block declares reusable
 ```dux
 EVALUATE
     SUMMARIZECOLUMNS(
-        atp.matches[surface],
-        "Matches", COUNT(atp.matches[match_num])
+        bev.Product[Category],
+        "Net Revenue", SUM(bev.Sales[NetRevenue])
     )
-    ORDER BY [Matches] DESC, atp.matches[surface]
+    ORDER BY [Net Revenue] DESC, bev.Product[Category]
 ```
 
 **Aggregate by a column:**
@@ -390,8 +391,8 @@ EVALUATE
 ```dux
 EVALUATE
     SUMMARIZECOLUMNS(
-        atp.matches[surface],
-        "Matches", COUNT(atp.matches[match_num])
+        bev.Product[Category],
+        "Net Revenue", SUM(bev.Sales[NetRevenue])
     )
 ```
 
@@ -399,13 +400,13 @@ EVALUATE
 
 ```dux
 EVALUATE
-    VAR gs_finals = FILTER(
-        atp.matches,
-        atp.matches[round] = "F" AND atp.matches[tourney_level] = "G"
+    VAR discounted_sales = FILTER(
+        bev.Sales,
+        bev.Sales[DiscountRate] > 0
     )
     RETURN SUMMARIZECOLUMNS(
-        gs_finals[winner_name],
-        "Titles", COUNT(gs_finals[match_num])
+        discounted_sales[VenueKey],
+        "Orders", COUNT(discounted_sales[OrderId])
     )
 ```
 
@@ -413,13 +414,13 @@ EVALUATE
 
 ```dux
 DEFINE
-    MEASURE atp.matches[Avg Winner Age] =
-        AVERAGE(atp.matches[winner_age])
+    MEASURE bev.Sales[Avg Order Value] =
+        AVERAGE(bev.Sales[NetRevenue])
 
 EVALUATE
     SUMMARIZECOLUMNS(
-        atp.matches[surface],
-        "Avg Age", atp.matches[Avg Winner Age]
+        bev.Product[Category],
+        "Avg Order Value", bev.Sales[Avg Order Value]
     )
 ```
 
@@ -481,8 +482,8 @@ Table arguments compose: any table function accepts a nested table expression wh
 EVALUATE
     TOPN(
         5,
-        SUMMARIZECOLUMNS(atp.matches[winner_name], "Titles", COUNT(atp.matches[match_num])),
-        [Titles]
+        SUMMARIZECOLUMNS(bev.Venue[Venue], "Net Revenue", SUM(bev.Sales[NetRevenue])),
+        [Net Revenue]
     )
 ```
 
@@ -502,11 +503,11 @@ Inside `CALCULATE`, a plain predicate on a column **replaces** any existing filt
 ```dux
 EVALUATE
     SUMMARIZECOLUMNS(
-        atp.matches[surface],
-        "Matches", COUNT(atp.matches[match_num]),
+        bev.Product[Category],
+        "Net Revenue", SUM(bev.Sales[NetRevenue]),
         "Share",   DIVIDE(
-            COUNT(atp.matches[match_num]),
-            CALCULATE(COUNT(atp.matches[match_num]), ALL(atp.matches))
+            SUM(bev.Sales[NetRevenue]),
+            CALCULATE(SUM(bev.Sales[NetRevenue]), ALL(bev.Product))
         )
     )
 ```

@@ -756,7 +756,7 @@ func TestSpecial(t *testing.T) {
 	})
 
 	t.Run("QualifiedTableRef", func(t *testing.T) {
-		q := mustParse(t, `EVALUATE atp.matches`)
+		q := mustParse(t, `EVALUATE bev.Sales`)
 		em := &emitter.Emitter{}
 		sql, err := em.Emit(q)
 		if err != nil {
@@ -971,19 +971,19 @@ func TestBidirectionalCTE(t *testing.T) {
 		s := bidiSchema()
 		qualified := semantic.NewSchema()
 		for name, tbl := range s.Tables {
-			qualified.Tables["atp."+name] = &semantic.Table{Name: "atp." + tbl.Name, Columns: tbl.Columns}
+			qualified.Tables["bev."+name] = &semantic.Table{Name: "bev." + tbl.Name, Columns: tbl.Columns}
 		}
 		for _, r := range s.Relationships {
 			qualified.Relationships = append(qualified.Relationships, &semantic.Relationship{
-				FromTable: "atp." + r.FromTable, FromColumn: r.FromColumn,
-				ToTable: "atp." + r.ToTable, ToColumn: r.ToColumn,
+				FromTable: "bev." + r.FromTable, FromColumn: r.FromColumn,
+				ToTable: "bev." + r.ToTable, ToColumn: r.ToColumn,
 				Bidirectional: r.Bidirectional,
 			})
 		}
 		q := mustParse(t,
 			`EVALUATE SUMMARIZECOLUMNS(
-				TREATAS({"X"}, atp.DimA[Category]),
-				"Total", SUM(atp.FactMeasures[Amount])
+				TREATAS({"X"}, bev.DimA[Category]),
+				"Total", SUM(bev.FactMeasures[Amount])
 			)`)
 		em := &emitter.Emitter{Schema: qualified}
 		sql, err := em.Emit(q)
@@ -992,9 +992,9 @@ func TestBidirectionalCTE(t *testing.T) {
 		}
 		assertContains(t, sql,
 			"WITH _mc0 AS",
-			"FROM atp.factmeasures",
-			"EXISTS (SELECT 1 FROM atp.bridge",
-			"JOIN atp.dima",
+			"FROM bev.factmeasures",
+			"EXISTS (SELECT 1 FROM bev.bridge",
+			"JOIN bev.dima",
 		)
 		assertNotContains(t, sql, "_bd_")
 	})
@@ -1007,32 +1007,32 @@ func TestBidirectionalCTE(t *testing.T) {
 	t.Run("ProjectedBridgeGoesStitched", func(t *testing.T) {
 		s := semantic.NewSchema()
 		s.Tables["bev.Date"] = &semantic.Table{Name: "bev.Date", Columns: map[string]*semantic.Column{
-			"DateKey":  {Name: "DateKey", DataType: "INTEGER"},
-			"FullDate": {Name: "FullDate", DataType: "DATE"},
-			"Year":     {Name: "Year", DataType: "INTEGER"},
+			"DateKey": {Name: "DateKey", DataType: "INTEGER"},
+			"Date":    {Name: "Date", DataType: "DATE"},
+			"Year":    {Name: "Year", DataType: "INTEGER"},
 		}}
 		s.Tables["bev.Sales"] = &semantic.Table{Name: "bev.Sales", Columns: map[string]*semantic.Column{
 			"DateKey":  {Name: "DateKey", DataType: "INTEGER"},
 			"Quantity": {Name: "Quantity", DataType: "INTEGER"},
 		}}
-		s.Tables["atp.players"] = &semantic.Table{Name: "atp.players", Columns: map[string]*semantic.Column{
-			"player_id": {Name: "player_id", DataType: "INTEGER"},
-			"dob":       {Name: "dob", DataType: "DATE"},
+		s.Tables["forecast.Periods"] = &semantic.Table{Name: "forecast.Periods", Columns: map[string]*semantic.Column{
+			"PeriodId":  {Name: "PeriodId", DataType: "INTEGER"},
+			"StartDate": {Name: "StartDate", DataType: "DATE"},
 		}}
-		s.Tables["atp.matches"] = &semantic.Table{Name: "atp.matches", Columns: map[string]*semantic.Column{
-			"winner_id":  {Name: "winner_id", DataType: "INTEGER"},
-			"winner_age": {Name: "winner_age", DataType: "DOUBLE"},
+		s.Tables["forecast.Plan"] = &semantic.Table{Name: "forecast.Plan", Columns: map[string]*semantic.Column{
+			"PeriodId": {Name: "PeriodId", DataType: "INTEGER"},
+			"Revenue":  {Name: "Revenue", DataType: "DOUBLE"},
 		}}
 		s.Relationships = append(s.Relationships,
 			&semantic.Relationship{FromTable: "bev.Sales", FromColumn: "DateKey", ToTable: "bev.Date", ToColumn: "DateKey"},
-			&semantic.Relationship{FromTable: "bev.Date", FromColumn: "FullDate", ToTable: "atp.players", ToColumn: "dob", Bidirectional: true},
-			&semantic.Relationship{FromTable: "atp.matches", FromColumn: "winner_id", ToTable: "atp.players", ToColumn: "player_id"},
+			&semantic.Relationship{FromTable: "bev.Date", FromColumn: "Date", ToTable: "forecast.Periods", ToColumn: "StartDate", Bidirectional: true},
+			&semantic.Relationship{FromTable: "forecast.Plan", FromColumn: "PeriodId", ToTable: "forecast.Periods", ToColumn: "PeriodId"},
 		)
 		q := mustParse(t,
 			`EVALUATE SUMMARIZECOLUMNS(
 				bev.Date[Year],
 				"Quantity", SUM(bev.Sales[Quantity]),
-				"winner_age", SUM(atp.matches[winner_age])
+				"Planned Revenue", SUM(forecast.Plan[Revenue])
 			)`)
 		em := &emitter.Emitter{Schema: s}
 		sql, err := em.Emit(q)
@@ -1046,15 +1046,15 @@ func TestBidirectionalCTE(t *testing.T) {
 			"FULL OUTER JOIN _mc1",
 			"IS NOT DISTINCT FROM",
 			"LEFT JOIN bev.sales",
-			"LEFT JOIN atp.players",
-			"LEFT JOIN atp.matches",
+			"LEFT JOIN forecast.periods",
+			"LEFT JOIN forecast.plan",
 		)
 		// The two facts must never share one join tree: the sales fact and the
-		// atp fact belong to different CTEs.
+		// forecast fact belong to different CTEs.
 		if i := strings.Index(sql, "bev.sales"); i >= 0 {
 			cte := sql[:strings.Index(sql, "_mc1")]
-			if strings.Contains(cte, "atp.matches") {
-				t.Errorf("bev.sales and atp.matches share a join tree:\n%s", sql)
+			if strings.Contains(cte, "forecast.plan") {
+				t.Errorf("bev.sales and forecast.plan share a join tree:\n%s", sql)
 			}
 		}
 		if n := strings.Count(strings.ToLower(sql), "join bev.date"); n != 0 {

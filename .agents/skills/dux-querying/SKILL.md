@@ -20,19 +20,19 @@ before it (reusable measures) and `ORDER BY` after it.
 
 ```dux
 DEFINE
-    MEASURE atp.matches[Avg Winner Age] = AVERAGE(atp.matches[winner_age])
+    MEASURE bev.Sales[Avg Order Value] = AVERAGE(bev.Sales[NetRevenue])
 
 EVALUATE
     SUMMARIZECOLUMNS(
-        atp.matches[surface],
-        "Avg Age", atp.matches[Avg Winner Age]
+        bev.Product[Category],
+        "Avg Order Value", bev.Sales[Avg Order Value]
     )
-    ORDER BY [Avg Age] DESC, atp.matches[surface]
+    ORDER BY [Avg Order Value] DESC, bev.Product[Category]
 ```
 
 References:
 - Column: `table[column]`. Table names are dot-qualified per attached
-  database: `atp.matches`, and carry the schema when non-default:
+  database: `bev.Sales`, and carry the schema when non-default:
   `db.schema.table`. Views behave exactly like tables.
 - Stored measure: `table[Measure Name]` (looks like a column ref; the model
   resolves it).
@@ -49,17 +49,17 @@ alias/expression pairs.
 ```dux
 EVALUATE
     SUMMARIZECOLUMNS(
-        atp.matches[surface],
-        TREATAS({"G", "M"}, atp.matches[tourney_level]),
-        "Matches",  COUNT(atp.matches[match_num]),
-        "Avg Age",  AVERAGE(atp.matches[loser_age])
+        bev.Product[Category],
+        TREATAS({"Water", "Soft Drinks"}, bev.Product[Category]),
+        "Orders",    COUNT(bev.Sales[OrderId]),
+        "Avg Value", AVERAGE(bev.Sales[NetRevenue])
     )
 ```
 
 Filter arguments:
 - `TREATAS({v1, v2}, table[col])` — equality on a value set.
 - `FILTER(table, predicate)` — arbitrary predicate,
-  e.g. `FILTER(atp.matches, atp.matches[draw_size] >= 32)`.
+  e.g. `FILTER(bev.Sales, bev.Sales[Quantity] >= 10)`.
 
 Top-N (always highest-first by the key expression):
 
@@ -74,11 +74,11 @@ Percent of total:
 ```dux
 EVALUATE
     SUMMARIZECOLUMNS(
-        atp.matches[surface],
-        "Matches", COUNT(atp.matches[match_num]),
+        bev.Product[Category],
+        "Net Revenue", SUM(bev.Sales[NetRevenue]),
         "Share",   DIVIDE(
-            COUNT(atp.matches[match_num]),
-            CALCULATE(COUNT(atp.matches[match_num]), ALL(atp.matches))
+            SUM(bev.Sales[NetRevenue]),
+            CALCULATE(SUM(bev.Sales[NetRevenue]), ALL(bev.Product))
         )
     )
 ```
@@ -87,14 +87,14 @@ Filter then aggregate with a VAR:
 
 ```dux
 EVALUATE
-    VAR finals = FILTER(atp.matches, atp.matches[round] = "F")
+    VAR discounted = FILTER(bev.Sales, bev.Sales[DiscountRate] > 0)
     RETURN SUMMARIZECOLUMNS(
-        finals[winner_name],
-        "Titles", COUNT(finals[match_num])
+        discounted[VenueKey],
+        "Orders", COUNT(discounted[OrderId])
     )
 ```
 
-Whole-table dump (small tables only): `EVALUATE atp.matches`.
+Whole-table dump (small tables only): `EVALUATE bev.Product`.
 
 For the complete function catalog (aggregations, iterators, table functions,
 CALCULATE/filter-context semantics, time intelligence, scalar library), read
@@ -111,7 +111,7 @@ Content-Type: text/plain
 EVALUATE SUMMARIZECOLUMNS(...)
 ```
 
-Response: `{"columns": ["surface", "Matches"], "rows": [["Clay", 1247], ...]}`.
+Response: `{"columns": ["Category", "Orders"], "rows": [["Water", 750851], ...]}`.
 Row values are JSON scalars; NULL comes through as `null`.
 
 `scripts/run-query.sh` wraps this (reads the query from a file or stdin).
@@ -139,7 +139,7 @@ position). Typical causes:
 - A measure referenced as `[Name]` outside ORDER BY/TOPN → use
   `table[Name]` in expressions.
 - Aggregating without a group (no dims, bare `[Measure]` refs) → reference
-  measures table-qualified: `SUMMARIZECOLUMNS("X", atp.matches[X])`.
+  measures table-qualified: `SUMMARIZECOLUMNS("X", bev.Sales[X])`.
 - A filter that reaches none of the measure tables → error by design
   (filters must relate to what they filter).
 
