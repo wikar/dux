@@ -246,11 +246,16 @@
 
 /* ── CSV export (appears when hovering a query-backed element) ── */
 
-.exportBtn {
+.floatingActions {
   position: absolute;
   top: 4px;
   right: 4px;
   z-index: 3;
+  display: flex;
+  gap: 4px;
+}
+
+.exportBtn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -295,8 +300,8 @@
   transition: opacity 0.12s;
 }
 
-/* Title-bar variant only — the floating variant keeps its larger tap target. */
-.funnelBtn:not(.funnelFloat) svg {
+/* Keep the glyph consistent; the floating variant only enlarges the tap target. */
+.funnelBtn svg {
   width: 16px;
   height: 16px;
 }
@@ -306,12 +311,8 @@
   background: rgba(127, 127, 127, 0.18);
 }
 
-/* Floating variant for title-less visuals — sits left of the CSV button. */
+/* Floating variant for title-less visuals. */
 .funnelFloat {
-  position: absolute;
-  top: 4px;
-  right: 30px;
-  z-index: 3;
   width: 22px;
   height: 22px;
   border: 1px solid var(--surface1);

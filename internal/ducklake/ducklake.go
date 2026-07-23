@@ -1,7 +1,7 @@
-// Package warehouse owns DuckLake connection setup and warehouse-level
-// operations. DuckDB instances are transient; durable state lives in the
-// SQLite catalog and Parquet data path.
-package warehouse
+// Package ducklake owns DuckLake connection setup and operations. DuckDB
+// instances are transient; durable state lives in the SQLite catalog and
+// Parquet data path.
+package ducklake
 
 import (
 	"context"
@@ -15,9 +15,9 @@ import (
 	_ "github.com/duckdb/duckdb-go/v2"
 )
 
-const Alias = "warehouse"
+const Alias = "ducklake"
 
-// Config defines the one DuckLake warehouse supported by a DUX process.
+// Config defines the one DuckLake instance supported by a DUX process.
 type Config struct {
 	CatalogPath         string
 	DataPath            string
@@ -35,17 +35,17 @@ type Runtime struct {
 	formatVersion string
 }
 
-// OpenOwner creates the warehouse when absent and opens the one read-write
+// OpenOwner creates the DuckLake instance when absent and opens the one read-write
 // connection used by duxd ownership operations.
 func OpenOwner(ctx context.Context, cfg Config) (*Runtime, error) {
 	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(cfg.CatalogPath), 0o755); err != nil {
-		return nil, fmt.Errorf("create warehouse catalog directory: %w", err)
+		return nil, fmt.Errorf("create DuckLake catalog directory: %w", err)
 	}
 	if err := os.MkdirAll(cfg.DataPath, 0o755); err != nil {
-		return nil, fmt.Errorf("create warehouse data directory: %w", err)
+		return nil, fmt.Errorf("create DuckLake data directory: %w", err)
 	}
 
 	db, conn, err := openDuckDB(ctx)
@@ -68,13 +68,13 @@ func OpenOwner(ctx context.Context, cfg Config) (*Runtime, error) {
 	return rt, nil
 }
 
-// OpenReader opens an existing warehouse with a read-only DuckLake attachment.
+// OpenReader opens an existing DuckLake instance with a read-only attachment.
 func OpenReader(ctx context.Context, cfg Config) (*Runtime, error) {
 	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}
 	if _, err := os.Stat(cfg.CatalogPath); err != nil {
-		return nil, fmt.Errorf("open warehouse catalog %q: %w", cfg.CatalogPath, err)
+		return nil, fmt.Errorf("open DuckLake catalog %q: %w", cfg.CatalogPath, err)
 	}
 	db, conn, err := openDuckDB(ctx)
 	if err != nil {
@@ -94,10 +94,10 @@ func OpenReader(ctx context.Context, cfg Config) (*Runtime, error) {
 
 func validateConfig(cfg Config) error {
 	if cfg.CatalogPath == "" {
-		return fmt.Errorf("warehouse catalog path is required")
+		return fmt.Errorf("DuckLake catalog path is required")
 	}
 	if cfg.DataPath == "" {
-		return fmt.Errorf("warehouse data path is required")
+		return fmt.Errorf("DuckLake data path is required")
 	}
 	if cfg.TimeTravelRetention <= 0 {
 		return fmt.Errorf("time-travel retention must be positive")
@@ -142,11 +142,11 @@ func openDuckDB(ctx context.Context) (*sql.DB, *sql.Conn, error) {
 func (r *Runtime) attach(ctx context.Context, cfg Config, readOnly bool) error {
 	catalog, err := filepath.Abs(cfg.CatalogPath)
 	if err != nil {
-		return fmt.Errorf("resolve warehouse catalog: %w", err)
+		return fmt.Errorf("resolve DuckLake catalog: %w", err)
 	}
 	data, err := filepath.Abs(cfg.DataPath)
 	if err != nil {
-		return fmt.Errorf("resolve warehouse data path: %w", err)
+		return fmt.Errorf("resolve DuckLake data path: %w", err)
 	}
 	uri := "ducklake:sqlite:" + filepath.ToSlash(catalog)
 	options := ""
@@ -157,11 +157,11 @@ func (r *Runtime) attach(ctx context.Context, cfg Config, readOnly bool) error {
 	}
 	stmt := fmt.Sprintf("ATTACH %s AS %s%s", sqlString(uri), Alias, options)
 	if _, err := r.conn.ExecContext(ctx, stmt); err != nil {
-		return fmt.Errorf("attach DuckLake warehouse: %w", err)
+		return fmt.Errorf("attach DuckLake: %w", err)
 	}
 	if !readOnly {
 		if _, err := r.conn.ExecContext(ctx, "USE "+Alias); err != nil {
-			return fmt.Errorf("select DuckLake warehouse: %w", err)
+			return fmt.Errorf("select DuckLake: %w", err)
 		}
 	}
 	return nil
@@ -183,7 +183,7 @@ func (r *Runtime) configure(ctx context.Context, cfg Config) error {
 }
 
 func (r *Runtime) verifySettings(ctx context.Context, cfg Config) error {
-	rows, err := r.conn.QueryContext(ctx, `SELECT option_name, value FROM warehouse.options() WHERE scope = 'GLOBAL'`)
+	rows, err := r.conn.QueryContext(ctx, `SELECT option_name, value FROM ducklake.options() WHERE scope = 'GLOBAL'`)
 	if err != nil {
 		return fmt.Errorf("read DuckLake options: %w", err)
 	}
@@ -222,7 +222,7 @@ func (r *Runtime) verifySettings(ctx context.Context, cfg Config) error {
 
 func (r *Runtime) verifyDataPath(ctx context.Context, cfg Config) error {
 	var dataPath string
-	if err := r.conn.QueryRowContext(ctx, `SELECT data_path FROM warehouse.settings()`).Scan(&dataPath); err != nil {
+	if err := r.conn.QueryRowContext(ctx, `SELECT data_path FROM ducklake.settings()`).Scan(&dataPath); err != nil {
 		return fmt.Errorf("read DuckLake data path: %w", err)
 	}
 	storedPath, err := filepath.Abs(filepath.FromSlash(strings.TrimRight(dataPath, "/\\")))
@@ -234,7 +234,7 @@ func (r *Runtime) verifyDataPath(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("resolve configured DuckLake data path: %w", err)
 	}
 	if normalPath(storedPath) != normalPath(wantPath) {
-		return fmt.Errorf("DuckLake data path is %q, but --warehouse-data resolves to %q; move catalog and data together or restore the configured path", storedPath, wantPath)
+		return fmt.Errorf("DuckLake data path is %q, but --ducklake-data resolves to %q; move catalog and data together or restore the configured path", storedPath, wantPath)
 	}
 	return nil
 }
@@ -258,7 +258,7 @@ func sqlString(value string) string {
 // deterministic.
 func (r *Runtime) DB() *sql.DB { return r.db }
 
-// Conn returns the pinned connection used for warehouse ownership operations.
+// Conn returns the pinned connection used for DuckLake ownership operations.
 func (r *Runtime) Conn() *sql.Conn { return r.conn }
 
 func (r *Runtime) ReadOnly() bool                 { return r.readOnly }
@@ -293,7 +293,7 @@ func (r *Runtime) Versions(ctx context.Context) (duckDB, duckLake string, err er
 	if err = r.conn.QueryRowContext(ctx, "SELECT version()").Scan(&duckDB); err != nil {
 		return "", "", fmt.Errorf("read DuckDB version: %w", err)
 	}
-	if err = r.conn.QueryRowContext(ctx, "SELECT extension_version FROM warehouse.settings()").Scan(&duckLake); err != nil {
+	if err = r.conn.QueryRowContext(ctx, "SELECT extension_version FROM ducklake.settings()").Scan(&duckLake); err != nil {
 		return "", "", fmt.Errorf("read DuckLake version: %w", err)
 	}
 	return duckDB, duckLake, nil
@@ -303,7 +303,7 @@ func (r *Runtime) Versions(ctx context.Context) (duckDB, duckLake string, err er
 func (r *Runtime) SnapshotState(ctx context.Context) (snapshotID, schemaVersion int64, err error) {
 	err = r.conn.QueryRowContext(ctx, `
 		SELECT snapshot_id, schema_version
-		FROM warehouse.snapshots()
+		FROM ducklake.snapshots()
 		ORDER BY snapshot_id DESC
 		LIMIT 1
 	`).Scan(&snapshotID, &schemaVersion)

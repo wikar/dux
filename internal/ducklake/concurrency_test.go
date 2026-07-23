@@ -1,4 +1,4 @@
-package warehouse_test
+package ducklake_test
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielwikar/dux/internal/warehouse"
+	"github.com/danielwikar/dux/internal/ducklake"
 )
 
 func TestSeveralDirectPipelinesWriteWhileReaderIsOpen(t *testing.T) {
@@ -24,8 +24,8 @@ func TestSeveralDirectPipelinesWriteWhileReaderIsOpen(t *testing.T) {
 		os.Exit(0)
 	}
 	dir := t.TempDir()
-	cfg := warehouse.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
-	owner, err := warehouse.OpenOwner(t.Context(), cfg)
+	cfg := ducklake.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
+	owner, err := ducklake.OpenOwner(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestSeveralDirectPipelinesWriteWhileReaderIsOpen(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	reader, err := warehouse.OpenReader(t.Context(), cfg)
+	reader, err := ducklake.OpenReader(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestSeveralDirectPipelinesWriteWhileReaderIsOpen(t *testing.T) {
 			default:
 			}
 			var count int
-			if err := reader.Conn().QueryRowContext(queryCtx, `SELECT count(*) FROM warehouse.pipeline_0.events`).Scan(&count); err != nil {
+			if err := reader.Conn().QueryRowContext(queryCtx, `SELECT count(*) FROM ducklake.pipeline_0.events`).Scan(&count); err != nil {
 				if queryCtx.Err() == nil {
 					errs <- fmt.Errorf("live reader: %w", err)
 				}
@@ -88,7 +88,7 @@ func TestSeveralDirectPipelinesWriteWhileReaderIsOpen(t *testing.T) {
 	}
 	for i := 0; i < 4; i++ {
 		var count int
-		if err := reader.Conn().QueryRowContext(t.Context(), fmt.Sprintf(`SELECT count(*) FROM warehouse.pipeline_%d.events`, i)).Scan(&count); err != nil {
+		if err := reader.Conn().QueryRowContext(t.Context(), fmt.Sprintf(`SELECT count(*) FROM ducklake.pipeline_%d.events`, i)).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
 		if count != 100 {
@@ -105,7 +105,7 @@ func runDirectPipelineBatch(catalog, schema, id string) error {
 		return err
 	}
 	defer pipeline.close()
-	stmt := fmt.Sprintf(`INSERT INTO warehouse.%s.events SELECT %s, range FROM range(100)`, schema, id)
+	stmt := fmt.Sprintf(`INSERT INTO ducklake.%s.events SELECT %s, range FROM range(100)`, schema, id)
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
 		if _, lastErr = pipeline.conn.ExecContext(ctx, stmt); lastErr == nil {
@@ -141,7 +141,7 @@ func openDirectPipeline(ctx context.Context, catalog string) (*directPipeline, e
 	}
 	uri := "ducklake:sqlite:" + filepath.ToSlash(catalog)
 	quoted := "'" + strings.ReplaceAll(uri, "'", "''") + "'"
-	if _, err := conn.ExecContext(ctx, `ATTACH `+quoted+` AS warehouse`); err != nil {
+	if _, err := conn.ExecContext(ctx, `ATTACH `+quoted+` AS ducklake`); err != nil {
 		conn.Close()
 		db.Close()
 		return nil, err
@@ -161,8 +161,8 @@ func (p *directPipeline) close() {
 
 func TestReaderSeesOnlyCommittedBatchesAndMutations(t *testing.T) {
 	dir := t.TempDir()
-	cfg := warehouse.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
-	writer, err := warehouse.OpenOwner(t.Context(), cfg)
+	cfg := ducklake.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
+	writer, err := ducklake.OpenOwner(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestReaderSeesOnlyCommittedBatchesAndMutations(t *testing.T) {
 	if _, err := writer.Conn().ExecContext(t.Context(), `CREATE TABLE events(id INTEGER, value INTEGER)`); err != nil {
 		t.Fatal(err)
 	}
-	reader, err := warehouse.OpenReader(t.Context(), cfg)
+	reader, err := ducklake.OpenReader(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,20 +183,20 @@ func TestReaderSeesOnlyCommittedBatchesAndMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 	var count int
-	if err := reader.Conn().QueryRowContext(t.Context(), `SELECT count(*) FROM warehouse.main.events`).Scan(&count); err != nil || count != 0 {
+	if err := reader.Conn().QueryRowContext(t.Context(), `SELECT count(*) FROM ducklake.main.events`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("reader saw uncommitted rows: %d, %v", count, err)
 	}
 	if err := tx.Rollback(); err != nil {
 		t.Fatal(err)
 	}
-	if err := reader.Conn().QueryRowContext(t.Context(), `SELECT count(*) FROM warehouse.main.events`).Scan(&count); err != nil || count != 0 {
+	if err := reader.Conn().QueryRowContext(t.Context(), `SELECT count(*) FROM ducklake.main.events`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("reader saw rolled-back rows: %d, %v", count, err)
 	}
 	if _, err := writer.Conn().ExecContext(t.Context(), `BEGIN; INSERT INTO events VALUES (1, 10), (2, 20), (3, 30); UPDATE events SET value = 25 WHERE id = 2; DELETE FROM events WHERE id = 1; COMMIT`); err != nil {
 		t.Fatal(err)
 	}
 	var total int
-	if err := reader.Conn().QueryRowContext(t.Context(), `SELECT count(*), sum(value) FROM warehouse.main.events`).Scan(&count, &total); err != nil || count != 2 || total != 55 {
+	if err := reader.Conn().QueryRowContext(t.Context(), `SELECT count(*), sum(value) FROM ducklake.main.events`).Scan(&count, &total); err != nil || count != 2 || total != 55 {
 		t.Fatalf("committed mutations = count %d total %d, %v", count, total, err)
 	}
 }
@@ -211,8 +211,8 @@ func TestConflictingDDLDoesNotCorruptCatalog(t *testing.T) {
 		os.Exit(0)
 	}
 	dir := t.TempDir()
-	cfg := warehouse.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
-	owner, err := warehouse.OpenOwner(t.Context(), cfg)
+	cfg := ducklake.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
+	owner, err := ducklake.OpenOwner(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,12 +227,12 @@ func TestConflictingDDLDoesNotCorruptCatalog(t *testing.T) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("conflict subprocess: %v\n%s", err, output)
 	}
-	reader, err := warehouse.OpenReader(t.Context(), cfg)
+	reader, err := ducklake.OpenReader(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer reader.Close()
-	rows, err := reader.Conn().QueryContext(t.Context(), `SELECT column_name FROM information_schema.columns WHERE table_catalog = 'warehouse' AND table_schema = 'main' AND table_name = 'owned' ORDER BY ordinal_position`)
+	rows, err := reader.Conn().QueryContext(t.Context(), `SELECT column_name FROM information_schema.columns WHERE table_catalog = 'ducklake' AND table_schema = 'main' AND table_name = 'owned' ORDER BY ordinal_position`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,12 +253,12 @@ func TestConflictingDDLDoesNotCorruptCatalog(t *testing.T) {
 func runDDLConflict(catalog, data string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cfg := warehouse.Config{CatalogPath: catalog, DataPath: data, TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
-	first, err := warehouse.OpenOwner(ctx, cfg)
+	cfg := ducklake.Config{CatalogPath: catalog, DataPath: data, TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
+	first, err := ducklake.OpenOwner(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	second, err := warehouse.OpenOwner(ctx, cfg)
+	second, err := ducklake.OpenOwner(ctx, cfg)
 	if err != nil {
 		return err
 	}

@@ -253,7 +253,7 @@ func IntrospectDuckDB(db *sql.DB) (*Schema, error) {
 		}
 		physicalName := qualifiedTableKey(dbAlias, schemaPart, tableName)
 		key := physicalName
-		if catalog == "warehouse" {
+		if catalog == "ducklake" {
 			// Always retain the full internal catalog and schema even though main
 			// is intentionally omitted from the public DUX name.
 			physicalName = qualifiedTableKeyWithMain(catalog, schemaName, tableName)

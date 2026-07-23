@@ -17,13 +17,13 @@ database (`db/dux.sqlite`) and takes effect immediately — no server restart.
 
 ## Database layout
 
-`duxd` owns one DuckLake warehouse under `--db-dir` (default `db/`):
+`duxd` owns one DuckLake instance under `--db-dir` (default `db/`):
 
 - `dux.sqlite` — DUX measures, relationships, presentation metadata, and operation history.
-- `warehouse.sqlite` — DuckLake's catalog. Never edit it directly.
-- `warehouse/` — DuckLake-owned Parquet data. Never edit or delete files directly.
+- `ducklake.sqlite` — DuckLake's catalog. Never edit it directly.
+- `ducklake/` — DuckLake-owned Parquet data. Never edit or delete files directly.
 - A DuckLake table in `main` is public as `Table`; another schema is `schema.Table`.
-- DuckLake views behave exactly like tables. The internal `warehouse.schema.Table` name is never used in DUX model definitions.
+- DuckLake views behave exactly like tables. The internal `ducklake.schema.Table` name is never used in DUX model definitions.
 
 DuckLake does not support primary or foreign keys. DUX relationships are semantic metadata persisted in `dux.sqlite`; they do not alter DuckLake tables.
 

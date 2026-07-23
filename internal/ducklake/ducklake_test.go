@@ -1,4 +1,4 @@
-package warehouse
+package ducklake
 
 import (
 	"context"
@@ -12,8 +12,8 @@ func testConfig(t *testing.T) Config {
 	t.Helper()
 	root := t.TempDir()
 	return Config{
-		CatalogPath:         filepath.Join(root, "warehouse.sqlite"),
-		DataPath:            filepath.Join(root, "warehouse"),
+		CatalogPath:         filepath.Join(root, "ducklake.sqlite"),
+		DataPath:            filepath.Join(root, "ducklake"),
 		TimeTravelRetention: 30 * 24 * time.Hour,
 		FileDeleteDelay:     7 * 24 * time.Hour,
 	}
@@ -46,16 +46,16 @@ func TestOwnerAndReaderShareSQLiteDuckLake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pipelineConn.ExecContext(ctx, `ATTACH `+sqlString("ducklake:sqlite:"+filepath.ToSlash(cfg.CatalogPath))+` AS warehouse`); err != nil {
+	if _, err := pipelineConn.ExecContext(ctx, `ATTACH `+sqlString("ducklake:sqlite:"+filepath.ToSlash(cfg.CatalogPath))+` AS ducklake`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pipelineConn.ExecContext(ctx, `INSERT INTO warehouse.main.sales VALUES (1, 42.5)`); err != nil {
+	if _, err := pipelineConn.ExecContext(ctx, `INSERT INTO ducklake.main.sales VALUES (1, 42.5)`); err != nil {
 		t.Fatal(err)
 	}
 	_ = pipelineConn.Close()
 	_ = pipelineDB.Close()
 	var fileCount int
-	if err := owner.Conn().QueryRowContext(ctx, `SELECT count(*) FROM ducklake_list_files('warehouse', 'sales', schema => 'main')`).Scan(&fileCount); err != nil || fileCount == 0 {
+	if err := owner.Conn().QueryRowContext(ctx, `SELECT count(*) FROM ducklake_list_files('ducklake', 'sales', schema => 'main')`).Scan(&fileCount); err != nil || fileCount == 0 {
 		t.Fatalf("small insert was not written to Parquet: files=%d, %v", fileCount, err)
 	}
 
@@ -66,13 +66,13 @@ func TestOwnerAndReaderShareSQLiteDuckLake(t *testing.T) {
 	defer reader.Close()
 
 	var amount float64
-	if err := reader.Conn().QueryRowContext(ctx, `SELECT amount FROM warehouse.main.sales WHERE id = 1`).Scan(&amount); err != nil {
+	if err := reader.Conn().QueryRowContext(ctx, `SELECT amount FROM ducklake.main.sales WHERE id = 1`).Scan(&amount); err != nil {
 		t.Fatal(err)
 	}
 	if amount != 42.5 {
 		t.Fatalf("amount = %v", amount)
 	}
-	if _, err := reader.Conn().ExecContext(ctx, `INSERT INTO warehouse.main.sales VALUES (2, 1)`); err == nil {
+	if _, err := reader.Conn().ExecContext(ctx, `INSERT INTO ducklake.main.sales VALUES (2, 1)`); err == nil {
 		t.Fatal("read-only DuckLake attachment accepted a write")
 	}
 
@@ -112,7 +112,7 @@ func TestOwnerVerifiesPersistentSettingsAndDataPath(t *testing.T) {
 	if rt.FormatVersion() != "1.0" {
 		t.Fatalf("format version = %q", rt.FormatVersion())
 	}
-	if _, err := rt.Conn().ExecContext(t.Context(), `CALL warehouse.set_option('data_inlining_row_limit', '10')`); err != nil {
+	if _, err := rt.Conn().ExecContext(t.Context(), `CALL ducklake.set_option('data_inlining_row_limit', '10')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := rt.Close(); err != nil {
@@ -131,7 +131,7 @@ func TestOwnerVerifiesPersistentSettingsAndDataPath(t *testing.T) {
 	}
 
 	cfg.DataPath = filepath.Join(filepath.Dir(cfg.DataPath), "moved")
-	if _, err := OpenOwner(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "--warehouse-data") {
+	if _, err := OpenOwner(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "--ducklake-data") {
 		t.Fatalf("mismatched data path error = %v", err)
 	}
 }

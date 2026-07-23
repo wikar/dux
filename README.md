@@ -15,12 +15,12 @@ DUX is more than a query interpreter. It ships with:
 ```sh
 docker run -d -p 8080:8080 \
   -v dux-db:/app/db \
-  -v /local/incoming:/app/imports \
+  -v /local/inbox:/app/inbox \
   -v /local/dashboards:/app/dashboards \
   ghcr.io/wikar/dux:latest
 ```
 
-`/app/db` is DUX-owned warehouse state and is the only required warehouse volume; use a Docker named volume or native local Linux path. `/app/imports` is an optional, non-warehouse landing mount and may be a host bridge: data pipelines publish completed Parquet files there and ask DUX to import them. Mount `/app/dashboards` to persist dashboard definitions. Version that mounted directory from the host or a dedicated Git sidecar; Git is not included in the DUX image. Set `DUX_DASH=0` if dashboards are not needed.
+`/app/db` contains DUX-owned state and is the only required volume; use a Docker named volume or native local Linux path. `/app/inbox` is an optional delivery mount and may be a host bridge: data pipelines publish completed Parquet files there and ask DUX to import them. Mount `/app/dashboards` to persist dashboard definitions. Version that mounted directory from the host or a dedicated Git sidecar; Git is not included in the DUX image. Set `DUX_DASH=0` if dashboards are not needed.
 
 ## Requirements
 
@@ -83,18 +83,18 @@ go build ./cmd/duxd    # query server
 ## Project layout
 
 ```
-db/                  DUX-owned warehouse state
+db/                  DUX-owned state
   dux.sqlite         Measures, relationships, and operation history
-  warehouse.sqlite   DuckLake catalog
-  warehouse/         DuckLake-managed Parquet files
-  incoming/          Landing directory for controlled Parquet imports
+  ducklake.sqlite    DuckLake catalog
+  ducklake/          DuckLake-managed Parquet files
+  inbox/             Inbox for controlled Parquet imports
 dashboards/          Dashboard documents (one JSON file each) + theme.json
 dux.toml             Portable export of measures and relationships
 samples/             Example .dux queries
 .agents/skills/      Agent skills (packaged per release)
 ```
 
-`duxd` creates and owns one DuckLake warehouse. Durable analytical data is Parquet, its transactional catalog is `warehouse.sqlite`, and DUX semantic metadata is isolated in `dux.sqlite`. DuckDB remains the transient embedded query engine; no native `.duckdb` warehouse file is opened or watched.
+`duxd` creates and owns one DuckLake instance. Durable analytical data is Parquet, its transactional catalog is `ducklake.sqlite`, and DUX semantic metadata is isolated in `dux.sqlite`. DuckDB remains the transient embedded query engine; no native `.duckdb` database file is opened or watched.
 
 ## CLI (`dux`)
 
@@ -110,7 +110,7 @@ Interactive REPL — enter a query over multiple lines, then press Enter on a bl
 dux
 ```
 
-The CLI is a read-only warehouse client. Start `duxd` once to initialize an empty warehouse before using `dux`.
+The CLI is a read-only DuckLake client. Start `duxd` once to initialize an empty DuckLake instance before using `dux`.
 
 **Flags**
 
@@ -118,9 +118,9 @@ The CLI is a read-only warehouse client. Start `duxd` once to initialize an empt
 |------|---------|-------------|
 | `--db-dir` | `db` | DUX state directory |
 | `--dux` | `<db-dir>/dux.sqlite` | DUX semantic metadata SQLite path |
-| `--warehouse-catalog` | `<db-dir>/warehouse.sqlite` | DuckLake SQLite catalog path |
-| `--warehouse-data` | `<db-dir>/warehouse` | DuckLake Parquet directory |
-| `--time-travel-retention` | `720h` (30d) | Expected warehouse snapshot retention |
+| `--ducklake-catalog` | `<db-dir>/ducklake.sqlite` | DuckLake SQLite catalog path |
+| `--ducklake-data` | `<db-dir>/ducklake` | DuckLake Parquet directory |
+| `--time-travel-retention` | `720h` (30d) | Expected DuckLake snapshot retention |
 | `--file-delete-delay` | `168h` (7d) | Expected unreferenced-file delay |
 | `--toml` | `dux.toml` | Load measures and relationships from a `dux.toml` file |
 | `--export` | — | Write current schema to a `dux.toml` file and exit |
@@ -143,9 +143,9 @@ Listens on `:8080` (`--listen`).
 | `--listen` | `:8080` | HTTP listen address |
 | `--db-dir` | `db` | DUX state directory |
 | `--dux` | `<db-dir>/dux.sqlite` | DUX semantic metadata SQLite path |
-| `--warehouse-catalog` | `<db-dir>/warehouse.sqlite` | DuckLake SQLite catalog path |
-| `--warehouse-data` | `<db-dir>/warehouse` | DuckLake Parquet directory |
-| `--import-dir` | `<db-dir>/incoming` | Controlled Parquet landing directory; an explicitly empty value disables imports |
+| `--ducklake-catalog` | `<db-dir>/ducklake.sqlite` | DuckLake SQLite catalog path |
+| `--ducklake-data` | `<db-dir>/ducklake` | DuckLake Parquet directory |
+| `--import-dir` | `<db-dir>/inbox` | Controlled Parquet inbox; an explicitly empty value disables imports |
 | `--import-max-files` | `100` | Maximum files in one import request |
 | `--import-timeout` | `30m` | Maximum runtime for one import |
 | `--schema-refresh-interval` | `30s` | Poll for DuckLake DDL changes (`0` disables) |
@@ -194,7 +194,7 @@ The [`dux-dashboards`](.agents/skills/dux-dashboards/) agent skill documents the
 
 ## DuckLake tables, schemas, and views
 
-DUX exposes the single DuckLake warehouse without an artificial catalog prefix. A table in `main` is referenced by its table name:
+DUX exposes its DuckLake instance without an artificial catalog prefix. A table in `main` is referenced by its table name:
 
 ```dux
 EVALUATE Product
@@ -236,30 +236,30 @@ it can safely access.
 ### Parquet import API
 
 This is the simplest path for a Parquet-native pipeline. The pipeline does not
-need DuckDB or DuckLake and never opens the warehouse catalog. It publishes
+need DuckDB or DuckLake and never opens the DuckLake catalog. It publishes
 complete Parquet files under `--import-dir`, then asks DUX to import them.
 Paths are relative to the import directory; the API deliberately does not
 upload file contents.
 
-During the request DUX validates and copies each file once into local warehouse
+During the request DUX validates and copies each file once into the DuckLake
 storage while calculating its SHA-256. Incompatible files fail immediately,
 and content already registered to the target returns `409` with the prior
 import ID. Registration then completes transactionally through the serialized
-warehouse worker.
+DuckLake worker.
 
 ```sh
-curl -X POST http://localhost:8080/api/warehouse/imports \
+curl -X POST http://localhost:8080/api/ducklake/imports \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: sales-2026-07-22T12:00:00Z' \
   -d '{"schema":"main","table":"Sales","files":["sales/part-0001.parquet"],"createIfMissing":false}'
 ```
 
-An accepted request returns `202`; poll `GET /api/warehouse/imports/{id}` for
+An accepted request returns `202`; poll `GET /api/ducklake/imports/{id}` for
 completion. `createIfMissing` creates an empty DuckLake table from the first
 file's schema before registering all files. Existing tables require exactly
 compatible columns and types. Imported files become DuckLake-owned and must
-not be changed afterward. The landing directory may be a Docker host bridge or
-another delivery mount because DUX copies files into native local warehouse
+not be changed afterward. The inbox may be a Docker host bridge or
+another delivery mount because DUX copies files into the native local DuckLake
 storage before registration. Set `--import-dir=` explicitly to disable the
 mutating import endpoint.
 
@@ -285,15 +285,15 @@ INSTALL ducklake;
 INSTALL sqlite;
 LOAD ducklake;
 LOAD sqlite;
-ATTACH 'ducklake:sqlite:/srv/dux/db/warehouse.sqlite'
-    AS warehouse (DATA_INLINING_ROW_LIMIT 0);
-USE warehouse;
+ATTACH 'ducklake:sqlite:/srv/dux/db/ducklake.sqlite'
+    AS ducklake (DATA_INLINING_ROW_LIMIT 0);
+USE ducklake;
 
 BEGIN;
 INSERT INTO pipeline_sales.orders
 SELECT * FROM read_parquet('/srv/pipeline/batch-20260722.parquet');
 COMMIT;
-DETACH warehouse;
+DETACH ducklake;
 ```
 
 Retry the whole transaction after a temporary SQLite lock or retry-exhaustion
@@ -305,14 +305,14 @@ Public DUX names are `Table` for `main` and `schema.Table` otherwise.
 
 DuckLake does not provide the primary-key/foreign-key relationship metadata
 DUX needs for analytical joins. Define those relationships through the DUX
-semantic API or `dux.toml`; they are semantic metadata, not warehouse
+semantic API or `dux.toml`; they are semantic metadata, not DuckLake
 constraints.
 
-Warehouse health is available at `GET /api/warehouse/status`. Maintenance runs automatically; operators can also post `compact` or `checkpoint` to `/api/warehouse/maintenance` and poll `/api/warehouse/maintenance/{id}`. Snapshot retention governs time-travel history, not current business rows; cleanup only affects files DuckLake has already marked unreferenced.
+DuckLake health is available at `GET /api/ducklake/status`. Maintenance runs automatically; operators can also post `compact` or `checkpoint` to `/api/ducklake/maintenance` and poll `/api/ducklake/maintenance/{id}`. Snapshot retention governs time-travel history, not current business rows; cleanup only affects files DuckLake has already marked unreferenced.
 
-These mutating warehouse endpoints share DUX's trusted-network boundary. DUX does not yet provide authentication or an administrative role; do not expose `duxd` directly to an untrusted network.
+These mutating DuckLake endpoints share DUX's trusted-network boundary. DUX does not yet provide authentication or an administrative role; do not expose `duxd` directly to an untrusted network.
 
-Back up `dux.sqlite`, `warehouse.sqlite`, and `warehouse/` as one logical unit after coordinating writers and completing a checkpoint. Copying only the catalog or only Parquet files is not a valid warehouse backup. Dashboard files are separate and should be backed up/versioned with their mounted directory.
+Back up `dux.sqlite`, `ducklake.sqlite`, and `ducklake/` as one logical unit after coordinating writers and completing a checkpoint. Copying only the catalog or only Parquet files is not a valid DuckLake backup. Dashboard files are separate and should be backed up/versioned with their mounted directory.
 
 SQLite remains the catalog while this periodic, local workload is reliable. Move the DuckLake catalog to PostgreSQL when direct writers must be remote, more than one `duxd` replica is required, ingestion becomes continuous, writers require hard authorization boundaries, or measured SQLite contention violates the supported workload.
 
@@ -356,7 +356,7 @@ Ops: `in`, `between` (`from`/`to`), `=`, `!=`, `<`, `<=`, `>`, `>=`, `contains` 
 
 ```
 GET /version
-→ {"version":"v0.4.0","capabilities":{"dashboards":true,"externalFilters":true,"measureFormats":true,"ducklakeWarehouse":true,"warehouseMaintenance":true,"parquetImport":true}}
+→ {"version":"v0.4.0","capabilities":{"dashboards":true,"externalFilters":true,"measureFormats":true,"ducklake":true,"ducklakeMaintenance":true,"parquetImport":true}}
 ```
 
 ### Schema

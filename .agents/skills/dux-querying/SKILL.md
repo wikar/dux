@@ -33,7 +33,7 @@ EVALUATE
 References:
 - Column: `table[column]`. DuckLake `main` tables use `Table`; non-default
   schemas use `schema.Table`. Views behave exactly like tables. Never add the
-  internal `warehouse` catalog prefix to a DUX query.
+  internal `ducklake` catalog prefix to a DUX query.
 - Stored measure: `table[Measure Name]` (looks like a column ref; the model
   resolves it).
 - Output alias: `[Alias]` — valid in `ORDER BY` and as the `TOPN` key.

@@ -1,4 +1,4 @@
-package warehouse
+package ducklake
 
 import (
 	"context"
@@ -19,11 +19,11 @@ import (
 	"time"
 )
 
-var ErrBusy = errors.New("warehouse ownership operation already running")
+var ErrBusy = errors.New("DuckLake ownership operation already running")
 var ErrIdempotencyConflict = errors.New("idempotency key conflict")
 var ErrDuplicateContent = errors.New("Parquet content was already imported")
 var ErrImportsDisabled = errors.New("Parquet imports are disabled")
-var ErrInvalidRequest = errors.New("invalid warehouse request")
+var ErrInvalidRequest = errors.New("invalid DuckLake request")
 
 func invalidRequest(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalidRequest, fmt.Sprintf(format, args...))
@@ -80,7 +80,7 @@ type Service struct {
 
 func NewService(cfg ServiceConfig) (*Service, error) {
 	if cfg.Owner == nil || cfg.Owner.ReadOnly() {
-		return nil, fmt.Errorf("read-write warehouse owner is required")
+		return nil, fmt.Errorf("read-write DuckLake owner is required")
 	}
 	if cfg.Metadata == nil {
 		return nil, fmt.Errorf("metadata database is required")
@@ -363,7 +363,7 @@ func (s *Service) StartScheduledMaintenance(operation string) (Job, error) {
 
 func (s *Service) startMaintenance(operation, trigger string) (Job, error) {
 	if err := s.ctx.Err(); err != nil {
-		return Job{}, fmt.Errorf("warehouse service is stopping: %w", err)
+		return Job{}, fmt.Errorf("DuckLake service is stopping: %w", err)
 	}
 	switch operation {
 	case "compact", "checkpoint":
@@ -373,9 +373,9 @@ func (s *Service) startMaintenance(operation, trigger string) (Job, error) {
 	if !s.mu.TryLock() {
 		if trigger == "scheduled" {
 			now := time.Now().UTC()
-			job := Job{ID: newID(), Kind: operation, Source: trigger, Status: "skipped", RequestedAt: now, StartedAt: now, FinishedAt: &now, Error: "another warehouse ownership operation is active"}
+			job := Job{ID: newID(), Kind: operation, Source: trigger, Status: "skipped", RequestedAt: now, StartedAt: now, FinishedAt: &now, Error: "another DuckLake ownership operation is active"}
 			_, err := s.cfg.Metadata.Exec(`INSERT INTO dux_meta.dux_maintenance_runs (id, operation, source, status, requested_at, started_at, finished_at, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, job.ID, operation, trigger, job.Status, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), job.Error)
-			log.Printf("warehouse maintenance %s skipped (%s): %s", operation, job.ID, job.Error)
+			log.Printf("DuckLake maintenance %s skipped (%s): %s", operation, job.ID, job.Error)
 			return job, err
 		}
 		return Job{}, fmt.Errorf("%w: active job %s", ErrBusy, s.Active())
@@ -384,7 +384,7 @@ func (s *Service) startMaintenance(operation, trigger string) (Job, error) {
 	job := Job{ID: newID(), Kind: operation, Source: trigger, Status: "running", RequestedAt: now, StartedAt: now}
 	s.setActive(job.ID)
 	s.jobs.Store(job.ID, job)
-	log.Printf("warehouse maintenance %s started (%s)", operation, job.ID)
+	log.Printf("DuckLake maintenance %s started (%s)", operation, job.ID)
 	if _, err := s.cfg.Metadata.Exec(`INSERT INTO dux_meta.dux_maintenance_runs (id, operation, source, status, requested_at, started_at) VALUES (?, ?, ?, ?, ?, ?)`, job.ID, operation, trigger, job.Status, job.RequestedAt.Format(time.RFC3339Nano), job.StartedAt.Format(time.RFC3339Nano)); err != nil {
 		s.jobs.Delete(job.ID)
 		s.release()
@@ -421,7 +421,7 @@ func (s *Service) runMaintenance(ctx context.Context, operation string) error {
 		return rows.Close()
 	}
 	if operation == "compact" {
-		stmt := fmt.Sprintf(`CALL ducklake_merge_adjacent_files('warehouse', max_compacted_files => %d)`, s.cfg.MaxCompactions)
+		stmt := fmt.Sprintf(`CALL ducklake_merge_adjacent_files('ducklake', max_compacted_files => %d)`, s.cfg.MaxCompactions)
 		if err := run(stmt); err != nil {
 			return fmt.Errorf("compact: %w", err)
 		}
@@ -445,15 +445,15 @@ func (s *Service) finishMaintenance(job Job, err error) {
 		job.Status, job.Error = "failed", boundedError(fmt.Errorf("persist maintenance result: %w", persistErr))
 	}
 	if _, cleanupErr := s.cfg.Metadata.Exec(`DELETE FROM dux_meta.dux_maintenance_runs WHERE id NOT IN (SELECT id FROM dux_meta.dux_maintenance_runs ORDER BY requested_at DESC LIMIT 100)`); cleanupErr != nil {
-		log.Printf("warning: trim warehouse maintenance history: %v", cleanupErr)
+		log.Printf("warning: trim DuckLake maintenance history: %v", cleanupErr)
 	}
 	s.jobs.Store(job.ID, job)
-	log.Printf("warehouse maintenance %s %s (%s)%s", job.Kind, job.Status, job.ID, logErrorSuffix(job.Error))
+	log.Printf("DuckLake maintenance %s %s (%s)%s", job.Kind, job.Status, job.ID, logErrorSuffix(job.Error))
 }
 
 func (s *Service) StartImport(key string, request ImportRequest) (Job, error) {
 	if err := s.ctx.Err(); err != nil {
-		return Job{}, fmt.Errorf("warehouse service is stopping: %w", err)
+		return Job{}, fmt.Errorf("DuckLake service is stopping: %w", err)
 	}
 	if !s.ImportsEnabled() {
 		return Job{}, ErrImportsDisabled
@@ -529,7 +529,7 @@ func (s *Service) StartImport(key string, request ImportRequest) (Job, error) {
 		return Job{}, err
 	}
 	s.jobs.Store(job.ID, job)
-	log.Printf("warehouse import %s.%s started (%s, %d files)", request.Schema, request.Table, job.ID, len(request.Files))
+	log.Printf("DuckLake import %s.%s started (%s, %d files)", request.Schema, request.Table, job.ID, len(request.Files))
 	deadline := job.RequestedAt.Add(s.cfg.ImportTimeout)
 	stageContext, cancelStage := context.WithDeadline(s.ctx, deadline)
 	copied, err := s.stageImport(stageContext, job, request)
@@ -542,7 +542,7 @@ func (s *Service) StartImport(key string, request ImportRequest) (Job, error) {
 	job.Summary = s.importSummary(copied)
 	s.jobs.Store(job.ID, job)
 	_, _ = s.cfg.Metadata.Exec(`UPDATE dux_meta.dux_imports SET summary_json = ? WHERE id = ?`, string(job.Summary), job.ID)
-	log.Printf("warehouse import %s.%s validated and staged (%s)", request.Schema, request.Table, job.ID)
+	log.Printf("DuckLake import %s.%s validated and staged (%s)", request.Schema, request.Table, job.ID)
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -556,9 +556,9 @@ func (s *Service) StartImport(key string, request ImportRequest) (Job, error) {
 }
 
 type copiedFile struct {
-	source, landing, target, hash string
-	size, rows                    int64
-	columns                       []fileColumn
+	source, inbox, target, hash string
+	size, rows                  int64
+	columns                     []fileColumn
 }
 
 type fileColumn struct {
@@ -607,9 +607,9 @@ func (s *Service) stageImport(ctx context.Context, job Job, request ImportReques
 		}
 		if err := os.Rename(temporary, target); err != nil {
 			_ = os.Remove(temporary)
-			return copied, fmt.Errorf("publish warehouse copy: %w", err)
+			return copied, fmt.Errorf("publish DuckLake copy: %w", err)
 		}
-		file.source, file.landing, file.target = name, source, target
+		file.source, file.inbox, file.target = name, source, target
 		copied = append(copied, file)
 		if seenHashes[file.hash] {
 			return copied, invalidRequest("import contains duplicate Parquet content in %q", name)
@@ -625,7 +625,7 @@ func (s *Service) stageImport(ctx context.Context, job Job, request ImportReques
 		}
 	}
 	var exists int
-	if err := s.cfg.Owner.Conn().QueryRowContext(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_catalog = 'warehouse' AND table_schema = ? AND table_name = ?`, request.Schema, request.Table).Scan(&exists); err != nil {
+	if err := s.cfg.Owner.Conn().QueryRowContext(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_catalog = 'ducklake' AND table_schema = ? AND table_name = ?`, request.Schema, request.Table).Scan(&exists); err != nil {
 		return copied, err
 	}
 	var expected []fileColumn
@@ -683,7 +683,7 @@ func (s *Service) runImport(ctx context.Context, job Job, request ImportRequest,
 	}
 	defer tx.Rollback()
 	var exists int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_catalog = 'warehouse' AND table_schema = ? AND table_name = ?`, request.Schema, request.Table).Scan(&exists); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_catalog = 'ducklake' AND table_schema = ? AND table_name = ?`, request.Schema, request.Table).Scan(&exists); err != nil {
 		return nil, err
 	}
 	var expected []fileColumn
@@ -726,8 +726,8 @@ func (s *Service) runImport(ctx context.Context, job Job, request ImportRequest,
 	}
 	committed = true
 	for _, file := range copied {
-		if err := os.Remove(file.landing); err != nil && !os.IsNotExist(err) {
-			log.Printf("warning: remove imported landing file %q: %v", file.source, err)
+		if err := os.Remove(file.inbox); err != nil && !os.IsNotExist(err) {
+			log.Printf("warning: remove imported inbox file %q: %v", file.source, err)
 		}
 	}
 	return s.importSummary(copied), nil
@@ -774,7 +774,7 @@ func parquetColumns(ctx context.Context, query queryContext, path string) ([]fil
 }
 
 func tableColumns(ctx context.Context, query queryContext, schema, table string) ([]fileColumn, error) {
-	rows, err := query.QueryContext(ctx, `SELECT column_name, data_type FROM information_schema.columns WHERE table_catalog = 'warehouse' AND table_schema = ? AND table_name = ? ORDER BY ordinal_position`, schema, table)
+	rows, err := query.QueryContext(ctx, `SELECT column_name, data_type FROM information_schema.columns WHERE table_catalog = 'ducklake' AND table_schema = ? AND table_name = ? ORDER BY ordinal_position`, schema, table)
 	if err != nil {
 		return nil, err
 	}
@@ -814,7 +814,7 @@ func (s *Service) finishImport(job Job, summary json.RawMessage, err error) {
 		job.Status, job.Error = "failed", boundedError(fmt.Errorf("persist import result: %w", persistErr))
 	}
 	s.jobs.Store(job.ID, job)
-	log.Printf("warehouse import %s.%s %s (%s)%s", job.Schema, job.Table, job.Status, job.ID, logErrorSuffix(job.Error))
+	log.Printf("DuckLake import %s.%s %s (%s)%s", job.Schema, job.Table, job.Status, job.ID, logErrorSuffix(job.Error))
 }
 
 func (s *Service) loadImport(id string) (Job, error) {

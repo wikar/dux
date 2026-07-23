@@ -1,25 +1,25 @@
 ---
 name: dux-ducklake
-description: Operate the DuckLake warehouse behind DUX through duxd, including first-class Parquet imports, import status, maintenance jobs, warehouse health, and guidance for direct local pipelines. Use when adding pipeline output to DUX, importing Parquet, creating a DuckLake table, checking warehouse versions or snapshots, compacting files, expiring time-travel snapshots, cleaning unreferenced files, or designing a pipeline that writes to the DUX-owned DuckLake warehouse.
+description: Operate the DuckLake instance behind DUX through duxd, including first-class Parquet imports, import status, maintenance jobs, DuckLake health, and guidance for direct local pipelines. Use when adding pipeline output to DUX, importing Parquet, creating a DuckLake table, checking versions or snapshots, compacting files, expiring time-travel snapshots, cleaning unreferenced files, or designing a pipeline that writes to the DUX-owned DuckLake instance.
 ---
 
 # DUX DuckLake
 
-Use the `duxd` warehouse API for ownership operations. Treat `duxd` as the warehouse owner and do not manipulate its internal files.
+Use the `duxd` DuckLake API for ownership operations. Treat `duxd` as the DuckLake owner and do not manipulate its internal files.
 
 ## Inspect first
 
-Call `GET /api/warehouse/status`. Confirm DuckDB/DuckLake versions, snapshot and schema versions, local paths, and scheduler intervals before changing anything.
+Call `GET /api/ducklake/status`. Confirm DuckDB/DuckLake versions, snapshot and schema versions, local paths, and scheduler intervals before changing anything.
 
 ## Import Parquet
 
-1. Write complete `.parquet` files beneath the configured `--import-dir`. Publish final names atomically; never expose a file still being written.
+1. Write complete `.parquet` files beneath the inbox configured by `--import-dir`. Publish final names atomically; never expose a file still being written.
 2. Send paths relative to that directory. Never send absolute paths, traversal paths, symlinks, URLs, or multipart data.
 3. Generate and retain one `Idempotency-Key` per logical import. Reuse it only for an identical request.
 4. Call:
 
 ```http
-POST /api/warehouse/imports
+POST /api/ducklake/imports
 Idempotency-Key: pipeline-run-2026-07-22T12:00:00Z
 Content-Type: application/json
 
@@ -31,13 +31,13 @@ Content-Type: application/json
 }
 ```
 
-5. A valid request returns `202`; poll `GET /api/warehouse/imports/{id}` until `succeeded` or `failed`. A `409` naming a prior import means identical content already belongs to that target and must not be submitted again.
+5. A valid request returns `202`; poll `GET /api/ducklake/imports/{id}` until `succeeded` or `failed`. A `409` naming a prior import means identical content already belongs to that target and must not be submitted again.
 
-Set `createIfMissing` only when the Parquet schema should define a new table. Existing tables require exactly matching columns and types. DUX copies accepted files into its local warehouse before transferring their ownership to DuckLake. Do not edit or delete those copies. An explicitly empty `--import-dir` disables this mutating endpoint.
+Set `createIfMissing` only when the Parquet schema should define a new table. Existing tables require exactly matching columns and types. DUX copies accepted files into its DuckLake data path before transferring their ownership to DuckLake. Do not edit or delete those copies. An explicitly empty `--import-dir` disables this mutating endpoint.
 
 ## Run maintenance
 
-Call `POST /api/warehouse/maintenance` with `compact` or `checkpoint`. Poll `GET /api/warehouse/maintenance/{id}`. A `409` means another DUX-owned operation is active; retry later rather than running work in parallel.
+Call `POST /api/ducklake/maintenance` with `compact` or `checkpoint`. Poll `GET /api/ducklake/maintenance/{id}`. A `409` means another DUX-owned operation is active; retry later rather than running work in parallel.
 
 - `compact` merges small adjacent files without removing logical rows.
 - `checkpoint` performs DuckLake's configured snapshot expiration, file rewrite/compaction, cleanup, and orphan handling. It never deletes rows still present in the current table version.
@@ -52,4 +52,4 @@ Do not use SMB, NFS, a network filesystem, or a Docker Desktop host-filesystem b
 
 ## Use public table names
 
-Refer to tables in DUX as `Table` for DuckLake `main`, or `schema.Table` for another schema. Never expose or use the internal `warehouse.main.Table` name in DUX queries, relationships, or measures.
+Refer to tables in DUX as `Table` for DuckLake `main`, or `schema.Table` for another schema. Never expose or use the internal `ducklake.main.Table` name in DUX queries, relationships, or measures.

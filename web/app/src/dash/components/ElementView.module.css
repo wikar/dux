@@ -51,6 +51,14 @@
   text-overflow: ellipsis;
 }
 
+.titleActions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
 /* CSV download in the title bar — always visible, muted, matching the funnel. */
 .titleCsv {
   flex: none;

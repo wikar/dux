@@ -46,7 +46,7 @@ import (
 	"github.com/danielwikar/dux/dash"
 	"github.com/danielwikar/dux/executor"
 	"github.com/danielwikar/dux/internal/bootstrap"
-	"github.com/danielwikar/dux/internal/warehouse"
+	"github.com/danielwikar/dux/internal/ducklake"
 	"github.com/danielwikar/dux/parser"
 	"github.com/danielwikar/dux/semantic"
 	"github.com/danielwikar/dux/web"
@@ -82,7 +82,7 @@ var (
 )
 
 func init() {
-	flag.Var(&importDir, "import-dir", "controlled Parquet import directory (default: <db-dir>/incoming; empty disables imports)")
+	flag.Var(&importDir, "import-dir", "controlled Parquet inbox (default: <db-dir>/inbox; empty disables imports)")
 }
 
 const maxRequestBodyBytes = 4 << 20
@@ -93,7 +93,7 @@ const openAPISpec = `{
   "info": {
     "title": "DUX Query API",
     "version": "1.0.0",
-    "description": "Execute DUX queries against the DUX DuckLake warehouse. Main-schema tables use Table; other schemas use schema.Table. Mutating warehouse endpoints assume a trusted network and provide no authentication in this release."
+    "description": "Execute DUX queries against the DUX DuckLake instance. Main-schema tables use Table; other schemas use schema.Table. Mutating DuckLake endpoints assume a trusted network and provide no authentication in this release."
   },
   "paths": {
     "/query": {
@@ -456,38 +456,38 @@ const openAPISpec = `{
         }
       }
     },
-    "/api/warehouse/status": {
+    "/api/ducklake/status": {
       "get": {
-        "summary": "Get DuckLake warehouse status",
+        "summary": "Get DuckLake status",
         "responses": { "200": { "description": "Versions, snapshot/schema state, local paths, and scheduler configuration" } }
       }
     },
-    "/api/warehouse/imports": {
+    "/api/ducklake/imports": {
       "post": {
         "summary": "Import completed Parquet files",
         "description": "Files must be relative to --import-dir. DUX validates and copies them once while hashing, then registers them transactionally. Idempotency-Key is required. The endpoint returns 404 when imports are disabled.",
         "parameters": [{ "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "maxLength": 256 } }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["table", "files"], "properties": { "schema": { "type": "string", "default": "main", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }, "table": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }, "files": { "type": "array", "minItems": 1, "description": "Bounded by --import-max-files (default 100)", "items": { "type": "string", "maxLength": 1024 } }, "createIfMissing": { "type": "boolean", "default": false } } } } } },
-        "responses": { "202": { "description": "Import validated, copied, and accepted for transactional registration" }, "400": { "description": "Invalid path, Parquet file, or schema" }, "404": { "description": "Imports disabled" }, "409": { "description": "Warehouse busy, conflicting idempotency key, or content already imported; error identifies the active/prior import" } }
+        "responses": { "202": { "description": "Import validated, copied, and accepted for transactional registration" }, "400": { "description": "Invalid path, Parquet file, or schema" }, "404": { "description": "Imports disabled" }, "409": { "description": "DuckLake busy, conflicting idempotency key, or content already imported; error identifies the active/prior import" } }
       }
     },
-    "/api/warehouse/imports/{id}": {
+    "/api/ducklake/imports/{id}": {
       "get": {
         "summary": "Get an import job",
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
         "responses": { "200": { "description": "Import job" }, "404": { "description": "Not found" } }
       }
     },
-    "/api/warehouse/maintenance": {
+    "/api/ducklake/maintenance": {
       "get": { "summary": "List maintenance runs", "responses": { "200": { "description": "Recent maintenance runs" } } },
       "post": {
-        "summary": "Start warehouse maintenance",
+        "summary": "Start DuckLake maintenance",
         "description": "Operation is compact or checkpoint.",
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["operation"], "properties": { "operation": { "type": "string", "enum": ["compact", "checkpoint"] } } } } } },
-        "responses": { "202": { "description": "Maintenance job accepted" }, "409": { "description": "Warehouse operation busy" } }
+        "responses": { "202": { "description": "Maintenance job accepted" }, "409": { "description": "DuckLake operation busy" } }
       }
     },
-    "/api/warehouse/maintenance/{id}": {
+    "/api/ducklake/maintenance/{id}": {
       "get": {
         "summary": "Get a maintenance job",
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
@@ -658,24 +658,24 @@ func main() {
 	}
 	resolvedImportDir := importDir.value
 	if !importDir.set {
-		resolvedImportDir = filepath.Join(runtime.DBDir, "incoming")
+		resolvedImportDir = filepath.Join(runtime.DBDir, "inbox")
 	}
-	warehouseService, err := warehouse.NewService(warehouse.ServiceConfig{
+	ducklakeService, err := ducklake.NewService(ducklake.ServiceConfig{
 		Owner: runtime.Owner, Metadata: metaDB.DB(), DataPath: runtime.DataPath,
 		ImportPath: resolvedImportDir, MaintenanceTimeout: *maintenanceTimeout, ImportTimeout: *importTimeout,
 		MaxCompactions: *maxCompactions, MaxImportFiles: *importMaxFiles,
 		OrphanDelay: runtime.Owner.FileDeleteDelay(),
 	})
 	if err != nil {
-		log.Fatalf("warehouse service: %v", err)
+		log.Fatalf("DuckLake service: %v", err)
 	}
-	defer warehouseService.Close()
-	schedule := warehouseSchedule{SchemaRefresh: *schemaInterval, Compact: *compactInterval, Checkpoint: *checkpointInterval, StartedAt: time.Now().UTC()}
+	defer ducklakeService.Close()
+	schedule := ducklakeSchedule{SchemaRefresh: *schemaInterval, Compact: *compactInterval, Checkpoint: *checkpointInterval, StartedAt: time.Now().UTC()}
 	backgroundCtx, cancelBackground := context.WithCancel(context.Background())
 	defer cancelBackground()
-	go monitorWarehouseSchema(backgroundCtx, runtime, *schemaInterval, refreshSchema)
-	go scheduleWarehouseMaintenance(backgroundCtx, warehouseService, "compact", *compactInterval)
-	go scheduleWarehouseMaintenance(backgroundCtx, warehouseService, "checkpoint", *checkpointInterval)
+	go monitorDuckLakeSchema(backgroundCtx, runtime, *schemaInterval, refreshSchema)
+	go scheduleDuckLakeMaintenance(backgroundCtx, ducklakeService, "compact", *compactInterval)
+	go scheduleDuckLakeMaintenance(backgroundCtx, ducklakeService, "checkpoint", *checkpointInterval)
 
 	mux := http.NewServeMux()
 
@@ -695,18 +695,18 @@ func main() {
 	mux.HandleFunc("POST /hidden", hiddenHandler(metaDB, schema, &schemaMu, true))
 	mux.HandleFunc("DELETE /hidden", hiddenHandler(metaDB, schema, &schemaMu, false))
 	mux.HandleFunc("POST /refresh", refreshHandler(runtime, schema, &schemaMu))
-	mux.HandleFunc("GET /api/warehouse/status", warehouseStatusHandler(runtime, warehouseService, schedule))
-	mux.HandleFunc("GET /api/warehouse/maintenance", maintenanceCollectionHandler(warehouseService))
-	mux.HandleFunc("POST /api/warehouse/maintenance", maintenanceCollectionHandler(warehouseService))
-	mux.HandleFunc("GET /api/warehouse/maintenance/{id}", maintenanceJobHandler(warehouseService))
-	if warehouseService.ImportsEnabled() {
-		mux.HandleFunc("POST /api/warehouse/imports", importCollectionHandler(warehouseService))
+	mux.HandleFunc("GET /api/ducklake/status", ducklakeStatusHandler(runtime, ducklakeService, schedule))
+	mux.HandleFunc("GET /api/ducklake/maintenance", maintenanceCollectionHandler(ducklakeService))
+	mux.HandleFunc("POST /api/ducklake/maintenance", maintenanceCollectionHandler(ducklakeService))
+	mux.HandleFunc("GET /api/ducklake/maintenance/{id}", maintenanceJobHandler(ducklakeService))
+	if ducklakeService.ImportsEnabled() {
+		mux.HandleFunc("POST /api/ducklake/imports", importCollectionHandler(ducklakeService))
 	} else {
-		mux.HandleFunc("POST /api/warehouse/imports", func(w http.ResponseWriter, _ *http.Request) {
+		mux.HandleFunc("POST /api/ducklake/imports", func(w http.ResponseWriter, _ *http.Request) {
 			writeError(w, "Parquet imports are disabled", http.StatusNotFound)
 		})
 	}
-	mux.HandleFunc("GET /api/warehouse/imports/{id}", importJobHandler(warehouseService))
+	mux.HandleFunc("GET /api/ducklake/imports/{id}", importJobHandler(ducklakeService))
 
 	dashEnabled := os.Getenv("DUX_DASH") != "0"
 	if dashEnabled {
@@ -729,12 +729,12 @@ func main() {
 		writeJSON(w, map[string]any{
 			"version": version,
 			"capabilities": map[string]bool{
-				"externalFilters":      true,
-				"measureFormats":       true,
-				"dashboards":           dashEnabled,
-				"ducklakeWarehouse":    true,
-				"warehouseMaintenance": true,
-				"parquetImport":        warehouseService.ImportsEnabled(),
+				"externalFilters":     true,
+				"measureFormats":      true,
+				"dashboards":          dashEnabled,
+				"ducklake":            true,
+				"ducklakeMaintenance": true,
+				"parquetImport":       ducklakeService.ImportsEnabled(),
 			},
 		})
 	})
@@ -1003,7 +1003,7 @@ func quoteIdent(name string) string {
 }
 
 // quoteTableKey quotes each dot-separated segment of a schema table key
-// (e.g. "warehouse.main.Sales" → "warehouse"."main"."Sales").
+// (e.g. "ducklake.main.Sales" → "ducklake"."main"."Sales").
 func quoteTableKey(key string) string {
 	parts := strings.Split(key, ".")
 	for i, p := range parts {

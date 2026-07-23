@@ -12,7 +12,7 @@ import (
 
 func TestBootstrapCreatesDuckLakeAndUsesPublicNames(t *testing.T) {
 	dir := t.TempDir()
-	r, err := Bootstrap(dir, filepath.Join(dir, "dux.sqlite"), filepath.Join(dir, "ducklake.sqlite"), filepath.Join(dir, "warehouse"), filepath.Join(dir, "missing.toml"), true)
+	r, err := Bootstrap(dir, filepath.Join(dir, "dux.sqlite"), filepath.Join(dir, "ducklake.sqlite"), filepath.Join(dir, "ducklake"), filepath.Join(dir, "missing.toml"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,20 +35,20 @@ func TestBootstrapCreatesDuckLakeAndUsesPublicNames(t *testing.T) {
 	if !ok {
 		t.Fatalf("public table sales missing: %#v", fresh.Tables)
 	}
-	if table.SQLName != "warehouse.main.sales" {
+	if table.SQLName != "ducklake.main.sales" {
 		t.Fatalf("SQLName = %q", table.SQLName)
 	}
-	if view := fresh.Tables["current_sales"]; view == nil || !view.IsView || view.SQLName != "warehouse.main.current_sales" {
+	if view := fresh.Tables["current_sales"]; view == nil || !view.IsView || view.SQLName != "ducklake.main.current_sales" {
 		t.Fatalf("view mapping = %#v", view)
 	}
-	if table := fresh.Tables["finance.ledger"]; table == nil || table.SQLName != "warehouse.finance.ledger" {
+	if table := fresh.Tables["finance.ledger"]; table == nil || table.SQLName != "ducklake.finance.ledger" {
 		t.Fatalf("schema mapping = %#v", table)
 	}
 	publicSchema, err := json.Marshal(fresh)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(publicSchema), "warehouse.main") || strings.Contains(string(publicSchema), "warehouse.finance") {
+	if strings.Contains(string(publicSchema), "ducklake.main") || strings.Contains(string(publicSchema), "ducklake.finance") {
 		t.Fatalf("public schema exposed physical names: %s", publicSchema)
 	}
 	columns, rows, err := executor.ExecuteContext(t.Context(), r.DB(), fresh, `EVALUATE SUMMARIZECOLUMNS(sales[id], "Total", SUM(sales[amount]))`)
@@ -70,19 +70,19 @@ func TestBootstrapCreatesDuckLakeAndUsesPublicNames(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "ducklake.sqlite")); err != nil {
 		t.Fatal(err)
 	}
-	if info, err := os.Stat(filepath.Join(dir, "warehouse")); err != nil || !info.IsDir() {
-		t.Fatalf("warehouse directory: %v", err)
+	if info, err := os.Stat(filepath.Join(dir, "ducklake")); err != nil || !info.IsDir() {
+		t.Fatalf("ducklake directory: %v", err)
 	}
 	if matches, err := filepath.Glob(filepath.Join(dir, "*.duckdb")); err != nil || len(matches) != 0 {
 		t.Fatalf("native DuckDB files = %v, %v", matches, err)
 	}
 }
 
-func TestReaderBootstrapDoesNotCreateMissingWarehouse(t *testing.T) {
+func TestReaderBootstrapDoesNotCreateMissingDuckLake(t *testing.T) {
 	dir := t.TempDir()
-	catalog := filepath.Join(dir, "warehouse.sqlite")
-	if _, err := Bootstrap(dir, filepath.Join(dir, "dux.sqlite"), catalog, filepath.Join(dir, "warehouse"), filepath.Join(dir, "missing.toml"), false); err == nil {
-		t.Fatal("reader bootstrap created a missing warehouse")
+	catalog := filepath.Join(dir, "ducklake.sqlite")
+	if _, err := Bootstrap(dir, filepath.Join(dir, "dux.sqlite"), catalog, filepath.Join(dir, "ducklake"), filepath.Join(dir, "missing.toml"), false); err == nil {
+		t.Fatal("reader bootstrap created a missing ducklake")
 	}
 	if _, err := os.Stat(catalog); !os.IsNotExist(err) {
 		t.Fatalf("catalog exists after reader failure: %v", err)
@@ -91,7 +91,7 @@ func TestReaderBootstrapDoesNotCreateMissingWarehouse(t *testing.T) {
 
 func TestRefreshReportsBrokenSemanticObjectsAndRecovers(t *testing.T) {
 	dir := t.TempDir()
-	runtime, err := Bootstrap(dir, filepath.Join(dir, "dux.sqlite"), filepath.Join(dir, "warehouse.sqlite"), filepath.Join(dir, "warehouse"), filepath.Join(dir, "missing.toml"), true)
+	runtime, err := Bootstrap(dir, filepath.Join(dir, "dux.sqlite"), filepath.Join(dir, "ducklake.sqlite"), filepath.Join(dir, "ducklake"), filepath.Join(dir, "missing.toml"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestRefreshReportsBrokenSemanticObjectsAndRecovers(t *testing.T) {
 func TestRefreshFailureMarksDegradedAndRecovers(t *testing.T) {
 	dir := t.TempDir()
 	tomlPath := filepath.Join(dir, "dux.toml")
-	runtime, err := Bootstrap(dir, filepath.Join(dir, "dux.sqlite"), filepath.Join(dir, "warehouse.sqlite"), filepath.Join(dir, "warehouse"), tomlPath, true)
+	runtime, err := Bootstrap(dir, filepath.Join(dir, "dux.sqlite"), filepath.Join(dir, "ducklake.sqlite"), filepath.Join(dir, "ducklake"), tomlPath, true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/danielwikar/dux/internal/warehouse"
+	"github.com/danielwikar/dux/internal/ducklake"
 	"github.com/danielwikar/dux/parser"
 	"github.com/danielwikar/dux/semantic"
 )
@@ -23,8 +23,8 @@ import (
 // independent read-only connection. The CLI opens Query only.
 type Runtime struct {
 	Metadata    *semantic.MetadataDB
-	Owner       *warehouse.Runtime
-	Query       *warehouse.Runtime
+	Owner       *ducklake.Runtime
+	Query       *ducklake.Runtime
 	Schema      *semantic.Schema
 	DBDir       string
 	MetaPath    string
@@ -67,7 +67,7 @@ func (r *Runtime) RefreshSchema() (schema *semantic.Schema, err error) {
 		if err != nil {
 			r.refreshErr = err.Error()
 			if !wasDegraded {
-				log.Printf("warehouse schema status changed to degraded: %v", err)
+				log.Printf("DuckLake schema status changed to degraded: %v", err)
 			}
 			return
 		}
@@ -75,9 +75,9 @@ func (r *Runtime) RefreshSchema() (schema *semantic.Schema, err error) {
 		isDegraded := warning != ""
 		if wasDegraded != isDegraded {
 			if isDegraded {
-				log.Printf("warehouse schema status changed to degraded: %s", warning)
+				log.Printf("DuckLake schema status changed to degraded: %s", warning)
 			} else {
-				log.Printf("warehouse schema status recovered to healthy")
+				log.Printf("DuckLake schema status recovered to healthy")
 			}
 		}
 	}()
@@ -215,14 +215,14 @@ func hasTableMeasure(schema *semantic.Schema, table, name string) bool {
 	return false
 }
 
-// Startup parses shared flags and opens the warehouse. owner must be true only
+// Startup parses shared flags and opens DuckLake. owner must be true only
 // for duxd, which owns creation and maintenance.
 func Startup(binName, version, usage string, exitAfterImport, owner bool) *Runtime {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	dbDir := flag.String("db-dir", "db", "DUX state directory")
 	duxDB := flag.String("dux", "", "path to DUX SQLite metadata (default: <db-dir>/dux.sqlite)")
-	catalog := flag.String("warehouse-catalog", "", "path to DuckLake SQLite catalog (default: <db-dir>/warehouse.sqlite)")
-	data := flag.String("warehouse-data", "", "path to local DuckLake Parquet data (default: <db-dir>/warehouse)")
+	catalog := flag.String("ducklake-catalog", "", "path to DuckLake SQLite catalog (default: <db-dir>/ducklake.sqlite)")
+	data := flag.String("ducklake-data", "", "path to local DuckLake Parquet data (default: <db-dir>/ducklake)")
 	toml := flag.String("toml", "dux.toml", "path to dux.toml configuration file")
 	importPath := flag.String("import", "", "import this dux.toml into DUX metadata")
 	exportPath := flag.String("export", "", "export measures and schema to this path then exit")
@@ -252,8 +252,8 @@ func Startup(binName, version, usage string, exitAfterImport, owner bool) *Runti
 	r := &Runtime{
 		DBDir:       resolve(*dbDir, "."),
 		MetaPath:    resolve(*duxDB, "dux.sqlite"),
-		CatalogPath: resolve(*catalog, "warehouse.sqlite"),
-		DataPath:    resolve(*data, "warehouse"),
+		CatalogPath: resolve(*catalog, "ducklake.sqlite"),
+		DataPath:    resolve(*data, "ducklake"),
 		TOMLPath:    *toml,
 	}
 	if err := os.MkdirAll(r.DBDir, 0o755); err != nil {
@@ -265,24 +265,24 @@ func Startup(binName, version, usage string, exitAfterImport, owner bool) *Runti
 	if err != nil {
 		log.Fatalf("open DUX metadata: %v", err)
 	}
-	cfg := warehouse.Config{
+	cfg := ducklake.Config{
 		CatalogPath:         r.CatalogPath,
 		DataPath:            r.DataPath,
 		TimeTravelRetention: *retention,
 		FileDeleteDelay:     *deleteDelay,
 	}
 	if owner {
-		r.Owner, err = warehouse.OpenOwner(context.Background(), cfg)
+		r.Owner, err = ducklake.OpenOwner(context.Background(), cfg)
 		if err != nil {
 			r.Close()
 			log.Fatalf("open DuckLake owner: %v", err)
 		}
 	}
-	r.Query, err = warehouse.OpenReader(context.Background(), cfg)
+	r.Query, err = ducklake.OpenReader(context.Background(), cfg)
 	if err != nil {
 		r.Close()
 		if !owner && os.IsNotExist(err) {
-			log.Fatalf("open DuckLake reader: %v; start duxd once to initialize the warehouse", err)
+			log.Fatalf("open DuckLake reader: %v; start duxd once to initialize DuckLake", err)
 		}
 		log.Fatalf("open DuckLake reader: %v", err)
 	}
@@ -320,15 +320,15 @@ func Bootstrap(dbDir, metaPath, catalogPath, dataPath, tomlPath string, owner bo
 	if err != nil {
 		return nil, err
 	}
-	cfg := warehouse.Config{CatalogPath: catalogPath, DataPath: dataPath, TimeTravelRetention: 30 * 24 * time.Hour, FileDeleteDelay: 7 * 24 * time.Hour}
+	cfg := ducklake.Config{CatalogPath: catalogPath, DataPath: dataPath, TimeTravelRetention: 30 * 24 * time.Hour, FileDeleteDelay: 7 * 24 * time.Hour}
 	if owner {
-		r.Owner, err = warehouse.OpenOwner(context.Background(), cfg)
+		r.Owner, err = ducklake.OpenOwner(context.Background(), cfg)
 		if err != nil {
 			r.Close()
 			return nil, err
 		}
 	}
-	r.Query, err = warehouse.OpenReader(context.Background(), cfg)
+	r.Query, err = ducklake.OpenReader(context.Background(), cfg)
 	if err != nil {
 		r.Close()
 		return nil, err

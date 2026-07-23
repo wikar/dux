@@ -139,7 +139,11 @@ function MapElementBody({ el }: { el: DashElement }) {
   return (
     <div className={styles.dataWrap}>
       <MapBody el={el} />
-      {showFunnel && titleless && <FunnelButton el={el} floating />}
+      {showFunnel && titleless && (
+        <div className={styles.floatingActions}>
+          <FunnelButton el={el} floating />
+        </div>
+      )}
     </div>
   );
 }
@@ -198,13 +202,13 @@ function DataBody({ el }: { el: DashElement }) {
   // floating hover button so export stays reachable.
   const titleShown = el.title?.show !== false && !!el.title?.text;
   const showFunnel = doc?.controls?.funnel !== false;
-  const showCsv = doc?.controls?.csv !== false;
+  const showCsv = el.type !== "kpi" && doc?.controls?.csv !== false;
 
   return (
     <div className={styles.dataWrap}>
       {data && <DataViz el={el} data={data} formats={formats} palette={palette} />}
       {data && !titleShown && (
-        <>
+        <div className={styles.floatingActions}>
           {showFunnel && <FunnelButton el={el} floating />}
           {showCsv && (
             <button
@@ -216,7 +220,7 @@ function DataBody({ el }: { el: DashElement }) {
               {downloadIcon}
             </button>
           )}
-        </>
+        </div>
       )}
       {loading && (
         <div className={styles.overlay}>

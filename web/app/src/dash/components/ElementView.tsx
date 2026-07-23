@@ -82,8 +82,12 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
       {showTitle && (
         <div className={styles.titleBar}>
           <span className={styles.titleText}>{el.title!.text}</span>
-          {(QUERY_TYPES.has(el.type) || el.type === "map") && showFunnel && <FunnelButton el={el} />}
-          {QUERY_TYPES.has(el.type) && showCsv && <TitleCsvButton el={el} className={styles.titleCsv} />}
+          <div className={styles.titleActions}>
+            {(QUERY_TYPES.has(el.type) || el.type === "map") && showFunnel && <FunnelButton el={el} />}
+            {el.type !== "kpi" && QUERY_TYPES.has(el.type) && showCsv && (
+              <TitleCsvButton el={el} className={styles.titleCsv} />
+            )}
+          </div>
         </div>
       )}
       <div className={styles.body}>

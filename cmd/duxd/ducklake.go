@@ -14,17 +14,17 @@ import (
 	"time"
 
 	"github.com/danielwikar/dux/internal/bootstrap"
-	"github.com/danielwikar/dux/internal/warehouse"
+	"github.com/danielwikar/dux/internal/ducklake"
 )
 
-type warehouseSchedule struct {
+type ducklakeSchedule struct {
 	SchemaRefresh time.Duration
 	Compact       time.Duration
 	Checkpoint    time.Duration
 	StartedAt     time.Time
 }
 
-func warehouseStatusHandler(runtime *bootstrap.Runtime, service *warehouse.Service, schedule warehouseSchedule) http.HandlerFunc {
+func ducklakeStatusHandler(runtime *bootstrap.Runtime, service *ducklake.Service, schedule ducklakeSchedule) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		duckDB, duckLake, err := runtime.Query.Versions(r.Context())
 		if err != nil {
@@ -53,7 +53,7 @@ func warehouseStatusHandler(runtime *bootstrap.Runtime, service *warehouse.Servi
 		operationalError := ""
 		if maintenanceErr != nil || importsErr != nil {
 			health = "degraded"
-			operationalError = "could not read warehouse operation history"
+			operationalError = "could not read DuckLake operation history"
 		}
 		nextRun := func(operation string, interval time.Duration) any {
 			if interval <= 0 {
@@ -88,7 +88,7 @@ func warehouseStatusHandler(runtime *bootstrap.Runtime, service *warehouse.Servi
 	}
 }
 
-func maintenanceCollectionHandler(service *warehouse.Service) http.HandlerFunc {
+func maintenanceCollectionHandler(service *ducklake.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -120,7 +120,7 @@ func maintenanceCollectionHandler(service *warehouse.Service) http.HandlerFunc {
 			}
 			job, err := service.StartMaintenance(request.Operation)
 			if err != nil {
-				writeWarehouseOperationError(w, err)
+				writeDuckLakeOperationError(w, err)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -130,7 +130,7 @@ func maintenanceCollectionHandler(service *warehouse.Service) http.HandlerFunc {
 	}
 }
 
-func maintenanceJobHandler(service *warehouse.Service) http.HandlerFunc {
+func maintenanceJobHandler(service *ducklake.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		job, ok := service.Maintenance(r.PathValue("id"))
 		if !ok {
@@ -141,9 +141,9 @@ func maintenanceJobHandler(service *warehouse.Service) http.HandlerFunc {
 	}
 }
 
-func importCollectionHandler(service *warehouse.Service) http.HandlerFunc {
+func importCollectionHandler(service *ducklake.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var request warehouse.ImportRequest
+		var request ducklake.ImportRequest
 		body, err := readBody(w, r)
 		if err != nil {
 			writeError(w, err.Error(), bodyErrorStatus(err))
@@ -161,7 +161,7 @@ func importCollectionHandler(service *warehouse.Service) http.HandlerFunc {
 		}
 		job, err := service.StartImport(r.Header.Get("Idempotency-Key"), request)
 		if err != nil {
-			writeWarehouseOperationError(w, err)
+			writeDuckLakeOperationError(w, err)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -170,7 +170,7 @@ func importCollectionHandler(service *warehouse.Service) http.HandlerFunc {
 	}
 }
 
-func monitorWarehouseSchema(ctx context.Context, runtime *bootstrap.Runtime, interval time.Duration, refresh func()) {
+func monitorDuckLakeSchema(ctx context.Context, runtime *bootstrap.Runtime, interval time.Duration, refresh func()) {
 	if interval <= 0 {
 		return
 	}
@@ -211,7 +211,7 @@ func monitorWarehouseSchema(ctx context.Context, runtime *bootstrap.Runtime, int
 	}
 }
 
-func scheduleWarehouseMaintenance(ctx context.Context, service *warehouse.Service, operation string, interval time.Duration) {
+func scheduleDuckLakeMaintenance(ctx context.Context, service *ducklake.Service, operation string, interval time.Duration) {
 	if interval <= 0 {
 		return
 	}
@@ -232,13 +232,13 @@ func scheduleWarehouseMaintenance(ctx context.Context, service *warehouse.Servic
 		case <-timer.C:
 		}
 		if _, err := service.StartScheduledMaintenance(operation); err != nil {
-			log.Printf("warning: scheduled warehouse %s: %v", operation, err)
+			log.Printf("warning: scheduled DuckLake %s: %v", operation, err)
 		}
 		timer.Reset(interval)
 	}
 }
 
-func importJobHandler(service *warehouse.Service) http.HandlerFunc {
+func importJobHandler(service *ducklake.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		job, ok := service.Import(r.PathValue("id"))
 		if !ok {
@@ -249,15 +249,15 @@ func importJobHandler(service *warehouse.Service) http.HandlerFunc {
 	}
 }
 
-func writeWarehouseOperationError(w http.ResponseWriter, err error) {
+func writeDuckLakeOperationError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, warehouse.ErrBusy), errors.Is(err, warehouse.ErrIdempotencyConflict), errors.Is(err, warehouse.ErrDuplicateContent):
+	case errors.Is(err, ducklake.ErrBusy), errors.Is(err, ducklake.ErrIdempotencyConflict), errors.Is(err, ducklake.ErrDuplicateContent):
 		writeError(w, err.Error(), http.StatusConflict)
-	case errors.Is(err, warehouse.ErrImportsDisabled):
+	case errors.Is(err, ducklake.ErrImportsDisabled):
 		writeError(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, context.DeadlineExceeded):
 		writeError(w, err.Error(), http.StatusGatewayTimeout)
-	case errors.Is(err, warehouse.ErrInvalidRequest):
+	case errors.Is(err, ducklake.ErrInvalidRequest):
 		writeError(w, err.Error(), http.StatusBadRequest)
 	default:
 		writeError(w, err.Error(), http.StatusInternalServerError)

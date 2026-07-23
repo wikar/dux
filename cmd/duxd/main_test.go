@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/danielwikar/dux/internal/bootstrap"
-	"github.com/danielwikar/dux/internal/warehouse"
+	"github.com/danielwikar/dux/internal/ducklake"
 	"github.com/danielwikar/dux/semantic"
 )
 
@@ -27,7 +27,7 @@ func TestOpenAPISpecIsValidJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	paths := document["paths"].(map[string]any)
-	for _, path := range []string{"/api/warehouse/status", "/api/warehouse/imports", "/api/warehouse/imports/{id}", "/api/warehouse/maintenance", "/api/warehouse/maintenance/{id}"} {
+	for _, path := range []string{"/api/ducklake/status", "/api/ducklake/imports", "/api/ducklake/imports/{id}", "/api/ducklake/maintenance", "/api/ducklake/maintenance/{id}"} {
 		if _, ok := paths[path]; !ok {
 			t.Fatalf("OpenAPI path %s missing", path)
 		}
@@ -55,20 +55,20 @@ func TestBodyLimit(t *testing.T) {
 	}
 }
 
-func TestWarehouseStatusDoesNotExposeAbsolutePaths(t *testing.T) {
+func TestDuckLakeStatusDoesNotExposeAbsolutePaths(t *testing.T) {
 	dir := t.TempDir()
-	runtime, err := bootstrap.Bootstrap(dir, filepath.Join(dir, "dux.sqlite"), filepath.Join(dir, "warehouse.sqlite"), filepath.Join(dir, "warehouse"), filepath.Join(dir, "missing.toml"), true)
+	runtime, err := bootstrap.Bootstrap(dir, filepath.Join(dir, "dux.sqlite"), filepath.Join(dir, "ducklake.sqlite"), filepath.Join(dir, "ducklake"), filepath.Join(dir, "missing.toml"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	service, err := warehouse.NewService(warehouse.ServiceConfig{Owner: runtime.Owner, Metadata: runtime.Metadata.DB(), DataPath: runtime.DataPath, MaintenanceTimeout: time.Minute})
+	service, err := ducklake.NewService(ducklake.ServiceConfig{Owner: runtime.Owner, Metadata: runtime.Metadata.DB(), DataPath: runtime.DataPath, MaintenanceTimeout: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
 	recorder := httptest.NewRecorder()
-	warehouseStatusHandler(runtime, service, warehouseSchedule{})(recorder, httptest.NewRequest(http.MethodGet, "/api/warehouse/status", nil))
+	ducklakeStatusHandler(runtime, service, ducklakeSchedule{})(recorder, httptest.NewRequest(http.MethodGet, "/api/ducklake/status", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
 	}
@@ -80,7 +80,7 @@ func TestWarehouseStatusDoesNotExposeAbsolutePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	if status["health"] != "healthy" || status["ducklakeFormatVersion"] != "1.0" || status["importsEnabled"] != false {
-		t.Fatalf("warehouse status = %#v", status)
+		t.Fatalf("ducklake status = %#v", status)
 	}
 	if err := runtime.Metadata.SaveRelationship("missing_fact", "id", "missing_dimension", "id", false); err != nil {
 		t.Fatal(err)
@@ -89,19 +89,19 @@ func TestWarehouseStatusDoesNotExposeAbsolutePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	recorder = httptest.NewRecorder()
-	warehouseStatusHandler(runtime, service, warehouseSchedule{})(recorder, httptest.NewRequest(http.MethodGet, "/api/warehouse/status", nil))
+	ducklakeStatusHandler(runtime, service, ducklakeSchedule{})(recorder, httptest.NewRequest(http.MethodGet, "/api/ducklake/status", nil))
 	if err := json.Unmarshal(recorder.Body.Bytes(), &status); err != nil {
 		t.Fatal(err)
 	}
 	if status["health"] != "degraded" || !strings.Contains(status["schemaWarning"].(string), "missing_fact") {
-		t.Fatalf("degraded warehouse status = %#v", status)
+		t.Fatalf("degraded ducklake status = %#v", status)
 	}
 	recorder = httptest.NewRecorder()
-	maintenanceCollectionHandler(service)(recorder, httptest.NewRequest(http.MethodPost, "/api/warehouse/maintenance", strings.NewReader(`{"operation":"checkpoint"}`)))
+	maintenanceCollectionHandler(service)(recorder, httptest.NewRequest(http.MethodPost, "/api/ducklake/maintenance", strings.NewReader(`{"operation":"checkpoint"}`)))
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("maintenance status = %d: %s", recorder.Code, recorder.Body.String())
 	}
-	var job warehouse.Job
+	var job ducklake.Job
 	if err := json.Unmarshal(recorder.Body.Bytes(), &job); err != nil {
 		t.Fatal(err)
 	}
@@ -116,22 +116,22 @@ func TestWarehouseStatusDoesNotExposeAbsolutePaths(t *testing.T) {
 		t.Fatalf("maintenance did not succeed: %#v", current)
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/warehouse/maintenance/{id}", maintenanceJobHandler(service))
+	mux.HandleFunc("GET /api/ducklake/maintenance/{id}", maintenanceJobHandler(service))
 	recorder = httptest.NewRecorder()
-	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/warehouse/maintenance/missing", nil))
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/ducklake/maintenance/missing", nil))
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("missing job status = %d", recorder.Code)
 	}
 }
 
-func TestWarehouseHandlersRejectUnsafeAndOversizedRequests(t *testing.T) {
+func TestDuckLakeHandlersRejectUnsafeAndOversizedRequests(t *testing.T) {
 	dir := t.TempDir()
-	runtime, err := bootstrap.Bootstrap(dir, filepath.Join(dir, "dux.sqlite"), filepath.Join(dir, "warehouse.sqlite"), filepath.Join(dir, "warehouse"), filepath.Join(dir, "missing.toml"), true)
+	runtime, err := bootstrap.Bootstrap(dir, filepath.Join(dir, "dux.sqlite"), filepath.Join(dir, "ducklake.sqlite"), filepath.Join(dir, "ducklake"), filepath.Join(dir, "missing.toml"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	service, err := warehouse.NewService(warehouse.ServiceConfig{Owner: runtime.Owner, Metadata: runtime.Metadata.DB(), DataPath: runtime.DataPath})
+	service, err := ducklake.NewService(ducklake.ServiceConfig{Owner: runtime.Owner, Metadata: runtime.Metadata.DB(), DataPath: runtime.DataPath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,25 +139,25 @@ func TestWarehouseHandlersRejectUnsafeAndOversizedRequests(t *testing.T) {
 	maintenance := maintenanceCollectionHandler(service)
 	for _, body := range []string{`{"operation":"vacuum"}`, `{"operation":"compact","sql":"DROP TABLE x"}`} {
 		recorder := httptest.NewRecorder()
-		maintenance(recorder, httptest.NewRequest(http.MethodPost, "/api/warehouse/maintenance", strings.NewReader(body)))
+		maintenance(recorder, httptest.NewRequest(http.MethodPost, "/api/ducklake/maintenance", strings.NewReader(body)))
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("maintenance body %s status = %d: %s", body, recorder.Code, recorder.Body.String())
 		}
 	}
 	recorder := httptest.NewRecorder()
-	maintenance(recorder, httptest.NewRequest(http.MethodPost, "/api/warehouse/maintenance", strings.NewReader(strings.Repeat("x", maxRequestBodyBytes+1))))
+	maintenance(recorder, httptest.NewRequest(http.MethodPost, "/api/ducklake/maintenance", strings.NewReader(strings.Repeat("x", maxRequestBodyBytes+1))))
 	if recorder.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized maintenance status = %d", recorder.Code)
 	}
 	imports := importCollectionHandler(service)
 	recorder = httptest.NewRecorder()
-	imports(recorder, httptest.NewRequest(http.MethodPost, "/api/warehouse/imports", strings.NewReader(`{"table":"x","files":["x.parquet"]}`)))
+	imports(recorder, httptest.NewRequest(http.MethodPost, "/api/ducklake/imports", strings.NewReader(`{"table":"x","files":["x.parquet"]}`)))
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("disabled import status = %d: %s", recorder.Code, recorder.Body.String())
 	}
 	service.Close()
-	incoming := filepath.Join(dir, "incoming")
-	enabled, err := warehouse.NewService(warehouse.ServiceConfig{Owner: runtime.Owner, Metadata: runtime.Metadata.DB(), DataPath: runtime.DataPath, ImportPath: incoming})
+	inbox := filepath.Join(dir, "inbox")
+	enabled, err := ducklake.NewService(ducklake.ServiceConfig{Owner: runtime.Owner, Metadata: runtime.Metadata.DB(), DataPath: runtime.DataPath, ImportPath: inbox})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,14 +171,14 @@ func TestWarehouseHandlersRejectUnsafeAndOversizedRequests(t *testing.T) {
 		{`{"table":"x","files":["x.parquet"]}`, ""},
 	} {
 		recorder = httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPost, "/api/warehouse/imports", strings.NewReader(test.body))
+		request := httptest.NewRequest(http.MethodPost, "/api/ducklake/imports", strings.NewReader(test.body))
 		request.Header.Set("Idempotency-Key", test.key)
 		imports(recorder, request)
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("import body %s status = %d: %s", test.body, recorder.Code, recorder.Body.String())
 		}
 	}
-	parquet := filepath.ToSlash(filepath.Join(incoming, "x.parquet"))
+	parquet := filepath.ToSlash(filepath.Join(inbox, "x.parquet"))
 	if _, err := runtime.Owner.Conn().ExecContext(t.Context(), `COPY (SELECT 1::INTEGER id) TO '`+parquet+`' (FORMAT PARQUET)`); err != nil {
 		t.Fatal(err)
 	}
@@ -187,13 +187,13 @@ func TestWarehouseHandlersRejectUnsafeAndOversizedRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	recorder = httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/warehouse/imports", strings.NewReader(`{"table":"x","files":["x.parquet"],"createIfMissing":true}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/ducklake/imports", strings.NewReader(`{"table":"x","files":["x.parquet"],"createIfMissing":true}`))
 	request.Header.Set("Idempotency-Key", "valid")
 	imports(recorder, request)
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("valid import status = %d: %s", recorder.Code, recorder.Body.String())
 	}
-	var accepted warehouse.Job
+	var accepted ducklake.Job
 	if err := json.Unmarshal(recorder.Body.Bytes(), &accepted); err != nil {
 		t.Fatal(err)
 	}
@@ -208,20 +208,20 @@ func TestWarehouseHandlersRejectUnsafeAndOversizedRequests(t *testing.T) {
 	if accepted.Status != "succeeded" {
 		t.Fatalf("accepted import = %#v", accepted)
 	}
-	if err := os.WriteFile(filepath.Join(incoming, "duplicate.parquet"), fileBytes, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(inbox, "duplicate.parquet"), fileBytes, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodPost, "/api/warehouse/imports", strings.NewReader(`{"table":"x","files":["duplicate.parquet"]}`))
+	request = httptest.NewRequest(http.MethodPost, "/api/ducklake/imports", strings.NewReader(`{"table":"x","files":["duplicate.parquet"]}`))
 	request.Header.Set("Idempotency-Key", "duplicate")
 	imports(recorder, request)
 	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), accepted.ID) {
 		t.Fatalf("duplicate import status = %d: %s", recorder.Code, recorder.Body.String())
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/warehouse/imports/{id}", importJobHandler(enabled))
+	mux.HandleFunc("GET /api/ducklake/imports/{id}", importJobHandler(enabled))
 	recorder = httptest.NewRecorder()
-	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/warehouse/imports/missing", nil))
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/ducklake/imports/missing", nil))
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("missing import status = %d", recorder.Code)
 	}
@@ -229,25 +229,25 @@ func TestWarehouseHandlersRejectUnsafeAndOversizedRequests(t *testing.T) {
 
 func TestDuplicateImportContentMapsToConflict(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	writeWarehouseOperationError(recorder, fmt.Errorf("%w: prior import abc", warehouse.ErrDuplicateContent))
+	writeDuckLakeOperationError(recorder, fmt.Errorf("%w: prior import abc", ducklake.ErrDuplicateContent))
 	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "abc") {
 		t.Fatalf("duplicate response = %d %s", recorder.Code, recorder.Body.String())
 	}
 }
 
-func TestWarehouseOperationErrorStatus(t *testing.T) {
+func TestDuckLakeOperationErrorStatus(t *testing.T) {
 	tests := []struct {
 		err  error
 		want int
 	}{
-		{fmt.Errorf("%w: bad input", warehouse.ErrInvalidRequest), http.StatusBadRequest},
+		{fmt.Errorf("%w: bad input", ducklake.ErrInvalidRequest), http.StatusBadRequest},
 		{context.DeadlineExceeded, http.StatusGatewayTimeout},
-		{fmt.Errorf("%w: inspect file: %w", warehouse.ErrInvalidRequest, context.DeadlineExceeded), http.StatusGatewayTimeout},
+		{fmt.Errorf("%w: inspect file: %w", ducklake.ErrInvalidRequest, context.DeadlineExceeded), http.StatusGatewayTimeout},
 		{errors.New("catalog unavailable"), http.StatusInternalServerError},
 	}
 	for _, test := range tests {
 		recorder := httptest.NewRecorder()
-		writeWarehouseOperationError(recorder, test.err)
+		writeDuckLakeOperationError(recorder, test.err)
 		if recorder.Code != test.want {
 			t.Fatalf("error %v mapped to %d, want %d", test.err, recorder.Code, test.want)
 		}
@@ -260,11 +260,11 @@ func TestValuesHandlerUsesPhysicalTableName(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`ATTACH ':memory:' AS warehouse; CREATE TABLE warehouse.main.Product(Category VARCHAR); INSERT INTO warehouse.main.Product VALUES ('Water'), ('Coffee')`); err != nil {
+	if _, err := db.Exec(`ATTACH ':memory:' AS ducklake; CREATE TABLE ducklake.main.Product(Category VARCHAR); INSERT INTO ducklake.main.Product VALUES ('Water'), ('Coffee')`); err != nil {
 		t.Fatal(err)
 	}
 	schema := semantic.NewSchema()
-	schema.Tables["Product"] = &semantic.Table{Name: "Product", SQLName: "warehouse.main.Product", Columns: map[string]*semantic.Column{"Category": {Name: "Category", DataType: "VARCHAR"}}}
+	schema.Tables["Product"] = &semantic.Table{Name: "Product", SQLName: "ducklake.main.Product", Columns: map[string]*semantic.Column{"Category": {Name: "Category", DataType: "VARCHAR"}}}
 	recorder := httptest.NewRecorder()
 	valuesHandler(db, schema, &sync.RWMutex{})(recorder, httptest.NewRequest(http.MethodGet, "/values?table=Product&column=Category", nil))
 	if recorder.Code != http.StatusOK || recorder.Body.String() != `["Coffee","Water"]`+"\n" {
@@ -278,7 +278,7 @@ func TestSchemaMonitorIgnoresDataCommitsAndDetectsDDL(t *testing.T) {
 		return
 	}
 	dir := t.TempDir()
-	runtime, err := bootstrap.Bootstrap(dir, filepath.Join(dir, "dux.sqlite"), filepath.Join(dir, "warehouse.sqlite"), filepath.Join(dir, "warehouse"), filepath.Join(dir, "missing.toml"), true)
+	runtime, err := bootstrap.Bootstrap(dir, filepath.Join(dir, "dux.sqlite"), filepath.Join(dir, "ducklake.sqlite"), filepath.Join(dir, "ducklake"), filepath.Join(dir, "missing.toml"), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,13 +298,13 @@ func TestSchemaMonitorIgnoresDataCommitsAndDetectsDDL(t *testing.T) {
 	refreshed := make(chan struct{}, 2)
 	go func() {
 		defer close(done)
-		monitorWarehouseSchema(ctx, runtime, 50*time.Millisecond, func() {
+		monitorDuckLakeSchema(ctx, runtime, 50*time.Millisecond, func() {
 			_, _ = runtime.RefreshSchema()
 			refreshed <- struct{}{}
 		})
 	}()
 	time.Sleep(75 * time.Millisecond)
-	if err := execWarehouseChildWithRetry(t.Context(), runtime.CatalogPath, `INSERT INTO events VALUES (1)`); err != nil {
+	if err := execDuckLakeChildWithRetry(t.Context(), runtime.CatalogPath, `INSERT INTO events VALUES (1)`); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -312,7 +312,7 @@ func TestSchemaMonitorIgnoresDataCommitsAndDetectsDDL(t *testing.T) {
 		t.Fatal("data-only commit triggered schema refresh")
 	case <-time.After(100 * time.Millisecond):
 	}
-	if err := execWarehouseChildWithRetry(t.Context(), runtime.CatalogPath, `CREATE TABLE new_table(id INTEGER)`); err != nil {
+	if err := execDuckLakeChildWithRetry(t.Context(), runtime.CatalogPath, `CREATE TABLE new_table(id INTEGER)`); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -322,7 +322,7 @@ func TestSchemaMonitorIgnoresDataCommitsAndDetectsDDL(t *testing.T) {
 	}
 }
 
-func execWarehouseChildWithRetry(ctx context.Context, catalog, statement string) error {
+func execDuckLakeChildWithRetry(ctx context.Context, catalog, statement string) error {
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestSchemaMonitorIgnoresDataCommitsAndDetectsDDL$")
@@ -355,10 +355,10 @@ func runSchemaMonitorChild(t *testing.T, catalog, statement string) {
 		}
 	}
 	uri := "ducklake:sqlite:" + filepath.ToSlash(catalog)
-	if _, err := conn.ExecContext(t.Context(), "ATTACH '"+strings.ReplaceAll(uri, "'", "''")+"' AS warehouse"); err != nil {
+	if _, err := conn.ExecContext(t.Context(), "ATTACH '"+strings.ReplaceAll(uri, "'", "''")+"' AS ducklake"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.ExecContext(t.Context(), "USE warehouse"); err != nil {
+	if _, err := conn.ExecContext(t.Context(), "USE ducklake"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := conn.ExecContext(t.Context(), statement); err != nil {

@@ -5,6 +5,7 @@
 # Test binary and coverage output
 *.test
 *.out
+.tmp
 
 # Go workspace file
 go.work
@@ -16,6 +17,8 @@ go.work.sum
 # Editor/IDE
 .vscode/
 .claude/
+AGENTS.md
+CLAUDE.md
 
 # Web frontend workspace
 web/node_modules/

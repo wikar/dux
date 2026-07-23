@@ -18,7 +18,7 @@ COPY . .
 COPY --from=ui-builder /app/web/app/dist ./web/app/dist
 # Install and smoke-test the pinned DuckDB extensions while the build has
 # network access. The final image copies this cache and starts offline.
-RUN go test ./internal/warehouse -run TestOwnerAndReaderShareSQLiteDuckLake -count=1
+RUN go test ./internal/ducklake -run TestOwnerAndReaderShareSQLiteDuckLake -count=1
 RUN go build -ldflags="-X main.version=${VERSION}" -o duxd ./cmd/duxd
 RUN go build -ldflags="-X main.version=${VERSION}" -o dux ./cmd/dux
 
@@ -31,6 +31,6 @@ RUN apt-get update \
 COPY --from=go-builder /app/duxd .
 COPY --from=go-builder /app/dux .
 COPY --from=go-builder /root/.duckdb/extensions /root/.duckdb/extensions
-RUN mkdir -p /app/db/warehouse /app/imports /app/dashboards
+RUN mkdir -p /app/db/ducklake /app/inbox /app/dashboards
 EXPOSE 8080
-CMD ["./duxd", "--import-dir", "/app/imports"]
+CMD ["./duxd", "--import-dir", "/app/inbox"]

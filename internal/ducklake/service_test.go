@@ -1,4 +1,4 @@
-package warehouse_test
+package ducklake_test
 
 import (
 	"context"
@@ -12,20 +12,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielwikar/dux/internal/warehouse"
+	"github.com/danielwikar/dux/internal/ducklake"
 	"github.com/danielwikar/dux/semantic"
 )
 
 func TestControlledImportCreatesAndRegistersTable(t *testing.T) {
 	dir := t.TempDir()
-	incoming := t.TempDir() // Deliberately outside the warehouse root, as a mounted landing directory would be.
-	cfg := warehouse.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
-	owner, err := warehouse.OpenOwner(t.Context(), cfg)
+	inbox := t.TempDir() // Deliberately outside the DuckLake root, as a mounted inbox would be.
+	cfg := ducklake.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
+	owner, err := ducklake.OpenOwner(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer owner.Close()
-	parquet := filepath.ToSlash(filepath.Join(incoming, "sales.parquet"))
+	parquet := filepath.ToSlash(filepath.Join(inbox, "sales.parquet"))
 	if _, err := owner.Conn().ExecContext(t.Context(), `COPY (SELECT 1::BIGINT id, 12.5::DOUBLE amount) TO '`+parquet+`' (FORMAT PARQUET)`); err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestControlledImportCreatesAndRegistersTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(incoming, "duplicate.parquet"), sourceBytes, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(inbox, "duplicate.parquet"), sourceBytes, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	meta, err := semantic.OpenMetadataDB(filepath.Join(dir, "dux.sqlite"))
@@ -41,12 +41,12 @@ func TestControlledImportCreatesAndRegistersTable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer meta.Close()
-	service, err := warehouse.NewService(warehouse.ServiceConfig{Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath, ImportPath: incoming, ImportTimeout: time.Minute})
+	service, err := ducklake.NewService(ducklake.ServiceConfig{Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath, ImportPath: inbox, ImportTimeout: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	job, err := service.StartImport("once", warehouse.ImportRequest{Table: "sales", Files: []string{"sales.parquet"}, CreateIfMissing: true})
+	job, err := service.StartImport("once", ducklake.ImportRequest{Table: "sales", Files: []string{"sales.parquet"}, CreateIfMissing: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,87 +68,87 @@ func TestControlledImportCreatesAndRegistersTable(t *testing.T) {
 	if want := fmt.Sprintf("%x", sha256.Sum256(sourceBytes)); storedHash != want {
 		t.Fatalf("stored hash = %s, want %s", storedHash, want)
 	}
-	if warehouseBytes, err := os.ReadFile(filepath.Join(cfg.DataPath, filepath.FromSlash(targetPath))); err != nil || fmt.Sprintf("%x", sha256.Sum256(warehouseBytes)) != storedHash {
-		t.Fatalf("warehouse copy changed: %v", err)
+	if ducklakeBytes, err := os.ReadFile(filepath.Join(cfg.DataPath, filepath.FromSlash(targetPath))); err != nil || fmt.Sprintf("%x", sha256.Sum256(ducklakeBytes)) != storedHash {
+		t.Fatalf("ducklake copy changed: %v", err)
 	}
 	var registeredPath string
-	if err := owner.Conn().QueryRowContext(t.Context(), `SELECT data_file FROM ducklake_list_files('warehouse', 'sales', schema => 'main')`).Scan(&registeredPath); err != nil || !strings.HasPrefix(strings.ToLower(filepath.Clean(filepath.FromSlash(registeredPath))), strings.ToLower(filepath.Clean(cfg.DataPath))) {
+	if err := owner.Conn().QueryRowContext(t.Context(), `SELECT data_file FROM ducklake_list_files('ducklake', 'sales', schema => 'main')`).Scan(&registeredPath); err != nil || !strings.HasPrefix(strings.ToLower(filepath.Clean(filepath.FromSlash(registeredPath))), strings.ToLower(filepath.Clean(cfg.DataPath))) {
 		t.Fatalf("registered path = %q, %v", registeredPath, err)
 	}
 	var count int
-	if err := owner.Conn().QueryRowContext(context.Background(), `SELECT count(*) FROM warehouse.main.sales`).Scan(&count); err != nil {
+	if err := owner.Conn().QueryRowContext(context.Background(), `SELECT count(*) FROM ducklake.main.sales`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
 		t.Fatalf("count = %d", count)
 	}
-	if _, err := os.Stat(filepath.Join(incoming, "sales.parquet")); !os.IsNotExist(err) {
-		t.Fatalf("successful import retained landing file: %v", err)
+	if _, err := os.Stat(filepath.Join(inbox, "sales.parquet")); !os.IsNotExist(err) {
+		t.Fatalf("successful import retained inbox file: %v", err)
 	}
-	again, err := service.StartImport("once", warehouse.ImportRequest{Table: "sales", Files: []string{"sales.parquet"}, CreateIfMissing: true})
+	again, err := service.StartImport("once", ducklake.ImportRequest{Table: "sales", Files: []string{"sales.parquet"}, CreateIfMissing: true})
 	if err != nil || again.ID != job.ID {
 		t.Fatalf("idempotent result = %#v, %v", again, err)
 	}
-	if _, err := service.StartImport("once", warehouse.ImportRequest{Table: "other", Files: []string{"sales.parquet"}, CreateIfMissing: true}); !errors.Is(err, warehouse.ErrIdempotencyConflict) {
+	if _, err := service.StartImport("once", ducklake.ImportRequest{Table: "other", Files: []string{"sales.parquet"}, CreateIfMissing: true}); !errors.Is(err, ducklake.ErrIdempotencyConflict) {
 		t.Fatalf("conflicting idempotency key error = %v", err)
 	}
-	if _, err := service.StartImport("duplicate-content", warehouse.ImportRequest{Table: "sales", Files: []string{"duplicate.parquet"}}); !errors.Is(err, warehouse.ErrDuplicateContent) || !strings.Contains(err.Error(), job.ID) {
+	if _, err := service.StartImport("duplicate-content", ducklake.ImportRequest{Table: "sales", Files: []string{"duplicate.parquet"}}); !errors.Is(err, ducklake.ErrDuplicateContent) || !strings.Contains(err.Error(), job.ID) {
 		t.Fatalf("duplicate content error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(incoming, "duplicate.parquet")); err != nil {
+	if _, err := os.Stat(filepath.Join(inbox, "duplicate.parquet")); err != nil {
 		t.Fatalf("duplicate failure removed source: %v", err)
 	}
-	if _, err := service.StartImport("duplicates", warehouse.ImportRequest{Table: "sales", Files: []string{"folder/../bad.parquet", "bad.parquet"}}); err == nil || !strings.Contains(err.Error(), "more than once") {
+	if _, err := service.StartImport("duplicates", ducklake.ImportRequest{Table: "sales", Files: []string{"folder/../bad.parquet", "bad.parquet"}}); err == nil || !strings.Contains(err.Error(), "more than once") {
 		t.Fatalf("normalized duplicate paths error = %v", err)
 	}
-	badParquet := filepath.ToSlash(filepath.Join(incoming, "bad.parquet"))
+	badParquet := filepath.ToSlash(filepath.Join(inbox, "bad.parquet"))
 	if _, err := owner.Conn().ExecContext(t.Context(), `COPY (SELECT 2::BIGINT id, 'bad'::VARCHAR amount) TO '`+badParquet+`' (FORMAT PARQUET)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.StartImport("bad-schema", warehouse.ImportRequest{Table: "sales", Files: []string{"bad.parquet"}}); err == nil || !strings.Contains(err.Error(), "schema mismatch") {
+	if _, err := service.StartImport("bad-schema", ducklake.ImportRequest{Table: "sales", Files: []string{"bad.parquet"}}); err == nil || !strings.Contains(err.Error(), "schema mismatch") {
 		t.Fatalf("bad schema error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(incoming, "bad.parquet")); err != nil {
+	if _, err := os.Stat(filepath.Join(inbox, "bad.parquet")); err != nil {
 		t.Fatalf("failed import removed source: %v", err)
 	}
-	if _, err := service.StartImport("missing-target", warehouse.ImportRequest{Table: "missing", Files: []string{"bad.parquet"}}); err == nil || !strings.Contains(err.Error(), "does not exist") {
+	if _, err := service.StartImport("missing-target", ducklake.ImportRequest{Table: "missing", Files: []string{"bad.parquet"}}); err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("missing target error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(incoming, "malformed.parquet"), []byte("not parquet"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(inbox, "malformed.parquet"), []byte("not parquet"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.StartImport("malformed", warehouse.ImportRequest{Table: "malformed", Files: []string{"malformed.parquet"}, CreateIfMissing: true}); err == nil {
+	if _, err := service.StartImport("malformed", ducklake.ImportRequest{Table: "malformed", Files: []string{"malformed.parquet"}, CreateIfMissing: true}); err == nil {
 		t.Fatal("malformed Parquet was accepted")
 	}
 	for name, query := range map[string]string{
 		"multi-a.parquet": `SELECT 1::BIGINT id`,
 		"multi-b.parquet": `SELECT 'one'::VARCHAR id`,
 	} {
-		path := filepath.ToSlash(filepath.Join(incoming, name))
+		path := filepath.ToSlash(filepath.Join(inbox, name))
 		if _, err := owner.Conn().ExecContext(t.Context(), `COPY (`+query+`) TO '`+path+`' (FORMAT PARQUET)`); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := service.StartImport("multi-schema", warehouse.ImportRequest{Table: "multi", Files: []string{"multi-a.parquet", "multi-b.parquet"}, CreateIfMissing: true}); err == nil || !strings.Contains(err.Error(), "schema mismatch") {
+	if _, err := service.StartImport("multi-schema", ducklake.ImportRequest{Table: "multi", Files: []string{"multi-a.parquet", "multi-b.parquet"}, CreateIfMissing: true}); err == nil || !strings.Contains(err.Error(), "schema mismatch") {
 		t.Fatalf("multi-schema error = %v", err)
 	}
 	var multiTables int
-	if err := owner.Conn().QueryRowContext(t.Context(), `SELECT count(*) FROM information_schema.tables WHERE table_catalog = 'warehouse' AND table_name = 'multi'`).Scan(&multiTables); err != nil || multiTables != 0 {
+	if err := owner.Conn().QueryRowContext(t.Context(), `SELECT count(*) FROM information_schema.tables WHERE table_catalog = 'ducklake' AND table_name = 'multi'`).Scan(&multiTables); err != nil || multiTables != 0 {
 		t.Fatalf("multi-schema table count = %d, %v", multiTables, err)
 	}
 	tooMany := make([]string, 101)
-	if _, err := service.StartImport("many", warehouse.ImportRequest{Table: "sales", Files: tooMany}); err == nil {
+	if _, err := service.StartImport("many", ducklake.ImportRequest{Table: "sales", Files: tooMany}); err == nil {
 		t.Fatal("oversized import manifest accepted")
 	}
 	service.Close()
 	if _, err := meta.DB().Exec(`UPDATE dux_meta.dux_imports SET status = 'running', finished_at = NULL WHERE id = ?`, job.ID); err != nil {
 		t.Fatal(err)
 	}
-	unrelatedLanding := []byte("new file with a reused name")
-	if err := os.WriteFile(filepath.Join(incoming, "sales.parquet"), unrelatedLanding, 0o644); err != nil {
+	unrelatedInbox := []byte("new file with a reused name")
+	if err := os.WriteFile(filepath.Join(inbox, "sales.parquet"), unrelatedInbox, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	recovered, err := warehouse.NewService(warehouse.ServiceConfig{Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath, ImportPath: incoming, ImportTimeout: time.Minute})
+	recovered, err := ducklake.NewService(ducklake.ServiceConfig{Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath, ImportPath: inbox, ImportTimeout: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,12 +156,12 @@ func TestControlledImportCreatesAndRegistersTable(t *testing.T) {
 	if recoveredJob, ok := recovered.Import(job.ID); !ok || recoveredJob.Status != "succeeded" {
 		t.Fatalf("committed import recovery = %#v, %v", recoveredJob, ok)
 	}
-	if got, err := os.ReadFile(filepath.Join(incoming, "sales.parquet")); err != nil || !slices.Equal(got, unrelatedLanding) {
-		t.Fatalf("recovery removed or changed reused landing path: %q, %v", got, err)
+	if got, err := os.ReadFile(filepath.Join(inbox, "sales.parquet")); err != nil || !slices.Equal(got, unrelatedInbox) {
+		t.Fatalf("recovery removed or changed reused inbox path: %q, %v", got, err)
 	}
 	recovered.Close()
 	started := time.Now().UTC().Format(time.RFC3339Nano)
-	interruptedSource := filepath.Join(incoming, "interrupted.parquet")
+	interruptedSource := filepath.Join(inbox, "interrupted.parquet")
 	if err := os.WriteFile(interruptedSource, sourceBytes, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestControlledImportCreatesAndRegistersTable(t *testing.T) {
 	if err := os.Chtimes(oldPartial, oldTime, oldTime); err != nil {
 		t.Fatal(err)
 	}
-	recovered, err = warehouse.NewService(warehouse.ServiceConfig{Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath, ImportPath: incoming, ImportTimeout: time.Minute})
+	recovered, err = ducklake.NewService(ducklake.ServiceConfig{Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath, ImportPath: inbox, ImportTimeout: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,8 +221,8 @@ func TestControlledImportCreatesAndRegistersTable(t *testing.T) {
 
 func TestMaintenanceJob(t *testing.T) {
 	dir := t.TempDir()
-	cfg := warehouse.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
-	owner, err := warehouse.OpenOwner(t.Context(), cfg)
+	cfg := ducklake.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
+	owner, err := ducklake.OpenOwner(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestMaintenanceJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer meta.Close()
-	service, err := warehouse.NewService(warehouse.ServiceConfig{Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath, MaintenanceTimeout: time.Minute})
+	service, err := ducklake.NewService(ducklake.ServiceConfig{Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath, MaintenanceTimeout: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,8 +257,8 @@ func TestMaintenanceJob(t *testing.T) {
 
 func TestImportsCanBeDisabled(t *testing.T) {
 	dir := t.TempDir()
-	cfg := warehouse.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
-	owner, err := warehouse.OpenOwner(t.Context(), cfg)
+	cfg := ducklake.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
+	owner, err := ducklake.OpenOwner(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestImportsCanBeDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer meta.Close()
-	service, err := warehouse.NewService(warehouse.ServiceConfig{Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath})
+	service, err := ducklake.NewService(ducklake.ServiceConfig{Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,24 +276,24 @@ func TestImportsCanBeDisabled(t *testing.T) {
 	if service.ImportsEnabled() {
 		t.Fatal("imports unexpectedly enabled")
 	}
-	if _, err := service.StartImport("disabled", warehouse.ImportRequest{Table: "sales", Files: []string{"sales.parquet"}}); !errors.Is(err, warehouse.ErrImportsDisabled) {
+	if _, err := service.StartImport("disabled", ducklake.ImportRequest{Table: "sales", Files: []string{"sales.parquet"}}); !errors.Is(err, ducklake.ErrImportsDisabled) {
 		t.Fatalf("disabled import error = %v", err)
 	}
 }
 
 func TestImportReleasesOwnershipWorkerAfterCommit(t *testing.T) {
 	dir := t.TempDir()
-	incoming := filepath.Join(dir, "incoming")
-	if err := os.MkdirAll(incoming, 0o755); err != nil {
+	inbox := filepath.Join(dir, "inbox")
+	if err := os.MkdirAll(inbox, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfg := warehouse.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
-	owner, err := warehouse.OpenOwner(t.Context(), cfg)
+	cfg := ducklake.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
+	owner, err := ducklake.OpenOwner(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer owner.Close()
-	parquet := filepath.ToSlash(filepath.Join(incoming, "batch.parquet"))
+	parquet := filepath.ToSlash(filepath.Join(inbox, "batch.parquet"))
 	if _, err := owner.Conn().ExecContext(t.Context(), `COPY (SELECT 1::BIGINT id) TO '`+parquet+`' (FORMAT PARQUET)`); err != nil {
 		t.Fatal(err)
 	}
@@ -302,14 +302,14 @@ func TestImportReleasesOwnershipWorkerAfterCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer meta.Close()
-	service, err := warehouse.NewService(warehouse.ServiceConfig{
-		Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath, ImportPath: incoming,
+	service, err := ducklake.NewService(ducklake.ServiceConfig{
+		Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath, ImportPath: inbox,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	job, err := service.StartImport("busy", warehouse.ImportRequest{Table: "busy", Files: []string{"batch.parquet"}, CreateIfMissing: true})
+	job, err := service.StartImport("busy", ducklake.ImportRequest{Table: "busy", Files: []string{"batch.parquet"}, CreateIfMissing: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,8 +327,8 @@ func TestImportReleasesOwnershipWorkerAfterCommit(t *testing.T) {
 
 func TestRecoveryLeavesAmbiguousImportUntouched(t *testing.T) {
 	dir := t.TempDir()
-	cfg := warehouse.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
-	owner, err := warehouse.OpenOwner(t.Context(), cfg)
+	cfg := ducklake.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
+	owner, err := ducklake.OpenOwner(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +345,7 @@ func TestRecoveryLeavesAmbiguousImportUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner.Close()
-	if _, err := warehouse.NewService(warehouse.ServiceConfig{Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath, ImportPath: filepath.Join(dir, "incoming")}); err == nil || !strings.Contains(err.Error(), "verify interrupted import") {
+	if _, err := ducklake.NewService(ducklake.ServiceConfig{Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath, ImportPath: filepath.Join(dir, "inbox")}); err == nil || !strings.Contains(err.Error(), "verify interrupted import") {
 		t.Fatalf("ambiguous recovery error = %v", err)
 	}
 	var status string
@@ -363,8 +363,8 @@ func TestRecoveryLeavesAmbiguousImportUntouched(t *testing.T) {
 
 func TestMaintenanceHistoryIsBoundedAndSchedulesFromCompletion(t *testing.T) {
 	dir := t.TempDir()
-	cfg := warehouse.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
-	owner, err := warehouse.OpenOwner(t.Context(), cfg)
+	cfg := ducklake.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
+	owner, err := ducklake.OpenOwner(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +381,7 @@ func TestMaintenanceHistoryIsBoundedAndSchedulesFromCompletion(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	service, err := warehouse.NewService(warehouse.ServiceConfig{Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath})
+	service, err := ducklake.NewService(ducklake.ServiceConfig{Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,8 +405,8 @@ func TestMaintenanceHistoryIsBoundedAndSchedulesFromCompletion(t *testing.T) {
 
 func TestCheckpointExpiresHistoryWithoutDeletingCurrentRows(t *testing.T) {
 	dir := t.TempDir()
-	cfg := warehouse.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: time.Millisecond, FileDeleteDelay: time.Millisecond}
-	owner, err := warehouse.OpenOwner(t.Context(), cfg)
+	cfg := ducklake.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: time.Millisecond, FileDeleteDelay: time.Millisecond}
+	owner, err := ducklake.OpenOwner(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +415,7 @@ func TestCheckpointExpiresHistoryWithoutDeletingCurrentRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	var before int
-	if err := owner.Conn().QueryRowContext(t.Context(), `SELECT count(*) FROM warehouse.snapshots()`).Scan(&before); err != nil {
+	if err := owner.Conn().QueryRowContext(t.Context(), `SELECT count(*) FROM ducklake.snapshots()`).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(20 * time.Millisecond)
@@ -424,7 +424,7 @@ func TestCheckpointExpiresHistoryWithoutDeletingCurrentRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer meta.Close()
-	service, err := warehouse.NewService(warehouse.ServiceConfig{Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath})
+	service, err := ducklake.NewService(ducklake.ServiceConfig{Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +437,7 @@ func TestCheckpointExpiresHistoryWithoutDeletingCurrentRows(t *testing.T) {
 		t.Fatalf("checkpoint = %#v", done)
 	}
 	var after, rows int
-	if err := owner.Conn().QueryRowContext(t.Context(), `SELECT count(*) FROM warehouse.snapshots()`).Scan(&after); err != nil {
+	if err := owner.Conn().QueryRowContext(t.Context(), `SELECT count(*) FROM ducklake.snapshots()`).Scan(&after); err != nil {
 		t.Fatal(err)
 	}
 	if err := owner.Conn().QueryRowContext(t.Context(), `SELECT count(*) FROM facts`).Scan(&rows); err != nil {
@@ -450,17 +450,17 @@ func TestCheckpointExpiresHistoryWithoutDeletingCurrentRows(t *testing.T) {
 
 func TestOperationTimeoutsAreRecorded(t *testing.T) {
 	dir := t.TempDir()
-	incoming := filepath.Join(dir, "incoming")
-	if err := os.MkdirAll(incoming, 0o755); err != nil {
+	inbox := filepath.Join(dir, "inbox")
+	if err := os.MkdirAll(inbox, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfg := warehouse.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
-	owner, err := warehouse.OpenOwner(t.Context(), cfg)
+	cfg := ducklake.Config{CatalogPath: filepath.Join(dir, "ducklake.sqlite"), DataPath: filepath.Join(dir, "data"), TimeTravelRetention: 7 * 24 * time.Hour, FileDeleteDelay: 24 * time.Hour}
+	owner, err := ducklake.OpenOwner(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer owner.Close()
-	parquet := filepath.ToSlash(filepath.Join(incoming, "timeout.parquet"))
+	parquet := filepath.ToSlash(filepath.Join(inbox, "timeout.parquet"))
 	if _, err := owner.Conn().ExecContext(t.Context(), `COPY (SELECT 1::INTEGER id) TO '`+parquet+`' (FORMAT PARQUET)`); err != nil {
 		t.Fatal(err)
 	}
@@ -469,8 +469,8 @@ func TestOperationTimeoutsAreRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer meta.Close()
-	service, err := warehouse.NewService(warehouse.ServiceConfig{
-		Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath, ImportPath: incoming,
+	service, err := ducklake.NewService(ducklake.ServiceConfig{
+		Owner: owner, Metadata: meta.DB(), DataPath: cfg.DataPath, ImportPath: inbox,
 		MaintenanceTimeout: time.Nanosecond, ImportTimeout: time.Nanosecond,
 	})
 	if err != nil {
@@ -484,7 +484,7 @@ func TestOperationTimeoutsAreRecorded(t *testing.T) {
 	if maintenance = waitJob(t, service, maintenance.ID); maintenance.Status != "failed" || !strings.Contains(strings.ToLower(maintenance.Error), "context") {
 		t.Fatalf("timed-out maintenance = %#v", maintenance)
 	}
-	if _, err := service.StartImport("timeout", warehouse.ImportRequest{Table: "timeout", Files: []string{"timeout.parquet"}, CreateIfMissing: true}); err == nil {
+	if _, err := service.StartImport("timeout", ducklake.ImportRequest{Table: "timeout", Files: []string{"timeout.parquet"}, CreateIfMissing: true}); err == nil {
 		t.Fatal("expired import context succeeded")
 	}
 	imports, err := service.RecentImports(1)
@@ -496,7 +496,7 @@ func TestOperationTimeoutsAreRecorded(t *testing.T) {
 	}
 }
 
-func waitJob(t *testing.T, service *warehouse.Service, id string) warehouse.Job {
+func waitJob(t *testing.T, service *ducklake.Service, id string) ducklake.Job {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
@@ -507,5 +507,5 @@ func waitJob(t *testing.T, service *warehouse.Service, id string) warehouse.Job 
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("job timed out")
-	return warehouse.Job{}
+	return ducklake.Job{}
 }
