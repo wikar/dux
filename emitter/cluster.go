@@ -12,6 +12,7 @@
 package emitter
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -39,6 +40,11 @@ type measureCluster struct {
 	// each evaluates in this cluster's CTE and is referenced by the stitched
 	// outer SELECT via the substitution map (see emitStitched).
 	lifted []*parser.FuncCall
+	// calc marks a context cluster: a CALCULATE (or TOTAL*TD) subtree that
+	// modifies the group filter context. It is emitted as its own grouped CTE
+	// (see contextcte.go) joined back on the group keys it retains, never as a
+	// correlated scalar subquery.
+	calc *parser.FuncCall
 }
 
 // measurePlan is the full clustering result for one SUMMARIZECOLUMNS call.
@@ -58,9 +64,16 @@ type measurePlan struct {
 // while a cross-cluster expression (e.g. SUM(a[x]) / SUM(b[y])) has each
 // aggregate lifted into its own cluster. Clusters are returned in
 // first-appearance order; a scalar-only cluster (key == "") sorts last.
-func (e *Emitter) planMeasures(pairArgs, inlineArgs []*parser.Expr) *measurePlan {
+//
+// When liftContext is true, every subtree that modifies the group filter
+// context (see contextModifying) is additionally lifted into its own context
+// cluster — one per distinct subtree — so it can be emitted as a private
+// grouped CTE. The flag is off for grouping-set and computed-group-key
+// queries, which keep the correlated-subquery fallback.
+func (e *Emitter) planMeasures(pairArgs, inlineArgs []*parser.Expr, liftContext bool) *measurePlan {
 	p := &measurePlan{}
 	byKey := map[string]*measureCluster{}
+	calcByFc := map[*parser.FuncCall]*measureCluster{}
 
 	clusterFor := func(tables []string) *measureCluster {
 		key := e.clusterKey(tables)
@@ -72,21 +85,51 @@ func (e *Emitter) planMeasures(pairArgs, inlineArgs []*parser.Expr) *measurePlan
 		p.clusters = append(p.clusters, c)
 		return c
 	}
+	calcClusterFor := func(fc *parser.FuncCall) *measureCluster {
+		if c, ok := calcByFc[fc]; ok {
+			return c
+		}
+		tables := e.measureExprTables(exprOfFunc(fc))
+		c := &measureCluster{
+			key:    e.clusterKey(tables) + fmt.Sprintf("\x00__calc%d", len(calcByFc)),
+			tables: tables,
+			calc:   fc,
+		}
+		calcByFc[fc] = c
+		p.clusters = append(p.clusters, c)
+		return c
+	}
 
 	// assign clusters one measure expression, reporting either the whole-expr
 	// home cluster (nil for split) via the return value.
 	assign := func(expr *parser.Expr) (whole *measureCluster) {
 		subtrees := e.aggSubtrees(expr)
-		distinct := map[string]bool{}
-		for _, st := range subtrees {
-			distinct[e.clusterKey(e.measureExprTables(exprOfFunc(st)))] = true
+		isCtx := map[*parser.FuncCall]bool{}
+		if liftContext {
+			for _, st := range subtrees {
+				if e.contextModifying(st) {
+					isCtx[st] = true
+				}
+			}
 		}
-		if len(distinct) <= 1 {
-			// Zero or one aggregate table-set: the whole expression lives in
-			// one context, keyed by everything it references.
-			return clusterFor(e.measureExprTables(expr))
+		if len(isCtx) == 0 {
+			distinct := map[string]bool{}
+			for _, st := range subtrees {
+				distinct[e.clusterKey(e.measureExprTables(exprOfFunc(st)))] = true
+			}
+			if len(distinct) <= 1 {
+				// Zero or one aggregate table-set: the whole expression lives in
+				// one context, keyed by everything it references.
+				return clusterFor(e.measureExprTables(expr))
+			}
 		}
+		// Context-modifying or cross-cluster: lift every aggregate subtree and
+		// emit the outer arithmetic with substituted CTE columns.
 		for _, st := range subtrees {
+			if isCtx[st] {
+				calcClusterFor(st)
+				continue
+			}
 			c := clusterFor(e.measureExprTables(exprOfFunc(st)))
 			c.lifted = append(c.lifted, st)
 		}
@@ -196,6 +239,30 @@ func tableClusterCount(clusters []*measureCluster) int {
 	n := 0
 	for _, c := range clusters {
 		if c.key != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// hasContextClusters reports whether the plan contains any context cluster;
+// such plans always emit stitched (see contextcte.go).
+func (p *measurePlan) hasContextClusters() bool {
+	for _, c := range p.clusters {
+		if c.calc != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// regularTableClusterCount counts table-bearing clusters that are NOT context
+// clusters — the ones whose CTEs carry the full group-key set and therefore
+// define the stitched result's cells.
+func regularTableClusterCount(clusters []*measureCluster) int {
+	n := 0
+	for _, c := range clusters {
+		if c.key != "" && c.calc == nil {
 			n++
 		}
 	}

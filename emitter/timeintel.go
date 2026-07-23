@@ -74,11 +74,27 @@ func (e *Emitter) isDesignatedDateTable(table string) bool {
 	return ok
 }
 
-// timeAnchor returns a scalar subquery computing agg (MIN or MAX) of the date
-// column over the CURRENT filter context of the date table: correlated on the
-// enclosing group-by keys of that table plus any outer predicates on it. With
-// no group context the anchor is the table-wide extreme.
+// timeAnchor returns the SQL for agg (MIN or MAX) of the date column over the
+// CURRENT filter context of the date table.
+//
+// Inside a context CTE (see contextcte.go) the anchor is a column of the CTE's
+// anchor scan, recorded via the collector. When the anchored column is itself
+// a group-by key, the anchor IS the outer column value, so the plain column
+// reference is emitted — nesting a correlated anchor subquery inside the
+// CALCULATE removal subquery defeats DuckDB's unnesting and explodes into a
+// |group values| × |fact| intermediate. Only the remaining fallback cases emit
+// the correlated scalar subquery (uncorrelated with no group context).
 func (e *Emitter) timeAnchor(agg, table, col string) string {
+	if e.anchorScans != nil {
+		return e.anchorScans.ref(agg, table, col)
+	}
+	if e.groupCtx != nil {
+		for _, gk := range e.groupCtx.keys {
+			if strings.EqualFold(gk.table, table) && strings.EqualFold(gk.col, col) {
+				return e.sqlTable(table) + "." + col
+			}
+		}
+	}
 	alias := "__ti_" + sanitizeAliasSuffix(table)
 	var conds []string
 	if e.groupCtx != nil {
@@ -252,17 +268,34 @@ func (e *Emitter) emitTimeIntelTable(fc *parser.FuncCall) (string, error) {
 // emitTotalPeriod rewrites TOTALYTD/TOTALQTD/TOTALMTD(expr, dates[, filters...])
 // as CALCULATE(expr, DATES*TD(dates), filters...).
 func (e *Emitter) emitTotalPeriod(fc *parser.FuncCall) (string, error) {
+	cf := calcForm(fc)
+	if cf == nil {
+		return "", fmt.Errorf("%s requires an expression and a date column", strings.ToUpper(fc.Name))
+	}
+	return e.emitCalculate(cf)
+}
+
+// calcForm returns the CALCULATE-shaped view of a call: CALCULATE itself, or
+// TOTALYTD/QTD/MTD rewritten as CALCULATE(expr, DATES*TD(dates), filters...).
+// Nil for any other call (or a TOTAL* call missing its date column).
+func calcForm(fc *parser.FuncCall) *parser.FuncCall {
 	name := strings.ToUpper(fc.Name)
-	if len(fc.Args) < 2 {
-		return "", fmt.Errorf("%s requires an expression and a date column", name)
+	switch name {
+	case "CALCULATE":
+		return fc
+	case "TOTALYTD", "TOTALQTD", "TOTALMTD":
+		if len(fc.Args) < 2 {
+			return nil
+		}
+		datesFn := strings.Replace(name, "TOTAL", "DATES", 1)
+		args := []*parser.Expr{
+			fc.Args[0],
+			{Left: &parser.Term{FuncCall: &parser.FuncCall{Name: datesFn, Args: fc.Args[1:2]}}},
+		}
+		args = append(args, fc.Args[2:]...)
+		return &parser.FuncCall{Name: "CALCULATE", Args: args}
 	}
-	datesFn := strings.Replace(name, "TOTAL", "DATES", 1)
-	args := []*parser.Expr{
-		fc.Args[0],
-		{Left: &parser.Term{FuncCall: &parser.FuncCall{Name: datesFn, Args: fc.Args[1:2]}}},
-	}
-	args = append(args, fc.Args[2:]...)
-	return e.emitCalculate(&parser.FuncCall{Name: "CALCULATE", Args: args})
+	return nil
 }
 
 // emitCalendar emits CALENDAR(start, end) as a generated date table with a

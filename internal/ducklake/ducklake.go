@@ -23,6 +23,14 @@ type Config struct {
 	DataPath            string
 	TimeTravelRetention time.Duration
 	FileDeleteDelay     time.Duration
+	// MemoryLimit caps the transient DuckDB instance's memory (e.g. "4GB").
+	// Empty keeps the DuckDB default (80% of RAM). With TempDirectory set,
+	// operators exceeding the cap spill to disk instead of failing.
+	MemoryLimit string
+	// TempDirectory is where DuckDB offloads data that exceeds MemoryLimit.
+	// Empty keeps the DuckDB default for in-memory instances: no spilling —
+	// a query that overruns the limit errors instead.
+	TempDirectory string
 }
 
 // Runtime is one transient DuckDB instance with DuckLake attached.
@@ -48,7 +56,7 @@ func OpenOwner(ctx context.Context, cfg Config) (*Runtime, error) {
 		return nil, fmt.Errorf("create DuckLake data directory: %w", err)
 	}
 
-	db, conn, err := openDuckDB(ctx)
+	db, conn, err := openDuckDB(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +84,7 @@ func OpenReader(ctx context.Context, cfg Config) (*Runtime, error) {
 	if _, err := os.Stat(cfg.CatalogPath); err != nil {
 		return nil, fmt.Errorf("open DuckLake catalog %q: %w", cfg.CatalogPath, err)
 	}
-	db, conn, err := openDuckDB(ctx)
+	db, conn, err := openDuckDB(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +116,7 @@ func validateConfig(cfg Config) error {
 	return nil
 }
 
-func openDuckDB(ctx context.Context) (*sql.DB, *sql.Conn, error) {
+func openDuckDB(ctx context.Context, cfg Config) (*sql.DB, *sql.Conn, error) {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return nil, nil, fmt.Errorf("open transient DuckDB: %w", err)
@@ -121,19 +129,39 @@ func openDuckDB(ctx context.Context) (*sql.DB, *sql.Conn, error) {
 		db.Close()
 		return nil, nil, fmt.Errorf("pin DuckDB connection: %w", err)
 	}
+	fail := func(err error) (*sql.DB, *sql.Conn, error) {
+		conn.Close()
+		db.Close()
+		return nil, nil, err
+	}
 	for _, extension := range []string{"sqlite", "ducklake"} {
 		if _, err := conn.ExecContext(ctx, "LOAD "+extension); err == nil {
 			continue
 		}
 		if _, err := conn.ExecContext(ctx, "INSTALL "+extension); err != nil {
-			conn.Close()
-			db.Close()
-			return nil, nil, fmt.Errorf("install DuckDB extension %s: %w", extension, err)
+			return fail(fmt.Errorf("install DuckDB extension %s: %w", extension, err))
 		}
 		if _, err := conn.ExecContext(ctx, "LOAD "+extension); err != nil {
-			conn.Close()
-			db.Close()
-			return nil, nil, fmt.Errorf("load DuckDB extension %s: %w", extension, err)
+			return fail(fmt.Errorf("load DuckDB extension %s: %w", extension, err))
+		}
+	}
+	// Resource guards: memory_limit and temp_directory are instance-global in
+	// DuckDB, so one SET on the pinned connection covers every connection the
+	// executor borrows. Set the spill directory first — with a cap but no
+	// spill path, an overrunning query fails instead of degrading.
+	if cfg.TempDirectory != "" {
+		if err := os.MkdirAll(cfg.TempDirectory, 0o755); err != nil {
+			return fail(fmt.Errorf("create DuckDB temp directory: %w", err))
+		}
+		stmt := fmt.Sprintf("SET temp_directory = %s", sqlString(filepath.ToSlash(cfg.TempDirectory)))
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
+			return fail(fmt.Errorf("set DuckDB temp_directory: %w", err))
+		}
+	}
+	if cfg.MemoryLimit != "" {
+		stmt := fmt.Sprintf("SET memory_limit = %s", sqlString(cfg.MemoryLimit))
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
+			return fail(fmt.Errorf("set DuckDB memory_limit %q: %w", cfg.MemoryLimit, err))
 		}
 	}
 	return db, conn, nil

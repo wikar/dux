@@ -232,6 +232,22 @@ func (e *Emitter) anyPredTouchesGroupKey(preds []*parser.Expr) bool {
 	return false
 }
 
+// contextModifying reports whether fc is a CALCULATE (or TOTAL*TD) call whose
+// filter arguments modify the enclosing group filter context — removals, time
+// intelligence, or predicates overriding a group key. Classification errors
+// report false; emission surfaces them later with their usual messages.
+func (e *Emitter) contextModifying(fc *parser.FuncCall) bool {
+	cf := calcForm(fc)
+	if cf == nil || len(cf.Args) == 0 {
+		return false
+	}
+	cm, err := e.classifyCalcArgs(cf.Args[1:])
+	if err != nil {
+		return false
+	}
+	return cm.hasRemovals() || e.anyPredTouchesGroupKey(cm.preds)
+}
+
 // emitCalculateGrouped emits CALCULATE inside a SUMMARIZECOLUMNS group context.
 //
 // Fast path — no modifier removes or overrides a group filter: the SQL

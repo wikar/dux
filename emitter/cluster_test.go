@@ -37,7 +37,7 @@ func TestClusterMeasures(t *testing.T) {
 		args := scArgs(t, `EVALUATE SUMMARIZECOLUMNS(dates[year],
 			"A", SUM(fact_sales[qty]), "B", COUNT(fact_sales[qty]))`)
 		e := &Emitter{Schema: clusterSchema()}
-		clusters := e.planMeasures(args[1:], nil).clusters
+		clusters := e.planMeasures(args[1:], nil, true).clusters
 		if len(clusters) != 1 || tableClusterCount(clusters) != 1 {
 			t.Fatalf("expected 1 cluster, got %d (%d with tables)", len(clusters), tableClusterCount(clusters))
 		}
@@ -50,7 +50,7 @@ func TestClusterMeasures(t *testing.T) {
 		args := scArgs(t, `EVALUATE SUMMARIZECOLUMNS(dates[year],
 			"A", SUM(fact_sales[qty]), "B", SUM(fact_returns[rqty]))`)
 		e := &Emitter{Schema: clusterSchema()}
-		clusters := e.planMeasures(args[1:], nil).clusters
+		clusters := e.planMeasures(args[1:], nil, true).clusters
 		if tableClusterCount(clusters) != 2 {
 			t.Fatalf("expected 2 table clusters, got %d", tableClusterCount(clusters))
 		}
@@ -61,7 +61,7 @@ func TestClusterMeasures(t *testing.T) {
 		args := scArgs(t, `EVALUATE SUMMARIZECOLUMNS(dates[year],
 			"A", SUM(bev.Orders[amount]), "B", COUNT(Orders[id]))`)
 		e := &Emitter{Schema: clusterSchema()}
-		clusters := e.planMeasures(args[1:], nil).clusters
+		clusters := e.planMeasures(args[1:], nil, true).clusters
 		if tableClusterCount(clusters) != 1 {
 			t.Fatalf("expected 1 table cluster, got %d", tableClusterCount(clusters))
 		}
@@ -71,7 +71,7 @@ func TestClusterMeasures(t *testing.T) {
 		args := scArgs(t, `EVALUATE SUMMARIZECOLUMNS(dates[year],
 			"Two", 1 + 1, "A", SUM(fact_sales[qty]))`)
 		e := &Emitter{Schema: clusterSchema()}
-		clusters := e.planMeasures(args[1:], nil).clusters
+		clusters := e.planMeasures(args[1:], nil, true).clusters
 		if len(clusters) != 2 || tableClusterCount(clusters) != 1 {
 			t.Fatalf("expected 2 clusters (1 with tables), got %d (%d)", len(clusters), tableClusterCount(clusters))
 		}
@@ -92,7 +92,7 @@ func TestClusterMeasures(t *testing.T) {
 		args := scArgs(t, `EVALUATE SUMMARIZECOLUMNS(dates[year],
 			"A", fact_sales[NetQty], "B", SUM(fact_returns[rqty]))`)
 		e := &Emitter{Schema: s}
-		clusters := e.planMeasures(args[1:], nil).clusters
+		clusters := e.planMeasures(args[1:], nil, true).clusters
 		if tableClusterCount(clusters) != 1 {
 			t.Fatalf("expected the stored measure to share fact_returns' cluster, got %d clusters", tableClusterCount(clusters))
 		}
@@ -105,7 +105,7 @@ func TestClusterMeasures(t *testing.T) {
 			"A", SUM(fact_sales[qty]),
 			"B", SUMX(fact_sales, fact_sales[qty] * dates[year]))`)
 		e := &Emitter{Schema: clusterSchema()}
-		clusters := e.planMeasures(args, nil).clusters
+		clusters := e.planMeasures(args, nil, true).clusters
 		if tableClusterCount(clusters) != 2 {
 			t.Fatalf("expected 2 table clusters (different table sets), got %d", tableClusterCount(clusters))
 		}
@@ -117,7 +117,7 @@ func TestClusterMeasures(t *testing.T) {
 		args := scArgs(t, `EVALUATE SUMMARIZECOLUMNS(dates[year],
 			"Ratio", SUM(fact_sales[qty]) / SUM(fact_returns[rqty]))`)
 		e := &Emitter{Schema: clusterSchema()}
-		plan := e.planMeasures(args[1:], nil)
+		plan := e.planMeasures(args[1:], nil, true)
 		if tableClusterCount(plan.clusters) != 2 {
 			t.Fatalf("expected 2 table clusters, got %d", tableClusterCount(plan.clusters))
 		}
@@ -141,7 +141,7 @@ func TestClusterMeasures(t *testing.T) {
 		args := scArgs(t, `EVALUATE SUMMARIZECOLUMNS(dates[year],
 			"Both", SUM(fact_sales[qty]) + COUNT(fact_sales[qty]))`)
 		e := &Emitter{Schema: clusterSchema()}
-		plan := e.planMeasures(args[1:], nil)
+		plan := e.planMeasures(args[1:], nil, true)
 		if len(plan.splitPairs) != 0 {
 			t.Fatalf("same-cluster arithmetic must not split, got splitPairs %v", plan.splitPairs)
 		}

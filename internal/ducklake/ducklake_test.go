@@ -19,6 +19,32 @@ func testConfig(t *testing.T) Config {
 	}
 }
 
+func TestResourceLimitsApplied(t *testing.T) {
+	ctx := context.Background()
+	cfg := testConfig(t)
+	cfg.MemoryLimit = "512MiB"
+	cfg.TempDirectory = filepath.Join(filepath.Dir(cfg.CatalogPath), "tmp")
+
+	owner, err := OpenOwner(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+
+	var limit, tmp string
+	err = owner.Conn().QueryRowContext(ctx,
+		`SELECT current_setting('memory_limit'), current_setting('temp_directory')`).Scan(&limit, &tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(limit, "512") {
+		t.Errorf("memory_limit = %q, want the configured 512MiB cap", limit)
+	}
+	if !strings.Contains(filepath.ToSlash(tmp), "/tmp") {
+		t.Errorf("temp_directory = %q, want the configured spill directory", tmp)
+	}
+}
+
 func TestOwnerAndReaderShareSQLiteDuckLake(t *testing.T) {
 	ctx := context.Background()
 	cfg := testConfig(t)
@@ -42,7 +68,7 @@ func TestOwnerAndReaderShareSQLiteDuckLake(t *testing.T) {
 	if _, err := owner.Conn().ExecContext(ctx, `CREATE TABLE sales (id INTEGER, amount DOUBLE)`); err != nil {
 		t.Fatal(err)
 	}
-	pipelineDB, pipelineConn, err := openDuckDB(ctx)
+	pipelineDB, pipelineConn, err := openDuckDB(ctx, Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

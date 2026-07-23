@@ -350,14 +350,15 @@ func TestFilterContext(t *testing.T) {
 
 func TestFilterContextModifiers(t *testing.T) {
 	t.Run("ALL_table_grand_total", func(t *testing.T) {
-		// ALL(sales) removes the region group filter → uncorrelated subquery.
+		// ALL(sales) removes the region group filter → context CTE with no
+		// carried keys, joined back unconditionally.
 		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
 			sales[region],
 			"Total", SUM(sales[amount]),
 			"Grand", CALCULATE(SUM(sales[amount]), ALL(sales))
 		)`)
-		assertContains(t, sql, "(SELECT SUM(amount) FROM sales AS __cal_sales)", "GROUP BY region")
-		assertNotContains(t, sql, "__cal_sales.region = sales.region")
+		assertContains(t, sql, "_cc0 AS (", "(SUM(amount)) AS v", "LEFT JOIN _cc0 ON TRUE")
+		assertNotContains(t, sql, "__cal_sales")
 	})
 
 	t.Run("ALL_inside_DIVIDE_pct_of_total", func(t *testing.T) {
@@ -366,18 +367,19 @@ func TestFilterContextModifiers(t *testing.T) {
 			sales[region],
 			"Pct", DIVIDE(SUM(sales[amount]), CALCULATE(SUM(sales[amount]), ALL(sales)))
 		)`)
-		assertContains(t, sql, "(SELECT SUM(amount) FROM sales AS __cal_sales)", "CASE WHEN")
+		assertContains(t, sql, "_cc0.v", "CASE WHEN")
 	})
 
 	t.Run("ALL_column_keeps_other_keys", func(t *testing.T) {
-		// ALL(sales[product]) clears only the product key; region stays correlated.
+		// ALL(sales[product]) clears only the product key; the context CTE
+		// still groups by and joins back on region.
 		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
 			sales[region],
 			sales[product],
 			"RegionTotal", CALCULATE(SUM(sales[amount]), ALL(sales[product]))
 		)`)
-		assertContains(t, sql, "__cal_sales.region = sales.region")
-		assertNotContains(t, sql, "__cal_sales.product = sales.product")
+		assertContains(t, sql, "sales.region AS k0", "_cc0.k0 IS NOT DISTINCT FROM")
+		assertNotContains(t, sql, "_cc0.k1")
 	})
 
 	t.Run("ALLEXCEPT_keeps_listed_column", func(t *testing.T) {
@@ -386,8 +388,8 @@ func TestFilterContextModifiers(t *testing.T) {
 			sales[product],
 			"RegionTotal", CALCULATE(SUM(sales[amount]), ALLEXCEPT(sales, sales[region]))
 		)`)
-		assertContains(t, sql, "__cal_sales.region = sales.region")
-		assertNotContains(t, sql, "__cal_sales.product = sales.product")
+		assertContains(t, sql, "sales.region AS k0", "_cc0.k0 IS NOT DISTINCT FROM")
+		assertNotContains(t, sql, "_cc0.k1")
 	})
 
 	t.Run("REMOVEFILTERS_is_ALL", func(t *testing.T) {
@@ -395,7 +397,7 @@ func TestFilterContextModifiers(t *testing.T) {
 			sales[region],
 			"Grand", CALCULATE(SUM(sales[amount]), REMOVEFILTERS(sales))
 		)`)
-		assertContains(t, sql, "(SELECT SUM(amount) FROM sales AS __cal_sales)")
+		assertContains(t, sql, "LEFT JOIN _cc0 ON TRUE")
 	})
 
 	t.Run("KEEPFILTERS_stays_additive", func(t *testing.T) {
@@ -415,8 +417,7 @@ func TestFilterContextModifiers(t *testing.T) {
 			sales[region],
 			"NorthTotal", CALCULATE(SUM(sales[amount]), sales[region] = "North")
 		)`)
-		assertContains(t, sql, "__cal_sales", "region = 'North'")
-		assertNotContains(t, sql, "__cal_sales.region = sales.region")
+		assertContains(t, sql, "_cc0 AS (", "region = 'North'", "LEFT JOIN _cc0 ON TRUE")
 	})
 
 	t.Run("predicate_on_nongrouped_column_stays_fast_path", func(t *testing.T) {
@@ -434,20 +435,19 @@ func TestFilterContextModifiers(t *testing.T) {
 			sales[region],
 			"NorthTotal", CALCULATE(SUM(sales[amount]), FILTER(ALL(sales), sales[region] = "North"))
 		)`)
-		assertContains(t, sql, "__cal_sales", "region = 'North'")
-		assertNotContains(t, sql, "__cal_sales.region = sales.region")
+		assertContains(t, sql, "_cc0 AS (", "region = 'North'", "LEFT JOIN _cc0 ON TRUE")
 	})
 
 	t.Run("ALL_with_joined_dimension_key_kept", func(t *testing.T) {
 		// Group by products[category]; ALL(sales) keeps the category filter,
-		// which must be re-joined and correlated inside the subquery.
+		// so the context CTE joins products and carries the category key.
 		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
 			products[category],
 			"AllSales", CALCULATE(SUM(sales[amount]), ALL(sales))
 		)`)
 		assertContains(t, sql,
-			"LEFT JOIN products AS __cal_products",
-			"__cal_products.category = products.category")
+			"products.category AS k0",
+			"_cc0.k0 IS NOT DISTINCT FROM")
 	})
 
 	t.Run("ALL_removes_TREATAS_filter_on_same_table", func(t *testing.T) {
@@ -456,9 +456,14 @@ func TestFilterContextModifiers(t *testing.T) {
 			TREATAS({"North"}, sales[region]),
 			"Grand", CALCULATE(SUM(sales[amount]), ALL(sales))
 		)`)
-		assertContains(t, sql, "(SELECT SUM(amount) FROM sales AS __cal_sales)")
-		// The outer query keeps its TREATAS filter.
-		assertContains(t, sql, "WHERE region IN ('North')")
+		// The context CTE drops the cleared TREATAS filter; the group-key CTE
+		// keeps it.
+		assertContains(t, sql, "WHERE region IN ('North')", "LEFT JOIN _cc0 ON TRUE")
+		cteBody := sql[strings.Index(sql, "_cc0 AS ("):]
+		cteBody = cteBody[:strings.Index(cteBody, "\n)")]
+		if strings.Contains(cteBody, "IN ('North')") {
+			t.Errorf("expected the context CTE to drop the cleared TREATAS filter\ngot:\n%s", sql)
+		}
 	})
 
 	t.Run("standalone_CALCULATE_with_ALL", func(t *testing.T) {
@@ -625,24 +630,67 @@ func TestTimeIntelligence(t *testing.T) {
 			dates[month],
 			"YTD", TOTALYTD(SUM(orders[amount]), dates[date])
 		)`)
-		// Anchor correlates on the date table's group keys...
+		// The anchor scan enumerates the date table's group cells with the
+		// required extreme; the range predicate joins it to the cleared copy.
 		assertContains(t, sql,
 			"date_trunc('year'",
-			"__ti_dates.year = dates.year",
-			"__ti_dates.month = dates.month")
-		// ...and the designated date table's own group correlations are cleared.
-		assertNotContains(t, sql, "__cal_dates.year = dates.year")
+			"(SELECT year, month, MAX(date) AS a0 FROM dates GROUP BY year, month) AS __anch0",
+			"GROUP BY __anch0.year, __anch0.month")
+		// The designated date table's own filters are cleared: the cleared
+		// copy is not pinned to the anchor cell, and no correlated anchor
+		// subquery remains anywhere.
+		assertNotContains(t, sql, "dates.year = __anch0.year", "__ti_dates", "__cal_dates")
 	})
 
 	t.Run("undesignated_table_keeps_other_column_filters", func(t *testing.T) {
 		// Without the designation only the date column's filter is replaced,
-		// so the year group key stays correlated (DAX behaviour for a column
-		// that is not on a marked date table).
+		// so the year group key still pins the cleared copy to the anchor
+		// cell (DAX behaviour for a column not on a marked date table).
 		sql := emitTime(t, false, `EVALUATE SUMMARIZECOLUMNS(
 			dates[year],
 			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date]))
 		)`)
-		assertContains(t, sql, "__cal_dates.year = dates.year")
+		assertContains(t, sql, "dates.year = __anch0.year")
+	})
+
+	t.Run("rolling_window_at_date_grain_has_no_correlation", func(t *testing.T) {
+		// The R7D dashboard shape: DATESINPERIOD grouped by the date column.
+		// The window must be a range join against the anchor scan — nested
+		// correlated anchors previously exploded into a |dates| × |fact|
+		// intermediate.
+		sql := emitTime(t, true, `EVALUATE SUMMARIZECOLUMNS(
+			dates[date],
+			"R7D", CALCULATE(SUM(orders[amount]), DATESINPERIOD(dates[date], MAX(dates[date]), -7, DAY))
+		)`)
+		assertContains(t, sql,
+			"(SELECT date, MAX(date) AS a0 FROM dates GROUP BY date) AS __anch0",
+			"dates.date > __anch0.a0 + (-7) * INTERVAL 1 DAY",
+			"dates.date <= __anch0.a0",
+			"GROUP BY __anch0.date",
+			"LEFT JOIN _cc0 ON _cc0.k0 IS NOT DISTINCT FROM")
+		assertNotContains(t, sql, "__ti_dates", "__cal_")
+	})
+
+	t.Run("rolling_window_grand_total_without_group_keys", func(t *testing.T) {
+		// KPI-card shape: a context-modifying measure with no group keys is a
+		// single-row CTE selected directly.
+		sql := emitTime(t, true, `EVALUATE SUMMARIZECOLUMNS(
+			"R7D", CALCULATE(SUM(orders[amount]), DATESINPERIOD(dates[date], MAX(dates[date]), -7, DAY))
+		)`)
+		assertContains(t, sql, "FROM _cc0", "(SELECT MAX(date) AS a0 FROM dates) AS __anch0")
+		assertNotContains(t, sql, "__ti_dates")
+	})
+
+	t.Run("rollup_keeps_correlated_fallback_with_inline_anchor", func(t *testing.T) {
+		// Grouping sets suppress context CTEs; the correlated fallback stays,
+		// but the anchor inlines to the outer column when the anchored column
+		// is itself a group key (no nested correlated subquery).
+		sql := emitTime(t, true, `EVALUATE SUMMARIZECOLUMNS(
+			ROLLUPADDISSUBTOTAL(dates[date], "IsTotal"),
+			"R7D", CALCULATE(SUM(orders[amount]), DATESINPERIOD(dates[date], MAX(dates[date]), -7, DAY))
+		)`)
+		assertContains(t, sql, "__cal_dates.date <= dates.date")
+		assertNotContains(t, sql, "__ti_dates")
 	})
 
 	t.Run("DATEADD_shifts_range", func(t *testing.T) {

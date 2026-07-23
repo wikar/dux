@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/danielwikar/dux/executor"
 	"github.com/danielwikar/dux/internal/ducklake"
 	"github.com/danielwikar/dux/parser"
 	"github.com/danielwikar/dux/semantic"
@@ -228,6 +229,8 @@ func Startup(binName, version, usage string, exitAfterImport, owner bool) *Runti
 	exportPath := flag.String("export", "", "export measures and schema to this path then exit")
 	retention := flag.Duration("time-travel-retention", 30*24*time.Hour, "DuckLake snapshot time-travel retention")
 	deleteDelay := flag.Duration("file-delete-delay", 7*24*time.Hour, "delay before unreferenced Parquet files are deleted")
+	memoryLimit := flag.String("memory-limit", "4GB", "DuckDB memory limit per instance (e.g. 4GB); work exceeding it spills to <db-dir>/tmp; empty for the DuckDB default (80% of RAM, no spilling)")
+	queryTimeout := flag.Duration("query-timeout", executor.QueryTimeout, "maximum duration for a single DUX query before it is interrupted")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, usage)
@@ -265,11 +268,19 @@ func Startup(binName, version, usage string, exitAfterImport, owner bool) *Runti
 	if err != nil {
 		log.Fatalf("open DUX metadata: %v", err)
 	}
+	if *queryTimeout <= 0 {
+		log.Fatalf("--query-timeout must be positive")
+	}
+	executor.QueryTimeout = *queryTimeout
 	cfg := ducklake.Config{
 		CatalogPath:         r.CatalogPath,
 		DataPath:            r.DataPath,
 		TimeTravelRetention: *retention,
 		FileDeleteDelay:     *deleteDelay,
+		MemoryLimit:         *memoryLimit,
+	}
+	if *memoryLimit != "" {
+		cfg.TempDirectory = filepath.Join(r.DBDir, "tmp")
 	}
 	if owner {
 		r.Owner, err = ducklake.OpenOwner(context.Background(), cfg)

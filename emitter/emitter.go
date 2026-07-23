@@ -32,6 +32,10 @@ type Emitter struct {
 	// their CTE column references. Set only while emitting the outer arithmetic
 	// of a cross-cluster measure expression (see stitched.go).
 	stitchSubst map[*parser.FuncCall]string
+	// anchorScans, when non-nil, redirects time-intelligence anchors to the
+	// per-table anchor scans of the context CTE being emitted (contextcte.go)
+	// instead of correlated scalar subqueries.
+	anchorScans *anchorCollector
 }
 
 // taggedPred pairs an emitted SQL WHERE predicate with the lower-cased
@@ -1024,12 +1028,18 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	// Stitched codegen (stitched.go) applies when:
 	//  - measures span more than one table cluster: a single flat join tree
 	//    would fan the clusters out against each other and inflate every
-	//    aggregate; or
+	//    aggregate;
+	//  - a measure modifies the group filter context (CALCULATE removals,
+	//    time intelligence): it evaluates in a private context CTE
+	//    (contextcte.go) instead of a correlated scalar subquery; or
 	//  - the join graph crosses a bidirectional relationship: filter chains
 	//    through the bidi edge must gate via EXISTS semi-joins, per measure
 	//    context, to avoid many-to-many bridge fan-out.
-	plan := e.planMeasures(pairArgs, measureArgs)
-	if tableClusterCount(plan.clusters) > 1 || e.stitchForBidi(plan, groupKeys, wherePreds) {
+	// Grouping sets and computed group keys keep the correlated fallback for
+	// context-modifying measures (liftContext false).
+	liftContext := len(rollupElems) == 0 && len(groupCols) == len(plainKeys)
+	plan := e.planMeasures(pairArgs, measureArgs, liftContext)
+	if tableClusterCount(plan.clusters) > 1 || plan.hasContextClusters() || e.stitchForBidi(plan, groupKeys, wherePreds) {
 		return e.emitStitched(groupCols, plainKeys, rollupElems, rollupKeys, pairArgs, measureArgs, plan, wherePreds)
 	}
 

@@ -18,8 +18,9 @@ import (
 )
 
 // QueryTimeout is the maximum duration allowed for a single DUX query,
-// including VAR materialisation. Queries that exceed this are cancelled.
-const QueryTimeout = 60 * time.Second
+// including VAR materialisation. Queries that exceed this are interrupted.
+// Overridable at startup via the --query-timeout flag (see bootstrap).
+var QueryTimeout = 60 * time.Second
 
 // QueryError is a query-pipeline failure with its pipeline stage and, when
 // the underlying error carries one, a 1-based source position.
@@ -167,6 +168,10 @@ func ExecuteFilteredContext(ctx context.Context, db *sql.DB, schema *semantic.Sc
 
 	rows, err := conn.QueryContext(ctx, sqlStr)
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, nil, queryErr("execute query",
+				fmt.Errorf("interrupted after exceeding the %s query timeout", QueryTimeout))
+		}
 		return nil, nil, queryErr("execute query", err)
 	}
 	defer rows.Close()

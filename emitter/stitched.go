@@ -123,10 +123,21 @@ func (e *Emitter) emitStitched(
 	liftedSeq := 0
 	var ctes []stitchedCTE
 
-	// A dimension-only query (no table-bearing measures) routed here for bidi
-	// handling still needs one CTE to carry the group keys.
-	clusters := plan.clusters
-	if tableClusterCount(clusters) == 0 && numKeys > 0 {
+	// Context clusters (CALCULATE with removals, see contextcte.go) are
+	// emitted after the regular clusters: they carry a subset of the group
+	// keys and LEFT JOIN onto the stitch instead of defining cells.
+	var calcClusters []*measureCluster
+	var clusters []*measureCluster
+	for _, c := range plan.clusters {
+		if c.calc != nil {
+			calcClusters = append(calcClusters, c)
+			continue
+		}
+		clusters = append(clusters, c)
+	}
+	// A query with no regular table-bearing measures (dimension-only, or only
+	// context-modifying measures) still needs one CTE to define the cells.
+	if regularTableClusterCount(plan.clusters) == 0 && numKeys > 0 {
 		clusters = append([]*measureCluster{{key: "__group__"}}, clusters...)
 	}
 
@@ -271,6 +282,41 @@ func (e *Emitter) emitStitched(
 		ctes = append(ctes, stitchedCTE{name: cteName, body: body.String()})
 	}
 
+	// Emit the context clusters as private grouped CTEs (contextcte.go). Their
+	// value column substitutes for the lifted subtree in the outer arithmetic.
+	var cctes []*contextCTE
+	for _, c := range calcClusters {
+		cf := calcForm(c.calc)
+		if cf == nil {
+			return "", fmt.Errorf("internal: context cluster subtree %s is not a CALCULATE form", c.calc.Name)
+		}
+		inCluster := map[string]bool{}
+		for _, t := range c.tables {
+			inCluster[strings.ToLower(e.canonTable(t))] = true
+		}
+		var routed []taggedPred
+		for pi, p := range preds {
+			if p.table == "" {
+				return "", fmt.Errorf(
+					"SUMMARIZECOLUMNS: cannot route the filter %q to a measure context when measures span multiple tables", p.sql)
+			}
+			if inCluster[strings.ToLower(e.canonTable(p.table))] ||
+				(e.Schema != nil && semantic.FilterReaches(e.Schema, p.table, c.tables)) {
+				routed = append(routed, p)
+				predUsed[pi] = true
+			}
+		}
+		prevCtx := e.groupCtx
+		e.groupCtx = &groupContext{keys: groupKeys, preds: routed}
+		cte, err := e.emitContextCTE(fmt.Sprintf("_cc%d", len(cctes)), cf, c.tables)
+		e.groupCtx = prevCtx
+		if err != nil {
+			return "", err
+		}
+		subst[c.calc] = cte.name + ".v"
+		cctes = append(cctes, cte)
+	}
+
 	for pi, used := range predUsed {
 		if !used {
 			return "", fmt.Errorf(
@@ -310,6 +356,12 @@ func (e *Emitter) emitStitched(
 		}
 		fmt.Fprintf(&sb, "%s AS (\n%s\n)", c.name, c.body)
 	}
+	for i, cc := range cctes {
+		if i > 0 || len(ctes) > 0 {
+			sb.WriteString(", ")
+		}
+		fmt.Fprintf(&sb, "%s AS (\n%s\n)", cc.name, cc.body)
+	}
 
 	var outItems []string
 	for ki, gk := range plainKeys {
@@ -339,6 +391,16 @@ func (e *Emitter) emitStitched(
 		outItems = append(outItems, fmt.Sprintf("%s AS %s", measureRef[i], nameSQL))
 	}
 
+	if len(ctes) == 0 {
+		// No group keys and no regular measures: every context CTE is a
+		// single aggregate row (the group-key-less grand total).
+		fmt.Fprintf(&sb, "\nSELECT %s\nFROM %s", strings.Join(outItems, ", "), cctes[0].name)
+		for _, cc := range cctes[1:] {
+			fmt.Fprintf(&sb, "\nLEFT JOIN %s ON TRUE", cc.name)
+		}
+		return sb.String(), nil
+	}
+
 	fmt.Fprintf(&sb, "\nSELECT %s\nFROM %s", strings.Join(outItems, ", "), ctes[0].name)
 	for i := 1; i < len(ctes); i++ {
 		var conds []string
@@ -356,6 +418,19 @@ func (e *Emitter) emitStitched(
 			conds = []string{"TRUE"}
 		}
 		fmt.Fprintf(&sb, "\nFULL OUTER JOIN %s ON %s", ctes[i].name, strings.Join(conds, " AND "))
+	}
+	// Context CTEs never define cells: LEFT JOIN on the group keys they carry
+	// (a removed key is absent, so the value repeats across it).
+	for _, cc := range cctes {
+		var conds []string
+		for _, ki := range cc.keyIdxs {
+			conds = append(conds, fmt.Sprintf("%s.k%d IS NOT DISTINCT FROM %s",
+				cc.name, ki, stitchedColRef(ctes, fmt.Sprintf("k%d", ki))))
+		}
+		if len(conds) == 0 {
+			conds = []string{"TRUE"}
+		}
+		fmt.Fprintf(&sb, "\nLEFT JOIN %s ON %s", cc.name, strings.Join(conds, " AND "))
 	}
 	return sb.String(), nil
 }

@@ -2,6 +2,8 @@ package executor_test
 
 import (
 	"database/sql"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/danielwikar/dux/semantic"
@@ -188,6 +190,63 @@ func TestExecute_TimeIntelligence(t *testing.T) {
 		)`)
 		if v := toFloat(cell(t, monthRow(t, rows, 2024, 3), "R2M")); v != 500 {
 			t.Errorf("2024-03 rolling 2 months: expected 500, got %v", v)
+		}
+	})
+
+	t.Run("DATESINPERIOD_rolling_7_days_at_date_grain", func(t *testing.T) {
+		// The dashboard line-chart shape: a rolling window grouped by the
+		// date column itself (one cell per calendar day). Compiled as a
+		// context CTE with an anchor scan (contextcte.go) — the correlated
+		// form was quadratic in |dates| × |orders|.
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[date],
+			"Total", SUM(orders[amount]),
+			"R7D", CALCULATE(SUM(orders[amount]), DATESINPERIOD(dates[date], MAX(dates[date]), -7, DAY))
+		)`)
+		if len(rows) != 731 {
+			t.Fatalf("expected 731 rows (2023+2024 days), got %d", len(rows))
+		}
+		dayRow := func(day string) map[string]any {
+			for _, row := range rows {
+				if v, ok := row["date"]; ok && strings.HasPrefix(fmt.Sprint(v), day) {
+					return row
+				}
+			}
+			t.Fatalf("no row for %s", day)
+			return nil
+		}
+		// Window is (d-7, d], inclusive of d. The 2023-01-15 order is visible
+		// through 2023-01-21 and gone on 2023-01-22.
+		if v := toFloat(cell(t, dayRow("2023-01-15"), "R7D")); v != 10 {
+			t.Errorf("R7D on 2023-01-15: expected 10, got %v", v)
+		}
+		if v := toFloat(cell(t, dayRow("2023-01-21"), "R7D")); v != 10 {
+			t.Errorf("R7D on 2023-01-21: expected 10, got %v", v)
+		}
+		if v := dayRow("2023-01-22")["R7D"]; v != nil {
+			t.Errorf("R7D on 2023-01-22: expected NULL, got %v", v)
+		}
+		// The plain measure stays at day grain next to the windowed one.
+		if v := toFloat(cell(t, dayRow("2023-01-15"), "Total")); v != 10 {
+			t.Errorf("Total on 2023-01-15: expected 10, got %v", v)
+		}
+		if v := dayRow("2023-01-16")["Total"]; v != nil {
+			t.Errorf("Total on 2023-01-16: expected NULL, got %v", v)
+		}
+	})
+
+	t.Run("DATESINPERIOD_inside_DIVIDE", func(t *testing.T) {
+		// A context-modifying subtree composed in outer arithmetic: the
+		// rolling aggregate and the plain aggregate evaluate in separate
+		// contexts and recombine in the stitched SELECT.
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year],
+			dates[month],
+			"Ratio", DIVIDE(CALCULATE(SUM(orders[amount]), DATESINPERIOD(dates[date], MAX(dates[date]), -2, MONTH)), SUM(orders[amount]))
+		)`)
+		got := toFloat(cell(t, monthRow(t, rows, 2024, 3), "Ratio"))
+		if want := 500.0 / 300.0; got < want-1e-9 || got > want+1e-9 {
+			t.Errorf("2024-03 ratio: expected %v, got %v", want, got)
 		}
 	})
 
