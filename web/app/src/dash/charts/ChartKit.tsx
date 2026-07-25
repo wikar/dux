@@ -220,169 +220,232 @@ interface BaseProps {
   interaction?: Interaction;
 }
 
-// ─── Bar (clustered / stacked, vertical / horizontal) ────────────────────────
+// ─── Cartesian frame (bar / line / area / combo) ─────────────────────────────
+//
+// One ComposedChart drives every cartesian visual: the grid, axes, tooltip and
+// legend are identical, so a visual only declares its series (see the registry
+// in the per-visual registry entries under ../visuals).
 
-interface BarProps extends BaseProps {
-  series: string[];
-  orientation?: "vertical" | "horizontal";
-  stacked?: boolean;
+/** Stroke weight of a line/area curve. The selected-point outline matches it,
+ *  so the marker reads as part of the same drawing. */
+const SERIES_STROKE = 2;
+
+export type SeriesKind = "bar" | "line" | "area";
+
+export interface SeriesSpec {
+  /** Row key plotted by this series. */
+  key: string;
+  kind: SeriesKind;
+  color: string;
+  /** Secondary y axis; the axis is rendered only when a series asks for it. */
+  axis?: "left" | "right";
+  /** Shared id stacks series instead of clustering/overlapping them. */
+  stackId?: string;
+  /** bar: corner radius. */
+  radius?: number;
+  /** area: band opacity. */
+  fillOpacity?: number;
+  /** line / area point markers. base "auto" shows them only on sparse data;
+   *  highlight enlarges the marks that are cross-filter selected. */
+  dot?: { base: number | "auto"; highlight?: boolean };
 }
 
-export function BarChartViz({ data, series, palette, formats, orientation, stacked, legend, interaction }: BarProps) {
-  const horizontal = orientation === "horizontal";
-  const valueFmt = tickFormatter(formats, series);
+interface CartesianProps {
+  data: ChartRow[];
+  series: SeriesSpec[];
+  formats: Formats;
+  legend?: boolean;
+  interaction?: Interaction;
+  /** Category on the y axis (horizontal bars). */
+  horizontal?: boolean;
+  /** Nudge the first/last category tick inward so labels stay inside. */
+  insetTicks?: boolean;
+  /** Outline for a cross-filter-selected marker — the theme's text color, so
+   *  the mark separates from its own line without borrowing a series color. */
+  markStroke?: string;
+}
+
+/** Point marker for a line/area series: a boolean for Recharts default dot,
+ *  or a renderer that emphasizes the selected marks (dimming a continuous
+ *  line reads poorly, so line highlight is intentionally point-level).
+ *  A curve mark is keyed on the axis value alone - see chartRowClick. */
+function seriesDot(
+  s: SeriesSpec,
+  data: ChartRow[],
+  sel: Set<string> | undefined,
+  markStroke: string | undefined
+) {
+  if (!s.dot) return false;
+  // "auto" shows markers only while the data is sparse enough to read.
+  const auto = s.dot.base === "auto" && data.length <= 40;
+  if (!s.dot.highlight || !sel || sel.size === 0) return auto;
+  // Dimmed markers are context for the selected one; on a dense series they
+  // just smear the curve, so there only the selection is drawn.
+  const r = s.dot.base === "auto" ? (auto ? 2 : 0) : s.dot.base;
+  return (props: { cx?: number; cy?: number; index?: number }) => {
+    const { cx, cy, index } = props;
+    if (cx === undefined || cy === undefined) return <g />;
+    const on = sel.has(markKey({ dims: markDims(data[index ?? -1]) } as CrossMark));
+    if (!on && r === 0) return <g />;
+    // The selected point keeps its series fill and gains a hairline outline;
+    // the dimmed ones stay plain so the line still reads as one.
+    return (
+      <circle
+        cx={cx}
+        cy={cy}
+        r={on ? 4.5 : r}
+        fill={s.color}
+        fillOpacity={on ? 1 : 0.35}
+        stroke={on ? markStroke : undefined}
+        strokeWidth={on ? SERIES_STROKE : undefined}
+      />
+    );
+  };
+}
+
+/** Recharts click state: the active-tooltip fields that also place the
+ *  vertical cursor line. */
+interface ChartClickState {
+  activeIndex?: number | string | null;
+  activeTooltipIndex?: number | string | null;
+  activeLabel?: string | number | null;
+}
+
+/** Index of the row the cursor line sits on, or -1. */
+function activeRow(state: ChartClickState | undefined, data: ChartRow[]): number {
+  const n = Number(state?.activeIndex ?? state?.activeTooltipIndex);
+  if (Number.isInteger(n) && n >= 0 && n < data.length) return n;
+  const label = state?.activeLabel;
+  if (label !== undefined && label !== null) return data.findIndex((r) => r.__x === String(label));
+  return -1;
+}
+
+export function CartesianChart({
+  data,
+  series,
+  formats,
+  legend,
+  interaction,
+  horizontal,
+  insetTicks,
+  markStroke,
+}: CartesianProps) {
   const split = interaction?.seriesDim; // when set, each series key is a dim value
   const click = interaction?.onMarkClick;
+  const sel = interaction?.selectedKeys;
+  const right = series.filter((s) => s.axis === "right");
+  const leftFmt = tickFormatter(formats, series.filter((s) => s.axis !== "right").map((s) => s.key));
+  // A horizontal layout has a single numeric axis, so series carry no axis id.
+  const axisId = (s: SeriesSpec) => (horizontal ? undefined : s.axis ?? "left");
+
+  // Recharts reports a Line/Area click as the *series* — the handler never
+  // learns which point was under the cursor — so a curve can't cross-filter
+  // through its own onClick. The chart-level click can: it carries the active
+  // tooltip row, i.e. exactly the axis value the vertical cursor line marks.
+  // Bars stay on their own handler (a rectangle already is one row, and a
+  // split stack knows its series too), so they opt out of this one.
+  const curves = series.some((s) => s.kind !== "bar");
+  const chartClick =
+    click && curves
+      ? (...args: unknown[]) => {
+          const event = args[1] as { target?: EventTarget; ctrlKey?: boolean; metaKey?: boolean } | undefined;
+          const target = event?.target as Element | undefined;
+          if (target?.closest?.(".recharts-bar-rectangle, .recharts-legend-wrapper")) return;
+          const i = activeRow(args[0] as ChartClickState | undefined, data);
+          if (i < 0) return;
+          const dims = markDims(data[i]);
+          if (dims.length > 0) click(dims, additiveOf(event));
+        }
+      : undefined;
+
+  const renderSeries = (s: SeriesSpec) => {
+    const shared = {
+      dataKey: s.key,
+      yAxisId: axisId(s),
+      isAnimationActive: false,
+    } as const;
+    if (s.kind === "bar") {
+      // A bar rectangle is its own mark: Recharts hands the clicked row over.
+      const seriesVal = split ? s.key : undefined;
+      return (
+        <Bar
+          key={s.key}
+          {...shared}
+          fill={s.color}
+          stackId={s.stackId}
+          radius={s.radius ?? 2}
+          cursor={click ? "pointer" : undefined}
+          onClick={markClickHandler(click, split, seriesVal)}
+        >
+          {data.map((row, ri) => (
+            <Cell key={ri} fill={s.color} fillOpacity={markOpacity(sel, markDims(row, split, seriesVal))} />
+          ))}
+        </Bar>
+      );
+    }
+    const dot = seriesDot(s, data, sel, markStroke);
+    if (s.kind === "area") {
+      return (
+        <Area
+          key={s.key}
+          {...shared}
+          stackId={s.stackId}
+          stroke={s.color}
+          fill={s.color}
+          fillOpacity={s.fillOpacity ?? 0.3}
+          strokeWidth={SERIES_STROKE}
+          dot={dot}
+        />
+      );
+    }
+    return <Line key={s.key} {...shared} stroke={s.color} strokeWidth={SERIES_STROKE} dot={dot} />;
+  };
+
   return (
     <ResponsiveContainer width="100%" height="100%">
       <ComposedChart
         data={data}
         layout={horizontal ? "vertical" : "horizontal"}
         margin={{ top: 8, right: 12, bottom: 4, left: 4 }}
+        onClick={chartClick}
+        // The whole plot is the target, so say so.
+        style={chartClick ? { cursor: "pointer" } : undefined}
       >
         <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={!horizontal} vertical={horizontal} />
         {horizontal ? (
           <>
-            <XAxis type="number" {...commonAxis} tickFormatter={valueFmt} />
+            <XAxis type="number" {...commonAxis} tickFormatter={leftFmt} />
             <YAxis type="category" dataKey="__x" {...commonAxis} tickFormatter={formatCategoryTick} width={92} />
           </>
         ) : (
           <>
-            <XAxis type="category" dataKey="__x" {...categoryAxis} />
-            <YAxis type="number" {...commonAxis} tickFormatter={valueFmt} width={48} />
+            <XAxis
+              type="category"
+              dataKey="__x"
+              {...categoryAxis}
+              {...(insetTicks ? { tick: lineCategoryTick } : {})}
+            />
+            <YAxis yAxisId="left" type="number" {...commonAxis} tickFormatter={leftFmt} width={48} />
+            {right.length > 0 && (
+              <YAxis
+                yAxisId="right"
+                orientation="right"
+                type="number"
+                {...commonAxis}
+                tickFormatter={tickFormatter(formats, right.map((s) => s.key))}
+                width={48}
+              />
+            )}
           </>
         )}
-        <Tooltip formatter={tooltipFormatter(formats)} contentStyle={TOOLTIP_STYLE} cursor={{ fill: "#31324455" }} />
+        <Tooltip
+          formatter={tooltipFormatter(formats)}
+          contentStyle={TOOLTIP_STYLE}
+          // Bars get a band cursor; a line/area hover would be obscured by it.
+          cursor={series.some((s) => s.kind === "bar") ? { fill: "#31324455" } : undefined}
+        />
         {legend && <Legend wrapperStyle={{ fontSize: 11 }} />}
-        {series.map((s, i) => (
-          <Bar
-            key={s}
-            dataKey={s}
-            fill={palette[i % palette.length]}
-            stackId={stacked ? "stack" : undefined}
-            radius={stacked ? 0 : 2}
-            isAnimationActive={false}
-            cursor={click ? "pointer" : undefined}
-            onClick={markClickHandler(click, split, split ? s : undefined)}
-          >
-            {data.map((row, ri) => (
-              <Cell
-                key={ri}
-                fill={palette[i % palette.length]}
-                fillOpacity={markOpacity(interaction?.selectedKeys, markDims(row, split, split ? s : undefined))}
-              />
-            ))}
-          </Bar>
-        ))}
-      </ComposedChart>
-    </ResponsiveContainer>
-  );
-}
-
-// ─── Line (optional secondary y axis) ────────────────────────────────────────
-
-interface LineProps extends BaseProps {
-  left: string[];
-  right: string[];
-}
-
-export function LineChartViz({ data, left, right, palette, formats, legend, interaction }: LineProps) {
-  const all = [...left, ...right];
-  const split = interaction?.seriesDim;
-  const click = interaction?.onMarkClick;
-  const sel = interaction?.selectedKeys;
-  const hasSel = !!sel && sel.size > 0;
-  // Custom dot: emphasize points whose mark is selected (line highlight is
-  // intentionally point-level — dimming a continuous line reads poorly).
-  const dotFor = (s: string, color: string) =>
-    hasSel
-      ? (props: { cx?: number; cy?: number; index?: number }) => {
-          const { cx, cy, index } = props;
-          if (cx === undefined || cy === undefined) return <g />;
-          const on = sel!.has(markKey({ dims: markDims(data[index ?? -1], split, split ? s : undefined) } as CrossMark));
-          return <circle cx={cx} cy={cy} r={on ? 4.5 : 2} fill={color} fillOpacity={on ? 1 : 0.35} />;
-        }
-      : data.length <= 40;
-  return (
-    <ResponsiveContainer width="100%" height="100%">
-      <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
-        <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-        <XAxis type="category" dataKey="__x" {...categoryAxis} tick={lineCategoryTick} />
-        <YAxis yAxisId="left" type="number" {...commonAxis} tickFormatter={tickFormatter(formats, left)} width={48} />
-        {right.length > 0 && (
-          <YAxis
-            yAxisId="right"
-            orientation="right"
-            type="number"
-            {...commonAxis}
-            tickFormatter={tickFormatter(formats, right)}
-            width={48}
-          />
-        )}
-        <Tooltip formatter={tooltipFormatter(formats)} contentStyle={TOOLTIP_STYLE} />
-        {legend && <Legend wrapperStyle={{ fontSize: 11 }} />}
-        {all.map((s, i) => (
-          <Line
-            key={s}
-            dataKey={s}
-            yAxisId={right.includes(s) ? "right" : "left"}
-            stroke={palette[i % palette.length]}
-            strokeWidth={2}
-            dot={dotFor(s, palette[i % palette.length])}
-            isAnimationActive={false}
-            cursor={click ? "pointer" : undefined}
-            onClick={markClickHandler(click, split, split ? s : undefined)}
-          />
-        ))}
-      </ComposedChart>
-    </ResponsiveContainer>
-  );
-}
-
-// ─── Area (overlapping / stacked) ────────────────────────────────────────────
-
-interface AreaProps extends BaseProps {
-  series: string[];
-  stacked?: boolean;
-}
-
-export function AreaChartViz({ data, series, palette, formats, stacked, legend, interaction }: AreaProps) {
-  const split = interaction?.seriesDim;
-  const click = interaction?.onMarkClick;
-  const sel = interaction?.selectedKeys;
-  const hasSel = !!sel && sel.size > 0;
-  const dotFor = (s: string, color: string) =>
-    hasSel
-      ? (props: { cx?: number; cy?: number; index?: number }) => {
-          const { cx, cy, index } = props;
-          if (cx === undefined || cy === undefined) return <g />;
-          const on = sel!.has(markKey({ dims: markDims(data[index ?? -1], split, split ? s : undefined) } as CrossMark));
-          return <circle cx={cx} cy={cy} r={on ? 4.5 : 0} fill={color} fillOpacity={on ? 1 : 0} />;
-        }
-      : false;
-  return (
-    <ResponsiveContainer width="100%" height="100%">
-      <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
-        <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-        <XAxis type="category" dataKey="__x" {...categoryAxis} />
-        <YAxis type="number" {...commonAxis} tickFormatter={tickFormatter(formats, series)} width={48} />
-        <Tooltip formatter={tooltipFormatter(formats)} contentStyle={TOOLTIP_STYLE} />
-        {legend && <Legend wrapperStyle={{ fontSize: 11 }} />}
-        {series.map((s, i) => (
-          <Area
-            key={s}
-            dataKey={s}
-            stackId={stacked ? "stack" : undefined}
-            stroke={palette[i % palette.length]}
-            fill={palette[i % palette.length]}
-            fillOpacity={stacked ? 0.7 : 0.3}
-            strokeWidth={2}
-            isAnimationActive={false}
-            dot={dotFor(s, palette[i % palette.length])}
-            cursor={click ? "pointer" : undefined}
-            onClick={markClickHandler(click, split, split ? s : undefined)}
-          />
-        ))}
+        {series.map(renderSeries)}
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -435,74 +498,6 @@ export function DonutChartViz({ data, metric, palette, formats, legend, interact
           {formatValue(total, fmt)}
         </text>
       </PieChart>
-    </ResponsiveContainer>
-  );
-}
-
-// ─── Combo (bars + lines, lines optionally on the right axis) ────────────────
-
-interface ComboProps extends BaseProps {
-  bars: string[];
-  lines: string[];
-  /** Put line series on a secondary right axis (default true). */
-  lineY2?: boolean;
-}
-
-export function ComboChartViz({ data, bars, lines, lineY2 = true, palette, formats, legend, interaction }: ComboProps) {
-  const rightAxis = lineY2 && lines.length > 0;
-  const click = interaction?.onMarkClick; // combo series are metrics → dims = row.__dims
-  return (
-    <ResponsiveContainer width="100%" height="100%">
-      <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
-        <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-        <XAxis type="category" dataKey="__x" {...categoryAxis} />
-        <YAxis yAxisId="left" type="number" {...commonAxis} tickFormatter={tickFormatter(formats, bars)} width={48} />
-        {rightAxis && (
-          <YAxis
-            yAxisId="right"
-            orientation="right"
-            type="number"
-            {...commonAxis}
-            tickFormatter={tickFormatter(formats, lines)}
-            width={48}
-          />
-        )}
-        <Tooltip formatter={tooltipFormatter(formats)} contentStyle={TOOLTIP_STYLE} cursor={{ fill: "#31324455" }} />
-        {legend && <Legend wrapperStyle={{ fontSize: 11 }} />}
-        {bars.map((s, i) => (
-          <Bar
-            key={s}
-            dataKey={s}
-            yAxisId="left"
-            fill={palette[i % palette.length]}
-            radius={2}
-            isAnimationActive={false}
-            cursor={click ? "pointer" : undefined}
-            onClick={markClickHandler(click)}
-          >
-            {data.map((row, ri) => (
-              <Cell
-                key={ri}
-                fill={palette[i % palette.length]}
-                fillOpacity={markOpacity(interaction?.selectedKeys, markDims(row))}
-              />
-            ))}
-          </Bar>
-        ))}
-        {lines.map((s, i) => (
-          <Line
-            key={s}
-            dataKey={s}
-            yAxisId={rightAxis ? "right" : "left"}
-            stroke={palette[(bars.length + i) % palette.length]}
-            strokeWidth={2}
-            dot={data.length <= 40}
-            isAnimationActive={false}
-            cursor={click ? "pointer" : undefined}
-            onClick={markClickHandler(click)}
-          />
-        ))}
-      </ComposedChart>
     </ResponsiveContainer>
   );
 }

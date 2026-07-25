@@ -3,9 +3,10 @@
 import { isMetricField, isNumeric } from "@dux/core";
 import type { Aggregate, DragPayload, DropField } from "@dux/core";
 import { applySlicerSelection } from "./actions";
-import { useDocStore, useUiStore } from "./store";
+import { updateElement, useDocStore, useUiStore } from "./store";
 import type { BuilderFieldRef, Dashboard, DashElement, ElementType, Layout, MapLayer, MapLayerKind } from "./types";
-import { QUERY_TYPES } from "./types";
+import { QUERY_TYPES, TYPE_LABEL, VISUALS } from "./visuals";
+import type { WellId } from "./visuals/types";
 
 const SNAP = 8;
 const MIN_W = 40;
@@ -18,36 +19,6 @@ function snap(v: number): number {
 export function clamp(v: number, lo: number, hi: number): number {
   return Math.min(Math.max(v, lo), Math.max(lo, hi));
 }
-
-const DEFAULT_SIZE: Record<ElementType, { w: number; h: number }> = {
-  bar: { w: 360, h: 240 },
-  line: { w: 360, h: 240 },
-  combo: { w: 420, h: 260 },
-  area: { w: 360, h: 240 },
-  donut: { w: 280, h: 240 },
-  table: { w: 420, h: 280 },
-  pivot: { w: 420, h: 280 },
-  kpi: { w: 200, h: 112 },
-  slicer: { w: 200, h: 240 },
-  text: { w: 280, h: 160 },
-  image: { w: 200, h: 120 },
-  map: { w: 420, h: 320 },
-};
-
-export const TYPE_LABEL: Record<ElementType, string> = {
-  bar: "Bar chart",
-  line: "Line chart",
-  combo: "Combo chart",
-  area: "Area chart",
-  donut: "Donut chart",
-  table: "Table",
-  pivot: "Pivot",
-  kpi: "KPI card",
-  slicer: "Slicer",
-  text: "Text",
-  image: "Image",
-  map: "Map",
-};
 
 /** First free "type-N" id in the document. */
 function nextId(doc: Dashboard, type: ElementType): string {
@@ -66,11 +37,13 @@ function minZ(doc: Dashboard): number {
   return doc.elements.reduce((m, e) => Math.min(m, e.layout.z ?? 0), 0);
 }
 
-/** Add a new element of the given type near the canvas center; selects it. */
+/** Add a new element of the given type near the canvas center; selects it.
+ *  Everything type-specific comes from the visual registry. */
 export function addElement(type: ElementType) {
   let newId = "";
   useDocStore.getState().update((doc) => {
-    const size = DEFAULT_SIZE[type];
+    const meta = VISUALS[type];
+    const size = meta.size;
     const count = doc.elements.length;
     // Cascade placement so stacked inserts stay visible.
     const x = clamp(snap((doc.canvas.width - size.w) / 2 + (count % 5) * 24), 0, doc.canvas.width - size.w);
@@ -81,21 +54,9 @@ export function addElement(type: ElementType) {
       type,
       layout: { x, y, w: size.w, h: size.h, z: maxZ(doc) + 1 },
     };
-    if (type === "text") {
-      el.text = { markdown: "## Text\n\nEdit the markdown in the settings pane." };
-    } else if (type === "image") {
-      el.image = { fit: "contain" };
-    } else if (type === "slicer") {
-      el.title = { text: TYPE_LABEL[type], show: true };
-      el.slicer = { table: "", column: "", kind: "buttons", multi: true };
-    } else if (type === "map") {
-      el.title = { text: TYPE_LABEL.map, show: true };
-      el.query = { mode: "builder", filters: [] };
-      el.viz = { layers: [{ id: "layer-1", kind: "circle" }] };
-    } else {
-      el.title = { text: TYPE_LABEL[type], show: true };
-      if (QUERY_TYPES.has(type)) el.query = { mode: "builder", fields: [] };
-    }
+    if (meta.titled !== false) el.title = { text: meta.label, show: true };
+    if (meta.data) el.query = { mode: "builder", fields: [] };
+    Object.assign(el, meta.seed?.() ?? {});
     return { ...doc, elements: [...doc.elements, el] };
   });
   if (newId) useUiStore.getState().select(newId);
@@ -123,13 +84,6 @@ export function swapElementType(id: string, type: ElementType) {
     next.viz = viz;
     return next;
   });
-}
-
-export function updateElement(id: string, fn: (el: DashElement) => DashElement) {
-  useDocStore.getState().update((doc) => ({
-    ...doc,
-    elements: doc.elements.map((e) => (e.id === id ? fn(e) : e)),
-  }));
 }
 
 export function removeElement(id: string) {
@@ -204,11 +158,9 @@ export function nudgeElement(id: string, dx: number, dy: number) {
 // ─── Field wells ─────────────────────────────────────────────────────────────
 //
 // The element's query.fields is one flat ordered list (dims before metrics —
-// the DUX query derives from it alone). Wells are views over it: metric
-// membership in the line/combo secondary wells lives in viz.y2 / viz.lines.
-
-export type WellId =
-  | "axis" | "values" | "y2" | "bars" | "lines" | "fields" | "rows" | "cols" | "series";
+// the DUX query derives from it alone). Wells are views over it (see
+// visuals/wells.ts): metric membership in the line/combo secondary wells lives
+// in viz.y2 / viz.lines.
 
 /** Insert a dim before the first metric so dims lead the column order. */
 function insertDim(fields: BuilderFieldRef[], field: BuilderFieldRef) {

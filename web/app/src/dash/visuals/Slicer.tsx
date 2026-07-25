@@ -1,14 +1,31 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import styles from "./SlicerBody.module.css";
+import styles from "./Slicer.module.css";
 import { applySlicerSelection } from "../actions";
 import { useSlicerOptions } from "../data";
+import { S, stroke } from "../glyphs";
 import { useUiStore } from "../store";
 import type { DashElement, SlicerSelection } from "../types";
+import type { StaticBodyProps, VisualDef } from "./types";
+
+const slicer: VisualDef = {
+  type: "slicer",
+  label: "Slicer",
+  icon: (
+    <svg {...S}>
+      <path d="M2 4 L16 4 L11 9.5 L11 15 L7 13 L7 9.5 Z" {...stroke} />
+    </svg>
+  ),
+  size: { w: 200, h: 240 },
+  seed: () => ({ slicer: { table: "", column: "", kind: "buttons", multi: true } }),
+  Body: ({ el }: StaticBodyProps) => <SlicerBody el={el} />,
+};
+
+export default slicer;
 
 /** Interactive slicer body. Pointer events stop here so clicking values
  *  never starts a canvas drag; slicers stay live in view AND edit mode. */
-export default function SlicerBody({ el }: { el: DashElement }) {
+function SlicerBody({ el }: { el: DashElement }) {
   const s = el.slicer;
   const sel = useUiStore((st) => st.slicerSelections[el.id]);
 

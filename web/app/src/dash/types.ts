@@ -4,10 +4,8 @@ export type ElementType =
   | "bar" | "line" | "combo" | "area" | "donut" | "table" | "pivot" | "kpi"
   | "slicer" | "text" | "image" | "map";
 
-/** Element types whose body renders a DUX query result. */
-export const QUERY_TYPES: ReadonlySet<ElementType> = new Set([
-  "bar", "line", "combo", "area", "donut", "table", "pivot", "kpi",
-]);
+// Which types are query-backed, how they render and what they expose is
+// declared once per visual under visuals/ (QUERY_TYPES is derived there).
 
 export interface Layout {
   x: number;

@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { useStore } from "zustand";
 import { temporal } from "zundo";
-import type { Dashboard, SlicerSelection } from "./types";
+import type { Dashboard, DashElement, SlicerSelection } from "./types";
 
 // ─── Cross-filter (chart click) selection ────────────────────────────────────
 
@@ -42,6 +42,16 @@ export const useDocStore = create<DocState>()(
 export function loadDoc(doc: Dashboard | null) {
   useDocStore.getState().setDoc(doc);
   useDocStore.temporal.getState().clear();
+}
+
+/** Rewrite one element in place; one call is one undo step. It lives here
+ *  rather than in docOps so a visual can persist its own state (a table's
+ *  sort, a map's viewport) without importing the document-ops layer. */
+export function updateElement(id: string, fn: (el: DashElement) => DashElement) {
+  useDocStore.getState().update((doc) => ({
+    ...doc,
+    elements: doc.elements.map((e) => (e.id === id ? fn(e) : e)),
+  }));
 }
 
 export function undo() {

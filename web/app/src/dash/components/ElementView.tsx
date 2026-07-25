@@ -1,10 +1,10 @@
 import { useRef, useState } from "react";
 import styles from "./ElementView.module.css";
-import { applyGesture, updateElement, type GestureKind } from "../docOps";
-import { useDocStore, useUiStore } from "../store";
+import { applyGesture, type GestureKind } from "../docOps";
+import { updateElement, useDocStore, useUiStore } from "../store";
 import type { CanvasSpec, DashElement, Layout } from "../types";
-import { QUERY_TYPES } from "../types";
-import ElementBody, { FunnelButton, TitleCsvButton } from "./ElementBody";
+import { VISUALS } from "../visuals";
+import ElementBody, { CsvButton, FunnelButton } from "./ElementBody";
 
 const HANDLES: GestureKind[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 
@@ -62,11 +62,12 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
   };
 
   const showTitle = el.title?.show !== false && !!el.title?.text;
+  const meta = VISUALS[el.type];
 
   return (
     <div
       data-element-id={el.id}
-      className={`${styles.el} ${el.type === "map" ? styles.map : ""} ${editing ? styles.editing : ""} ${selected ? styles.selected : ""}`}
+      className={`${styles.el} ${meta?.bare ? styles.map : ""} ${editing ? styles.editing : ""} ${selected ? styles.selected : ""}`}
       style={{ left: layout.x, top: layout.y, width: layout.w, height: layout.h, zIndex: layout.z ?? 0 }}
       onPointerDown={(e) => begin(e, "move")}
       onPointerMove={move}
@@ -83,10 +84,8 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
         <div className={styles.titleBar}>
           <span className={styles.titleText}>{el.title!.text}</span>
           <div className={styles.titleActions}>
-            {(QUERY_TYPES.has(el.type) || el.type === "map") && showFunnel && <FunnelButton el={el} />}
-            {el.type !== "kpi" && QUERY_TYPES.has(el.type) && showCsv && (
-              <TitleCsvButton el={el} className={styles.titleCsv} />
-            )}
+            {meta?.controls?.funnel && showFunnel && <FunnelButton el={el} />}
+            {meta?.controls?.csv && showCsv && <CsvButton el={el} className={styles.titleCsv} />}
           </div>
         </div>
       )}

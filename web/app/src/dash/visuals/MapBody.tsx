@@ -1,12 +1,13 @@
+// MapLibre canvas with one or two data layers. Loaded as its own chunk — see
+// Map.tsx, which owns the registry entry.
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { formatValue } from "@dux/core";
-import styles from "./MapBody.module.css";
+import styles from "./Map.module.css";
 import { useFormats, usePalette, useResolvedTheme } from "../data";
 import { categoryColor, coordinateExtent, isDarkColor, layerCategories, layerGeoJSON, mapThemeColors, resolveMapStyle, useMapLayerData } from "../mapData";
-import { updateElement } from "../docOps";
-import { markKey, useDocStore, useUiStore } from "../store";
+import { markKey, updateElement, useDocStore, useUiStore } from "../store";
 import type { DashElement, MapLayer } from "../types";
 
 const sourceId = (id: string) => `dux-map-source-${id}`;

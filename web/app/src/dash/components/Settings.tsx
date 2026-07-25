@@ -1,18 +1,12 @@
-import { useState } from "react";
+import { useState, type ComponentType } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import styles from "./ElementsPane.module.css";
 import Modal, { modalStyles } from "../../components/Modal";
 import DuxEditor from "../../components/DuxEditor";
 import FieldPill from "../../components/FieldPill";
 import { putTheme } from "../api";
-import {
-  buildElementDux,
-  DEFAULT_THEME,
-  useDuxSchema,
-  useElementData,
-  useGlobalResolvedTheme,
-  useGlobalTheme,
-} from "../data";
+import { DEFAULT_THEME, useDuxSchema, useGlobalResolvedTheme, useGlobalTheme } from "../data";
+import { buildElementDux, useElementData } from "../elementQuery";
 import {
   addFieldToWell,
   addMapLayer,
@@ -29,16 +23,13 @@ import {
   setMapLayerField,
   setMapLayerKind,
   swapElementType,
-  updateElement,
+
   updateFilter,
   clamp,
-  TYPE_LABEL,
   type MapFieldSlot,
-  type WellId,
 } from "../docOps";
-import { useDocStore } from "../store";
+import { updateElement, useDocStore } from "../store";
 import type {
-  BuilderFieldRef,
   DashElement,
   ElementType,
   ImageFit,
@@ -48,10 +39,12 @@ import type {
   SlicerKind,
   ThemeTokens,
 } from "../types";
-import { QUERY_TYPES } from "../types";
+import { QUERY_TYPES, TYPE_LABEL, VISUALS } from "../visuals";
+import type { OptionSpec, WellId } from "../visuals/types";
+import { asDropField, wellMembers } from "../visuals/wells";
 import { applySlicerSelection } from "../actions";
-import { isMetricField, isNumeric, QueryFailedError } from "@dux/core";
-import type { Aggregate, DragPayload, DropField, FilterField, FilterOp } from "@dux/core";
+import { isNumeric, QueryFailedError } from "@dux/core";
+import type { Aggregate, DragPayload, FilterField, FilterOp } from "@dux/core";
 
 /** Settings for the selected element, or the dashboard when none selected.
  *  Text fields commit on blur (one undo step per edit); everything else
@@ -63,6 +56,7 @@ export default function Settings({ el }: { el: DashElement | null }) {
 // ─── Element settings ────────────────────────────────────────────────────────
 
 function ElementSettings({ el }: { el: DashElement }) {
+  const OwnSection = OWN_SECTIONS[el.type];
   const setLayout = (k: "x" | "y" | "w" | "h" | "z", v: number) => {
     if (!Number.isFinite(v)) return;
     updateElement(el.id, (e) => ({ ...e, layout: { ...e.layout, [k]: v } }));
@@ -149,15 +143,21 @@ function ElementSettings({ el }: { el: DashElement }) {
         </div>
       </div>
 
-      {QUERY_TYPES.has(el.type) && <DataSection el={el} />}
-      {QUERY_TYPES.has(el.type) && <VizSection el={el} />}
-      {el.type === "map" && <MapSection el={el} />}
-      {el.type === "slicer" && <SlicerSection el={el} />}
-      {el.type === "text" && <TextSection el={el} />}
-      {el.type === "image" && <ImageSection el={el} />}
+      {VISUALS[el.type].data && <DataSection el={el} />}
+      <VizSection el={el} />
+      {OwnSection && <OwnSection el={el} />}
     </>
   );
 }
+
+/** Visuals whose configuration doesn't fit the wells + display-options idiom
+ *  bring their own section. Everything else is registry-driven. */
+const OWN_SECTIONS: Partial<Record<ElementType, ComponentType<{ el: DashElement }>>> = {
+  map: MapSection,
+  slicer: SlicerSection,
+  text: TextSection,
+  image: ImageSection,
+};
 
 // ─── Text / image sections ───────────────────────────────────────────────────
 
@@ -215,86 +215,6 @@ function ImageSection({ el }: { el: DashElement }) {
 }
 
 // ─── Data section (wells / filters / sort / raw) ─────────────────────────────
-
-const SERIES_HINT = "Drop a column — Splits the first Values measure into one series per value";
-
-// max marks single-slot wells: dropping onto a full one replaces the member.
-const WELLS: Partial<
-  Record<ElementType, { id: WellId; label: string; max?: number; hint?: string }[]>
-> = {
-  bar: [
-    { id: "axis", label: "Axis" },
-    { id: "values", label: "Values" },
-    { id: "series", label: "Series by", max: 1, hint: SERIES_HINT },
-  ],
-  line: [
-    { id: "axis", label: "Axis" },
-    { id: "values", label: "Values" },
-    { id: "y2", label: "Values · right axis" },
-    { id: "series", label: "Series by", max: 1, hint: SERIES_HINT },
-  ],
-  combo: [
-    { id: "axis", label: "Axis" },
-    { id: "bars", label: "Bars" },
-    { id: "lines", label: "Lines" },
-  ],
-  area: [
-    { id: "axis", label: "Category" },
-    { id: "values", label: "Values" },
-    { id: "series", label: "Series by", max: 1, hint: SERIES_HINT },
-  ],
-  donut: [
-    { id: "axis", label: "Category", max: 1 },
-    { id: "values", label: "Value", max: 1 },
-  ],
-  kpi: [{ id: "values", label: "Value", max: 1 }],
-  table: [{ id: "fields", label: "Columns" }],
-  pivot: [
-    { id: "rows", label: "Rows" },
-    { id: "cols", label: "Columns" },
-    { id: "values", label: "Values" },
-  ],
-};
-
-function wellMembers(el: DashElement, well: WellId): BuilderFieldRef[] {
-  const fields = el.query?.fields ?? [];
-  const isMetric = (f: BuilderFieldRef) => isMetricField(asDropField(f));
-  const metrics = fields.filter(isMetric);
-  const y2 = new Set(el.viz?.y2 ?? []);
-  const lines = new Set(el.viz?.lines ?? []);
-  const cols = new Set(el.viz?.cols ?? []);
-  const series = el.viz?.series;
-  switch (well) {
-    case "axis":
-      return fields.filter((f) => !isMetric(f) && f.name !== series);
-    case "series":
-      return fields.filter((f) => !isMetric(f) && f.name === series);
-    case "fields":
-      return fields;
-    case "values":
-      return el.type === "line" ? metrics.filter((f) => !y2.has(f.name)) : metrics;
-    case "y2":
-      return metrics.filter((f) => y2.has(f.name));
-    case "bars":
-      return metrics.filter((f) => !lines.has(f.name));
-    case "lines":
-      return metrics.filter((f) => lines.has(f.name));
-    case "rows":
-      return fields.filter((f) => !isMetric(f) && !cols.has(f.name));
-    case "cols":
-      return fields.filter((f) => !isMetric(f) && cols.has(f.name));
-  }
-}
-
-function asDropField(f: BuilderFieldRef): DropField {
-  return {
-    table: f.table,
-    name: f.name,
-    kind: f.kind ?? "column",
-    dataType: f.dataType ?? "",
-    aggregate: f.aggregate as Aggregate | undefined,
-  };
-}
 
 function DataSection({ el }: { el: DashElement }) {
   const mode = el.query?.mode ?? "builder";
@@ -636,7 +556,7 @@ function SlicerSection({ el }: { el: DashElement }) {
 }
 
 function BuilderSection({ el }: { el: DashElement }) {
-  const wells = WELLS[el.type] ?? [];
+  const wells = VISUALS[el.type].data?.wells ?? [];
   const fieldNames = (el.query?.fields ?? []).map((f) => f.name);
   const sort = el.query?.sort?.[0];
 
@@ -823,124 +743,79 @@ function RawSection({ el }: { el: DashElement }) {
 
 // ─── Viz section ─────────────────────────────────────────────────────────────
 
+/** Display options come from the visual registry: each spec names an
+ *  element.viz key, so a new visual declares its controls instead of adding a
+ *  branch here. */
 function VizSection({ el }: { el: DashElement }) {
-  const viz = el.viz ?? {};
-  const setViz = (patch: Record<string, unknown>) =>
-    updateElement(el.id, (x) => ({ ...x, viz: { ...x.viz, ...patch } }));
-
-  const isChart =
-    el.type === "bar" || el.type === "line" || el.type === "combo" ||
-    el.type === "area" || el.type === "donut";
-  // Everything with an axis/rows can hide no-data items; KPI has no axis.
-  const hasEmptyToggle = el.type !== "kpi";
-  if (!isChart && !hasEmptyToggle) return null;
+  const options = VISUALS[el.type].options ?? [];
+  if (options.length === 0) return null;
+  const viz = (el.viz ?? {}) as Record<string, unknown>;
+  const setViz = (key: string, value: unknown) =>
+    updateElement(el.id, (x) => ({ ...x, viz: { ...x.viz, [key]: value } }));
 
   return (
     <div className={styles.section}>
       <div className={styles.heading}>Display</div>
-
-      {hasEmptyToggle && (
-        <label className={styles.check}>
-          <input
-            type="checkbox"
-            checked={viz.showEmpty ?? false}
-            onChange={(e) => setViz({ showEmpty: e.target.checked })}
-          />
-          Show items with no data
-        </label>
-      )}
-
-      {el.type === "bar" && (
-        <>
-          <label className={styles.label}>Orientation</label>
-          <select
-            className={styles.input}
-            value={viz.orientation ?? "vertical"}
-            onChange={(e) => setViz({ orientation: e.target.value })}
-          >
-            <option value="vertical">Vertical</option>
-            <option value="horizontal">Horizontal</option>
-          </select>
-        </>
-      )}
-
-      {(el.type === "bar" || el.type === "area") && (
-        <label className={styles.check}>
-          <input
-            type="checkbox"
-            checked={viz.stacked ?? false}
-            onChange={(e) => setViz({ stacked: e.target.checked })}
-          />
-          Stacked
-        </label>
-      )}
-
-      {el.type === "pivot" && (
-        <>
-          <label className={styles.check}>
-            <input
-              type="checkbox"
-              checked={viz.subtotals ?? true}
-              onChange={(e) => setViz({ subtotals: e.target.checked })}
-            />
-            Subtotals
-          </label>
-          <label className={styles.check}>
-            <input
-              type="checkbox"
-              checked={viz.grandTotal ?? true}
-              onChange={(e) => setViz({ grandTotal: e.target.checked })}
-            />
-            Grand total
-          </label>
-          <label className={styles.check}>
-            <input
-              type="checkbox"
-              checked={viz.totalCol ?? true}
-              onChange={(e) => setViz({ totalCol: e.target.checked })}
-            />
-            Total column
-          </label>
-          <label className={styles.check}>
-            <input
-              type="checkbox"
-              checked={viz.collapsed ?? true}
-              onChange={(e) => setViz({ collapsed: e.target.checked })}
-            />
-            Start collapsed
-          </label>
-        </>
-      )}
-
-      {el.type === "combo" && (
-        <label className={styles.check}>
-          <input
-            type="checkbox"
-            checked={viz.lineY2 ?? true}
-            onChange={(e) => setViz({ lineY2: e.target.checked })}
-          />
-          Lines on right axis
-        </label>
-      )}
-
-      {isChart && (
-        <>
-          <label className={styles.label}>Legend</label>
-          <select
-            className={styles.input}
-            value={viz.legend === undefined ? "auto" : viz.legend ? "show" : "hide"}
-            onChange={(e) => {
-              const v = e.target.value;
-              setViz({ legend: v === "auto" ? undefined : v === "show" });
-            }}
-          >
-            <option value="auto">Auto (multi-series)</option>
-            <option value="show">Show</option>
-            <option value="hide">Hide</option>
-          </select>
-        </>
-      )}
+      {options.map((o) => (
+        <VizOption key={o.key} spec={o} value={viz[o.key]} onChange={(v) => setViz(o.key, v)} />
+      ))}
     </div>
+  );
+}
+
+function VizOption({
+  spec,
+  value,
+  onChange,
+}: {
+  spec: OptionSpec;
+  value: unknown;
+  onChange: (v: unknown) => void;
+}) {
+  if (spec.kind === "check") {
+    return (
+      <label className={styles.check}>
+        <input
+          type="checkbox"
+          checked={(value as boolean | undefined) ?? spec.default}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        {spec.label}
+      </label>
+    );
+  }
+  if (spec.kind === "select") {
+    return (
+      <>
+        <label className={styles.label}>{spec.label}</label>
+        <select
+          className={styles.input}
+          value={(value as string | undefined) ?? spec.default}
+          onChange={(e) => onChange(e.target.value)}
+        >
+          {spec.choices.map((c) => (
+            <option key={c.value} value={c.value}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+      </>
+    );
+  }
+  // Tri-state: unset means the visual decides (e.g. legend on multi-series).
+  return (
+    <>
+      <label className={styles.label}>{spec.label}</label>
+      <select
+        className={styles.input}
+        value={value === undefined ? "auto" : value ? "show" : "hide"}
+        onChange={(e) => onChange(e.target.value === "auto" ? undefined : e.target.value === "show")}
+      >
+        <option value="auto">{spec.autoLabel}</option>
+        <option value="show">Show</option>
+        <option value="hide">Hide</option>
+      </select>
+    </>
   );
 }
 

@@ -4,13 +4,48 @@
 // so totals can never be summed client-side. Row rendering is virtualized.
 import { useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import styles from "./ElementBody.module.css";
+import styles from "../components/ElementBody.module.css";
 import { compareCells } from "../../compare";
 import { pivotParts, totalsKey, usePivotTotals } from "../data";
+import { S, stroke } from "../glyphs";
 import { markKey, useUiStore } from "../store";
 import type { DashElement } from "../types";
+import { DATA_CONTROLS, SHOW_EMPTY, VALUES } from "./common";
+import type { DataBodyProps, VisualDef } from "./types";
 import { formatValue } from "@dux/core";
 import type { MeasureFormat, QueryResponse } from "@dux/core";
+
+const pivotTable: VisualDef = {
+  type: "pivot",
+  label: "Pivot",
+  icon: (
+    <svg {...S}>
+      <rect x="2" y="3" width="14" height="12" {...stroke} />
+      <line x1="2" y1="7" x2="16" y2="7" {...stroke} />
+      <line x1="7" y1="3" x2="7" y2="15" {...stroke} />
+      <rect x="2" y="3" width="5" height="4" fill="currentColor" opacity="0.6" />
+    </svg>
+  ),
+  size: { w: 420, h: 280 },
+  controls: DATA_CONTROLS,
+  data: {
+    wells: [
+      { id: "rows", label: "Rows" },
+      { id: "cols", label: "Columns" },
+      VALUES,
+    ],
+  },
+  options: [
+    SHOW_EMPTY,
+    { key: "subtotals", label: "Subtotals", kind: "check", default: true },
+    { key: "grandTotal", label: "Grand total", kind: "check", default: true },
+    { key: "totalCol", label: "Total column", kind: "check", default: true },
+    { key: "collapsed", label: "Start collapsed", kind: "check", default: true },
+  ],
+  Body: ({ el, data, formats }: DataBodyProps) => <PivotBody el={el} data={data} formats={formats} />,
+};
+
+export default pivotTable;
 
 const SEP = "\u0000";
 const JOIN = "\u0001";
@@ -74,7 +109,7 @@ interface Props {
   formats: Record<string, MeasureFormat>;
 }
 
-export default function PivotBody({ el, data, formats }: Props) {
+function PivotBody({ el, data, formats }: Props) {
   const raw = el.query?.mode === "raw";
   const viz = el.viz ?? {};
   const { byKey, loading: totalsLoading } = usePivotTotals(el);

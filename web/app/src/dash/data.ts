@@ -68,25 +68,6 @@ export function splitElementFields(el: DashElement): { dims: DropField[]; metric
   };
 }
 
-/** The DUX query an element executes ("" = nothing to run yet). */
-export function buildElementDux(el: DashElement): string {
-  const q = el.query;
-  if (!q) return "";
-  if (q.mode === "raw") return (q.raw ?? "").trim();
-  let sort = q.sort;
-  // Line-shaped charts default to ordering by their axis columns ascending
-  // (first axis column, then the second, …) so series connect sensibly.
-  if ((!sort || sort.length === 0) && (el.type === "line" || el.type === "combo" || el.type === "area")) {
-    sort = elementFields(el)
-      .filter((f) => !isMetricField(f))
-      .map((f) => ({ field: f.name, dir: "asc" as const }));
-  }
-  return generateQuery(elementFields(el), elementFilters(el), {
-    sort,
-    topN: q.topN ?? undefined,
-  });
-}
-
 /** Drop rows whose metric columns are all null (SUMMARIZECOLUMNS keeps axis
  *  values with no data); viz.showEmpty turns the filter off. */
 export function dropEmptyRows(res: QueryResponse, metricCols: string[], showEmpty: boolean): QueryResponse {
@@ -284,40 +265,6 @@ export function useRefreshInterval(seed: string): number | false {
     const jitter = ((Math.abs(h) % 2001) / 2000 - 0.5) * 0.2; // -10% … +10%
     return Math.round(base * (1 + jitter));
   }, [refresh, seed]);
-}
-
-// ─── Element data hook ───────────────────────────────────────────────────────
-
-export interface ElementDataState {
-  dux: string;
-  data: QueryResponse | undefined;
-  error: Error | null;
-  loading: boolean;
-}
-
-/** Run an element's query with the active slicer filters applied. */
-export function useElementData(el: DashElement): ElementDataState {
-  const dux = useMemo(() => buildElementDux(el), [el.query]);
-  const filters = useExternalFilters(el);
-  const filterKey = JSON.stringify(filters);
-  const refetchInterval = useRefreshInterval(el.id);
-  const q = useQuery({
-    queryKey: ["eldata", dux, filterKey],
-    enabled: dux !== "",
-    queryFn: ({ signal }) => duxClient.executeQueryFiltered(dux, filters, { signal }),
-    placeholderData: keepPreviousData,
-    retry: 0,
-    staleTime: 15_000,
-    refetchInterval,
-    // Wall-display dashboards refresh even when the window isn't focused.
-    refetchIntervalInBackground: true,
-  });
-  return {
-    dux,
-    data: q.data,
-    error: (q.error as Error | null) ?? null,
-    loading: q.isFetching,
-  };
 }
 
 // ─── Pivot totals ────────────────────────────────────────────────────────────

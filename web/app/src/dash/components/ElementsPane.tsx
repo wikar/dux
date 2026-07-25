@@ -1,14 +1,9 @@
 import styles from "./ElementsPane.module.css";
-import { addElement, swapElementType, TYPE_LABEL } from "../docOps";
+import { addElement, swapElementType } from "../docOps";
 import { useDocStore, useUiStore } from "../store";
 import type { ElementType } from "../types";
-import { QUERY_TYPES } from "../types";
+import { QUERY_TYPES, VISUALS, VISUAL_TYPES } from "../visuals";
 import Settings from "./Settings";
-import { typeIcon } from "./typeIcons";
-
-const TYPES: ElementType[] = [
-  "bar", "line", "combo", "area", "donut", "table", "pivot", "kpi", "slicer", "text", "image", "map",
-];
 
 export default function ElementsPane() {
   const selectedId = useUiStore((s) => s.selectedId);
@@ -29,18 +24,22 @@ export default function ElementsPane() {
   return (
     <div className={styles.pane}>
       <div className={styles.section}>
+        {/* Registry-driven: a new visual appears here in declaration order. */}
         <div className={styles.palette}>
-          {TYPES.map((t) => (
-            <button
-              key={t}
-              className={styles.paletteBtn}
-              title={converts(t) ? `Convert ${selected!.id} to ${TYPE_LABEL[t].toLowerCase()}` : TYPE_LABEL[t]}
-              onClick={() => onType(t)}
-            >
-              {typeIcon(t)}
-              <span>{TYPE_LABEL[t].split(" ")[0]}</span>
-            </button>
-          ))}
+          {VISUAL_TYPES.map((t) => {
+            const meta = VISUALS[t];
+            return (
+              <button
+                key={t}
+                className={styles.paletteBtn}
+                title={converts(t) ? `Convert ${selected!.id} to ${meta.label.toLowerCase()}` : meta.label}
+                onClick={() => onType(t)}
+              >
+                {meta.icon}
+                <span>{meta.label.split(" ")[0]}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
       <Settings el={selected} />
