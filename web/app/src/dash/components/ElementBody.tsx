@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { Component, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -116,9 +116,34 @@ export function FunnelButton({ el, floating }: { el: DashElement; floating?: boo
   );
 }
 
+/** A throwing body must not reach the React root: an escaping error unmounts the
+ *  whole SPA, leaving a blank page instead of one broken element. Keyed on the
+ *  type so re-typing an element in edit mode gives it a fresh attempt. */
+class BodyBoundary extends Component<{ el: DashElement; children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  render() {
+    const { error } = this.state;
+    if (!error) return this.props.children;
+    return <Placeholder el={this.props.el} note={error.message.split("\n")[0]} />;
+  }
+}
+
+export default function ElementBody({ el }: { el: DashElement }) {
+  return (
+    <BodyBoundary key={el.type} el={el}>
+      <TypedBody el={el} />
+    </BodyBoundary>
+  );
+}
+
 /** Per-type element body: query-backed types render live data, the rest are
  *  static content (text/image) or controls (slicer). */
-export default function ElementBody({ el }: { el: DashElement }) {
+function TypedBody({ el }: { el: DashElement }) {
   if (el.type === "text") {
     return (
       <div className={styles.markdown}>

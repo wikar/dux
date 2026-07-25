@@ -24,6 +24,7 @@ func TestResourceLimitsApplied(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.MemoryLimit = "512MiB"
 	cfg.TempDirectory = filepath.Join(filepath.Dir(cfg.CatalogPath), "tmp")
+	cfg.MaxTempDirectorySize = "1GiB"
 
 	owner, err := OpenOwner(ctx, cfg)
 	if err != nil {
@@ -31,9 +32,9 @@ func TestResourceLimitsApplied(t *testing.T) {
 	}
 	defer owner.Close()
 
-	var limit, tmp string
-	err = owner.Conn().QueryRowContext(ctx,
-		`SELECT current_setting('memory_limit'), current_setting('temp_directory')`).Scan(&limit, &tmp)
+	var limit, tmp, maxTmp string
+	err = owner.Conn().QueryRowContext(ctx, `SELECT current_setting('memory_limit'),
+		current_setting('temp_directory'), current_setting('max_temp_directory_size')`).Scan(&limit, &tmp, &maxTmp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +43,43 @@ func TestResourceLimitsApplied(t *testing.T) {
 	}
 	if !strings.Contains(filepath.ToSlash(tmp), "/tmp") {
 		t.Errorf("temp_directory = %q, want the configured spill directory", tmp)
+	}
+	// A bounded spill directory, not the 90%-of-disk default.
+	if strings.Contains(maxTmp, "%") || !strings.Contains(maxTmp, "1.0 GiB") {
+		t.Errorf("max_temp_directory_size = %q, want the configured 1GiB cap", maxTmp)
+	}
+}
+
+// TestDefaultLimitsLeaveDuckDBDefaults covers the shipped configuration:
+// spilling enabled so heavy work degrades to disk, with neither the memory
+// nor the spill bound narrowed from DuckDB's own defaults.
+func TestDefaultLimitsLeaveDuckDBDefaults(t *testing.T) {
+	ctx := context.Background()
+	cfg := testConfig(t)
+	cfg.TempDirectory = filepath.Join(filepath.Dir(cfg.CatalogPath), "tmp")
+
+	owner, err := OpenOwner(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+
+	var limit, tmp, maxTmp string
+	err = owner.Conn().QueryRowContext(ctx, `SELECT current_setting('memory_limit'),
+		current_setting('temp_directory'), current_setting('max_temp_directory_size')`).Scan(&limit, &tmp, &maxTmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(filepath.ToSlash(tmp), "/tmp") {
+		t.Errorf("temp_directory = %q, want spilling enabled by default", tmp)
+	}
+	// DuckDB reports its unbounded spill default as a percentage of the disk.
+	if !strings.Contains(maxTmp, "%") {
+		t.Errorf("max_temp_directory_size = %q, want the unbounded DuckDB default", maxTmp)
+	}
+	// 80% of RAM lands in GiB on any supported host, never a small MiB cap.
+	if !strings.Contains(limit, "GiB") {
+		t.Errorf("memory_limit = %q, want the DuckDB default of 80%% of RAM", limit)
 	}
 }
 

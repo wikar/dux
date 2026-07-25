@@ -102,17 +102,20 @@ func (e *Emitter) emitContextCTE(name string, fc *parser.FuncCall, clusterTables
 	// Emit the time-intelligence range predicates with the anchor collector
 	// active: every anchor becomes a column of a per-table anchor scan.
 	coll := &anchorCollector{}
+	prevScans := e.anchorScans
 	e.anchorScans = coll
 	var timeConds []string
 	for _, tf := range cm.timeFilters {
 		pred, predErr := e.emitTimeIntelPred(tf, e.sqlTable(tf.table)+"."+tf.col)
 		if predErr != nil {
-			e.anchorScans = nil
+			e.anchorScans = prevScans
 			return nil, predErr
 		}
 		timeConds = append(timeConds, pred)
 	}
-	e.anchorScans = nil
+	// Restored before the value expression is emitted: a nested CALCULATE in
+	// there is not part of this CTE's anchor scans.
+	e.anchorScans = prevScans
 
 	anchored := map[string]*anchorScan{}
 	for _, s := range coll.scans {

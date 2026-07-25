@@ -122,6 +122,9 @@ The CLI is a read-only DuckLake client. Start `duxd` once to initialize an empty
 | `--ducklake-data` | `<db-dir>/ducklake` | DuckLake Parquet directory |
 | `--time-travel-retention` | `720h` (30d) | Expected DuckLake snapshot retention |
 | `--file-delete-delay` | `168h` (7d) | Expected unreferenced-file delay |
+| `--memory-limit` | — | DuckDB memory cap per instance (e.g. `4GB`); default is DuckDB's own 80% of available RAM. Work exceeding it spills to `<db-dir>/tmp` |
+| `--max-temp-size` | — | Cap on the spill directory (e.g. `16GB`); by default spilling is bounded only by free disk space |
+| `--query-timeout` | `60s` | Interrupt a single DUX query after this duration |
 | `--toml` | `dux.toml` | Load measures and relationships from a `dux.toml` file |
 | `--export` | — | Write current schema to a `dux.toml` file and exit |
 | `--import` | — | Import a `dux.toml` into the metadata DB and exit |
@@ -155,6 +158,9 @@ Listens on `:8080` (`--listen`).
 | `--maintenance-max-compactions` | `10` | Bound work per compaction call |
 | `--time-travel-retention` | `720h` (30d) | Retain historical snapshots |
 | `--file-delete-delay` | `168h` (7d) | Delay deletion of unreferenced files |
+| `--memory-limit` | — | DuckDB memory cap per instance (e.g. `4GB`); default is DuckDB's own 80% of available RAM. Work exceeding it spills to `<db-dir>/tmp` |
+| `--max-temp-size` | — | Cap on the spill directory (e.g. `16GB`); by default spilling is bounded only by free disk space |
+| `--query-timeout` | `60s` | Interrupt a single DUX query after this duration |
 | `--toml` | `dux.toml` | Load measures and relationships from a `dux.toml` file |
 | `--import` | — | Import a `dux.toml` into the metadata DB on startup |
 | `--export` | — | Export current schema to a `dux.toml` file and exit |
@@ -738,7 +744,29 @@ Properties of stitched queries:
 - **Row semantics**: the FULL OUTER JOIN returns the union of key combinations produced by any cluster — a group that only exists for one measure shows the other measures as NULL (matching DAX, and unlike a flat join which would drop the row).
 - CALCULATE, time intelligence, and ROLLUPADDISSUBTOTAL all evaluate inside their cluster's context; rollup grouping levels stitch on the keys *and* the `GROUPING()` flags so subtotal rows pair only with matching subtotal rows.
 
-Single-table queries keep the plain flat-join emission — stitched codegen activates only for multi-table queries and for join graphs that cross a bidirectional relationship (next section).
+Single-table queries keep the plain flat-join emission — stitched codegen activates for multi-table queries, for join graphs that cross a bidirectional relationship (next section), and for measures that modify the filter context (below).
+
+### Context CTEs
+
+A measure whose `CALCULATE` *modifies* the group filter context — an `ALL`-family removal, a predicate overriding a group key, or any time-intelligence range — is evaluated in its own grouped CTE rather than inline. The CTE groups by only the keys the measure retains and is `LEFT JOIN`ed back onto them, so a removed key makes the value repeat across that key (`ALL` semantics) and a cleared key set yields one grand-total row.
+
+Time-intelligence anchors (`MAX(D[c])` and friends) become columns of an uncorrelated **anchor scan** — one row per group cell of the date table with the required extremes — and the date range becomes a join between that scan and the cleared copy of the date table. A rolling 7-day measure grouped by day compiles to:
+
+```sql
+WITH _cc0 AS (
+    SELECT __anch0.date AS k0, (SUM(amount)) AS v
+    FROM orders
+    LEFT JOIN dates ON orders.order_date = dates.date
+    CROSS JOIN (SELECT date, MAX(date) AS a0 FROM dates GROUP BY date) AS __anch0
+    WHERE dates.date > __anch0.a0 + (-7) * INTERVAL 1 DAY AND dates.date <= __anch0.a0
+    GROUP BY __anch0.date
+)
+SELECT _mc0.k0 AS "date", (_cc0.v) AS 'R7D'
+FROM _mc0
+LEFT JOIN _cc0 ON _cc0.k0 IS NOT DISTINCT FROM _mc0.k0
+```
+
+Every intermediate is bounded by the number of group cells or the fact table's own size, and the emitted SQL contains no correlated subqueries at all — a deliberate invariant. DuckDB decorrelates a single level of correlation well but not a correlated anchor nested inside a correlated context subquery: that shape forced the range filter above a *group cells × fact rows* delim join, and a daily rolling window over a few million fact rows consumed tens of gigabytes before finishing. Grouping-set (`ROLLUPADDISSUBTOTAL`) and computed-group-key queries keep the older correlated-subquery form, where the anchor is inlined to the group column whenever the anchored column is itself a group key.
 
 ## Bidirectional relationships
 

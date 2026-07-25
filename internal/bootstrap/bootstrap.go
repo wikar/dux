@@ -229,7 +229,8 @@ func Startup(binName, version, usage string, exitAfterImport, owner bool) *Runti
 	exportPath := flag.String("export", "", "export measures and schema to this path then exit")
 	retention := flag.Duration("time-travel-retention", 30*24*time.Hour, "DuckLake snapshot time-travel retention")
 	deleteDelay := flag.Duration("file-delete-delay", 7*24*time.Hour, "delay before unreferenced Parquet files are deleted")
-	memoryLimit := flag.String("memory-limit", "4GB", "DuckDB memory limit per instance (e.g. 4GB); work exceeding it spills to <db-dir>/tmp; empty for the DuckDB default (80% of RAM, no spilling)")
+	memoryLimit := flag.String("memory-limit", "", "DuckDB memory limit per instance (e.g. 4GB); empty for the DuckDB default of 80% of available RAM")
+	maxTempSize := flag.String("max-temp-size", "", "cap on the spill directory <db-dir>/tmp (e.g. 16GB); empty leaves spilling bounded only by free disk space")
 	queryTimeout := flag.Duration("query-timeout", executor.QueryTimeout, "maximum duration for a single DUX query before it is interrupted")
 
 	flag.Usage = func() {
@@ -278,9 +279,10 @@ func Startup(binName, version, usage string, exitAfterImport, owner bool) *Runti
 		TimeTravelRetention: *retention,
 		FileDeleteDelay:     *deleteDelay,
 		MemoryLimit:         *memoryLimit,
-	}
-	if *memoryLimit != "" {
-		cfg.TempDirectory = filepath.Join(r.DBDir, "tmp")
+		// Spilling is always enabled so that work exceeding the memory limit
+		// degrades to disk instead of failing outright; both bounds are opt-in.
+		TempDirectory:        filepath.Join(r.DBDir, "tmp"),
+		MaxTempDirectorySize: *maxTempSize,
 	}
 	if owner {
 		r.Owner, err = ducklake.OpenOwner(context.Background(), cfg)

@@ -24,13 +24,18 @@ type Config struct {
 	TimeTravelRetention time.Duration
 	FileDeleteDelay     time.Duration
 	// MemoryLimit caps the transient DuckDB instance's memory (e.g. "4GB").
-	// Empty keeps the DuckDB default (80% of RAM). With TempDirectory set,
-	// operators exceeding the cap spill to disk instead of failing.
+	// Empty keeps the DuckDB default of 80% of available RAM. With
+	// TempDirectory set, operators exceeding the limit spill to disk instead
+	// of failing.
 	MemoryLimit string
 	// TempDirectory is where DuckDB offloads data that exceeds MemoryLimit.
 	// Empty keeps the DuckDB default for in-memory instances: no spilling —
 	// a query that overruns the limit errors instead.
 	TempDirectory string
+	// MaxTempDirectorySize caps the spill directory (e.g. "16GB"). Applies
+	// only with TempDirectory set. Empty keeps the DuckDB default of 90% of
+	// available disk space, so spilling is bounded only by free disk.
+	MaxTempDirectorySize string
 }
 
 // Runtime is one transient DuckDB instance with DuckLake attached.
@@ -156,6 +161,12 @@ func openDuckDB(ctx context.Context, cfg Config) (*sql.DB, *sql.Conn, error) {
 		stmt := fmt.Sprintf("SET temp_directory = %s", sqlString(filepath.ToSlash(cfg.TempDirectory)))
 		if _, err := conn.ExecContext(ctx, stmt); err != nil {
 			return fail(fmt.Errorf("set DuckDB temp_directory: %w", err))
+		}
+		if cfg.MaxTempDirectorySize != "" {
+			stmt := fmt.Sprintf("SET max_temp_directory_size = %s", sqlString(cfg.MaxTempDirectorySize))
+			if _, err := conn.ExecContext(ctx, stmt); err != nil {
+				return fail(fmt.Errorf("set DuckDB max_temp_directory_size %q: %w", cfg.MaxTempDirectorySize, err))
+			}
 		}
 	}
 	if cfg.MemoryLimit != "" {

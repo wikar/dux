@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { formatValue } from "@dux/core";
@@ -93,6 +93,7 @@ export default function MapBody({ el }: { el: DashElement }) {
   const frameRef = useRef(0);
   const extentRef = useRef("");
   const skipInitialFitRef = useRef(Boolean(el.viz?.center || el.viz?.zoom));
+  const [unavailable, setUnavailable] = useState(false);
 
   const doc = useDocStore((s) => s.doc);
   const mode = useUiStore((s) => s.mode);
@@ -222,13 +223,21 @@ export default function MapBody({ el }: { el: DashElement }) {
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const map = new maplibregl.Map({
-      container: containerRef.current,
-      style: styleUrl,
-      center: el.viz?.center ?? [0, 20],
-      zoom: el.viz?.zoom ?? 1.2,
-      attributionControl: { compact: true },
-    });
+    // Without a WebGL context maplibre throws out of its constructor. Report it
+    // in the element instead of letting it escape the effect.
+    let map: maplibregl.Map;
+    try {
+      map = new maplibregl.Map({
+        container: containerRef.current,
+        style: styleUrl,
+        center: el.viz?.center ?? [0, 20],
+        zoom: el.viz?.zoom ?? 1.2,
+        attributionControl: { compact: true },
+      });
+    } catch {
+      setUnavailable(true);
+      return;
+    }
     mapRef.current = map;
     popupRef.current = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10, className: "dux-map-popup" });
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
@@ -339,7 +348,8 @@ export default function MapBody({ el }: { el: DashElement }) {
       }}
     >
       <div ref={containerRef} className={styles.canvas} />
-      {!renderable && <div className={styles.message}>Add longitude and latitude to a layer</div>}
+      {unavailable && <div className={styles.message}>This browser could not create a WebGL context, so the map cannot render</div>}
+      {!unavailable && !renderable && <div className={styles.message}>Add longitude and latitude to a layer</div>}
       {loading && renderable && <div className={styles.loading} />}
       {error && <div className={styles.error}>{error.message}</div>}
       {legendGroups.length > 0 && (
