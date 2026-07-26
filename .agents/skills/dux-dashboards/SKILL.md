@@ -21,12 +21,14 @@ PUTting it to the API — no UI interaction needed.
 1. `GET /schema` (the DUX one) — learn tables, columns, measures.
 2. Test each element's query via `POST /query` first — an element is just a
    query plus presentation.
-3. Build the document (start from
+3. Plan the layout — canvas size, gap, slicer column, visualization areas —
+   *before* placing anything. See [references/layout.md](references/layout.md).
+4. Build the document (start from
    [assets/example-dashboard.json](assets/example-dashboard.json)).
-4. `PUT /api/dash/dashboards/{path}` with `If-Match: *`
+5. `PUT /api/dash/dashboards/{path}` with `If-Match: *`
    (create-or-overwrite). The server validates against its JSON schema and
    returns 422 with the reason on invalid documents.
-5. Open `/dash/{path}` (add `?fullscreen` for a chrome-less wall display).
+6. Open `/dash/{path}` (add `?fullscreen` for a chrome-less wall display).
 
 Use table names exactly as `/schema` returns them: `Table` for DuckLake
 `main`, or `schema.Table` otherwise. Dashboards always query the latest
@@ -42,7 +44,7 @@ Full endpoint semantics (ETags, conflicts, raw download):
 ```json
 {
   "version": 1,
-  "canvas": { "width": 1280, "height": 720 },
+  "canvas": { "width": 1920, "height": 1080 },
   "refresh": { "enabled": false, "intervalSeconds": 60 },
   "controls": { "csv": true, "funnel": true },
   "theme": { "background": "#101020" },
@@ -51,28 +53,35 @@ Full endpoint semantics (ETags, conflicts, raw download):
 ```
 
 - Layout is absolute: each element has
-  `"layout": {"x", "y", "w", "h", "z"}` in canvas pixels (the UI snaps to
-  an 8px grid; agents should too). The canvas scales to fit the viewer.
+  `"layout": {"x", "y", "w", "h", "z"}` in canvas pixels (the UI snaps drags
+  to an 8px grid; agents should keep gaps on multiples of 8 too). The canvas
+  scales to fit the viewer. Default to a **1920×1080** canvas and a **gap of
+  8** used everywhere — between elements and as a margin off every edge — and
+  put slicers in their own left column (top row in portrait) —
+  [references/layout.md](references/layout.md) has the sizes, the split
+  arithmetic and the slicer-kind rule.
 - `refresh` re-runs every element's query on the interval (5s server
   floor), staggered per element.
 - `controls` toggles the per-element header icons — `csv` (export) and
   `funnel` (filter provenance). Both default **on**; set either to `false`
-  for a cleaner, non-interactive look.
+  for a cleaner, non-interactive look. A slicer also carries an eraser that
+  clears its selection; that one is not toggleable, since hiding it would
+  leave no way out of an active filter.
 - `theme` is a sparse per-dashboard override of the global theme — see
   [references/theme.md](references/theme.md).
 
 ## Elements
 
-Eleven types. `bar`, `line`, `combo`, `area`, `donut`, `table`, `pivot`,
-`kpi` are **query-backed**; `slicer` filters the others; `text` (markdown)
-and `image` (URL) are static.
+Twelve types. `bar`, `line`, `combo`, `area`, `donut`, `table`, `pivot`,
+`kpi` are **query-backed**; `map` runs a query per layer; `slicer` filters
+the others; `text` (markdown) and `image` (URL) are static.
 
 A query-backed element in builder mode:
 
 ```json
 {
   "id": "bar-1", "type": "bar",
-  "layout": { "x": 16, "y": 16, "w": 400, "h": 240, "z": 1 },
+  "layout": { "x": 256, "y": 128, "w": 824, "h": 240, "z": 1 },
   "title": { "text": "Revenue by category", "show": true },
   "query": {
     "mode": "builder",
@@ -96,7 +105,11 @@ Field rules (order matters — dims before metrics):
 - `query.filters` adds per-element filters
   (`{table, name, dataType, op, value}`).
 - `"mode": "raw"` with `"raw": "EVALUATE …"` runs hand-written DUX instead
-  (first result column = x axis, rest = series).
+  (first result column = x axis, rest = series). Display formats resolve by
+  **output-column name**, so alias a measure to its own name
+  (`"NetRevenue", Sales[NetRevenue]`) to keep its format; a prettier alias
+  renders the raw number. Query-local `DEFINE MEASURE` results have no format
+  at all — round them in the expression if they need shaping.
 
 Per-type wells, `viz` settings (stacking, dual axes, series split, pivot
 rows/columns/totals), and slicer configuration:

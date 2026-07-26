@@ -1,68 +1,73 @@
 {
+  "$schema": "/api/dash/schema.json",
   "version": 1,
-  "canvas": { "width": 1280, "height": 720 },
-  "refresh": { "enabled": false, "intervalSeconds": 60 },
+  "canvas": {
+    "width": 1920,
+    "height": 1080
+  },
+  "refresh": {
+    "enabled": false,
+    "intervalSeconds": 60
+  },
+  "controls": {
+    "csv": true,
+    "funnel": true
+  },
   "elements": [
     {
-      "id": "kpi-1",
-      "type": "kpi",
-      "layout": { "x": 16, "y": 16, "w": 200, "h": 104, "z": 1 },
-      "title": { "text": "Total Revenue", "show": true },
-      "query": {
-        "mode": "builder",
-        "fields": [{ "table": "Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }]
+      "id": "hero",
+      "type": "text",
+      "layout": {
+        "x": 8,
+        "y": 8,
+        "w": 240,
+        "h": 88
+      },
+      "text": {
+        "markdown": "## Sales overview\n\n**FY 2024** — all figures net."
       }
     },
     {
-      "id": "bar-1",
-      "type": "bar",
-      "layout": { "x": 232, "y": 16, "w": 400, "h": 240, "z": 2 },
-      "title": { "text": "Revenue by category", "show": true },
-      "query": {
-        "mode": "builder",
-        "fields": [
-          { "table": "Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
-          { "table": "Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
-        ],
-        "sort": [{ "field": "NetRevenue", "dir": "desc" }]
-      }
-    },
-    {
-      "id": "area-1",
-      "type": "area",
-      "layout": { "x": 648, "y": 16, "w": 480, "h": 240, "z": 3 },
-      "title": { "text": "Revenue by month, split by category", "show": true },
-      "query": {
-        "mode": "builder",
-        "fields": [
-          { "table": "Date", "name": "MonthName", "kind": "column", "dataType": "VARCHAR" },
-          { "table": "Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
-          { "table": "Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
-        ]
-      },
-      "viz": { "series": "Category", "stacked": true }
-    },
-    {
-      "id": "pivot-1",
-      "type": "pivot",
-      "layout": { "x": 232, "y": 272, "w": 640, "h": 320, "z": 4 },
-      "title": { "text": "Region × category", "show": true },
-      "query": {
-        "mode": "builder",
-        "fields": [
-          { "table": "Region", "name": "RegionName", "kind": "column", "dataType": "VARCHAR" },
-          { "table": "Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
-          { "table": "Customer", "name": "CustomerType", "kind": "column", "dataType": "VARCHAR" },
-          { "table": "Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
-        ]
-      },
-      "viz": { "cols": ["CustomerType"] }
-    },
-    {
-      "id": "slicer-1",
+      "id": "slicer-year",
       "type": "slicer",
-      "layout": { "x": 16, "y": 136, "w": 200, "h": 240, "z": 5 },
-      "title": { "text": "Category", "show": true },
+      "layout": {
+        "x": 8,
+        "y": 104,
+        "w": 240,
+        "h": 64
+      },
+      "title": {
+        "text": "Year",
+        "show": true
+      },
+      "slicer": {
+        "table": "Date",
+        "column": "Year",
+        "dataType": "INTEGER",
+        "kind": "buttons",
+        "multi": true,
+        "measure": {
+          "table": "Sales",
+          "name": "NetRevenue",
+          "kind": "column",
+          "dataType": "DECIMAL(14,4)",
+          "aggregate": "SUM"
+        }
+      }
+    },
+    {
+      "id": "slicer-category",
+      "type": "slicer",
+      "layout": {
+        "x": 8,
+        "y": 176,
+        "w": 240,
+        "h": 88
+      },
+      "title": {
+        "text": "Category",
+        "show": true
+      },
       "slicer": {
         "table": "Product",
         "column": "Category",
@@ -72,10 +77,394 @@
       }
     },
     {
-      "id": "text-1",
+      "id": "slicer-date",
+      "type": "slicer",
+      "layout": {
+        "x": 8,
+        "y": 272,
+        "w": 240,
+        "h": 96
+      },
+      "title": {
+        "text": "Date range",
+        "show": true
+      },
+      "slicer": {
+        "table": "Date",
+        "column": "Date",
+        "dataType": "DATE",
+        "kind": "daterange"
+      }
+    },
+    {
+      "id": "slicer-region",
+      "type": "slicer",
+      "layout": {
+        "x": 8,
+        "y": 376,
+        "w": 240,
+        "h": 336
+      },
+      "title": {
+        "text": "Region",
+        "show": true
+      },
+      "slicer": {
+        "table": "Region",
+        "column": "RegionName",
+        "dataType": "VARCHAR",
+        "kind": "buttons",
+        "multi": true
+      }
+    },
+    {
+      "id": "slicer-customer",
+      "type": "slicer",
+      "layout": {
+        "x": 8,
+        "y": 720,
+        "w": 240,
+        "h": 68
+      },
+      "title": {
+        "text": "Customer",
+        "show": true
+      },
+      "slicer": {
+        "table": "Customer",
+        "column": "CustomerId",
+        "dataType": "VARCHAR",
+        "kind": "dropdown",
+        "multi": true
+      }
+    },
+    {
+      "id": "notes",
       "type": "text",
-      "layout": { "x": 888, "y": 272, "w": 240, "h": 160, "z": 6 },
-      "text": { "markdown": "## Notes\n\nEdit any element's query, then share a filtered view via the `?f=` link." }
+      "layout": {
+        "x": 8,
+        "y": 796,
+        "w": 240,
+        "h": 276
+      },
+      "text": {
+        "markdown": "Net revenue excludes returns.\n\nSource: DuckLake `main.Sales`."
+      }
+    },
+    {
+      "id": "kpi-revenue",
+      "type": "kpi",
+      "layout": {
+        "x": 256,
+        "y": 8,
+        "w": 408,
+        "h": 112
+      },
+      "title": {
+        "text": "Net revenue",
+        "show": true
+      },
+      "query": {
+        "mode": "builder",
+        "fields": [
+          {
+            "table": "Sales",
+            "name": "NetRevenue",
+            "kind": "column",
+            "dataType": "DECIMAL(14,4)",
+            "aggregate": "SUM"
+          }
+        ]
+      }
+    },
+    {
+      "id": "kpi-orders",
+      "type": "kpi",
+      "layout": {
+        "x": 672,
+        "y": 8,
+        "w": 408,
+        "h": 112
+      },
+      "title": {
+        "text": "Orders",
+        "show": true
+      },
+      "query": {
+        "mode": "builder",
+        "fields": [
+          {
+            "table": "Sales",
+            "name": "Orders",
+            "kind": "measure"
+          }
+        ]
+      }
+    },
+    {
+      "id": "kpi-aov",
+      "type": "kpi",
+      "layout": {
+        "x": 1088,
+        "y": 8,
+        "w": 408,
+        "h": 112
+      },
+      "title": {
+        "text": "Average order value",
+        "show": true
+      },
+      "query": {
+        "mode": "builder",
+        "fields": [
+          {
+            "table": "Sales",
+            "name": "AvgOrderValue",
+            "kind": "measure"
+          }
+        ]
+      }
+    },
+    {
+      "id": "kpi-units",
+      "type": "kpi",
+      "layout": {
+        "x": 1504,
+        "y": 8,
+        "w": 408,
+        "h": 112
+      },
+      "title": {
+        "text": "Units",
+        "show": true
+      },
+      "query": {
+        "mode": "builder",
+        "fields": [
+          {
+            "table": "Sales",
+            "name": "Quantity",
+            "kind": "measure"
+          }
+        ]
+      }
+    },
+    {
+      "id": "combo-trend",
+      "type": "combo",
+      "layout": {
+        "x": 256,
+        "y": 128,
+        "w": 1656,
+        "h": 240
+      },
+      "title": {
+        "text": "Net revenue by month vs. last year",
+        "show": true
+      },
+      "query": {
+        "mode": "builder",
+        "fields": [
+          {
+            "table": "Date",
+            "name": "Month",
+            "kind": "column",
+            "dataType": "VARCHAR"
+          },
+          {
+            "table": "Sales",
+            "name": "NetRevenue",
+            "kind": "column",
+            "dataType": "DECIMAL(14,4)",
+            "aggregate": "SUM"
+          },
+          {
+            "table": "Sales",
+            "name": "NetRevenuePY",
+            "kind": "measure"
+          }
+        ],
+        "filters": [
+          {
+            "table": "Date",
+            "name": "Year",
+            "dataType": "INTEGER",
+            "op": "=",
+            "value": "2024"
+          }
+        ]
+      },
+      "viz": {
+        "lines": [
+          "NetRevenuePY"
+        ],
+        "lineY2": false,
+        "legend": true
+      }
+    },
+    {
+      "id": "bar-category",
+      "type": "bar",
+      "layout": {
+        "x": 256,
+        "y": 376,
+        "w": 824,
+        "h": 336
+      },
+      "title": {
+        "text": "Net revenue by category",
+        "show": true
+      },
+      "query": {
+        "mode": "builder",
+        "fields": [
+          {
+            "table": "Product",
+            "name": "Category",
+            "kind": "column",
+            "dataType": "VARCHAR"
+          },
+          {
+            "table": "Sales",
+            "name": "NetRevenue",
+            "kind": "column",
+            "dataType": "DECIMAL(14,4)",
+            "aggregate": "SUM"
+          }
+        ],
+        "sort": [
+          {
+            "field": "NetRevenue",
+            "dir": "desc"
+          }
+        ],
+        "topN": 10
+      },
+      "viz": {
+        "orientation": "horizontal",
+        "legend": false
+      }
+    },
+    {
+      "id": "donut-customer",
+      "type": "donut",
+      "layout": {
+        "x": 1088,
+        "y": 376,
+        "w": 824,
+        "h": 336
+      },
+      "title": {
+        "text": "Net revenue by customer type",
+        "show": true
+      },
+      "query": {
+        "mode": "builder",
+        "fields": [
+          {
+            "table": "Customer",
+            "name": "CustomerType",
+            "kind": "column",
+            "dataType": "VARCHAR"
+          },
+          {
+            "table": "Sales",
+            "name": "NetRevenue",
+            "kind": "column",
+            "dataType": "DECIMAL(14,4)",
+            "aggregate": "SUM"
+          }
+        ]
+      },
+      "viz": {
+        "legend": true
+      }
+    },
+    {
+      "id": "table-products",
+      "type": "table",
+      "layout": {
+        "x": 256,
+        "y": 720,
+        "w": 824,
+        "h": 352
+      },
+      "title": {
+        "text": "Top products",
+        "show": true
+      },
+      "query": {
+        "mode": "builder",
+        "fields": [
+          {
+            "table": "Product",
+            "name": "Product",
+            "kind": "column",
+            "dataType": "VARCHAR"
+          },
+          {
+            "table": "Sales",
+            "name": "NetRevenue",
+            "kind": "column",
+            "dataType": "DECIMAL(14,4)",
+            "aggregate": "SUM"
+          }
+        ],
+        "sort": [
+          {
+            "field": "NetRevenue",
+            "dir": "desc"
+          }
+        ],
+        "topN": 12
+      }
+    },
+    {
+      "id": "pivot-region",
+      "type": "pivot",
+      "layout": {
+        "x": 1088,
+        "y": 720,
+        "w": 824,
+        "h": 352
+      },
+      "title": {
+        "text": "Region × category",
+        "show": true
+      },
+      "query": {
+        "mode": "builder",
+        "fields": [
+          {
+            "table": "Region",
+            "name": "RegionName",
+            "kind": "column",
+            "dataType": "VARCHAR"
+          },
+          {
+            "table": "Product",
+            "name": "Category",
+            "kind": "column",
+            "dataType": "VARCHAR"
+          },
+          {
+            "table": "Sales",
+            "name": "NetRevenue",
+            "kind": "column",
+            "dataType": "DECIMAL(14,4)",
+            "aggregate": "SUM"
+          }
+        ]
+      },
+      "viz": {
+        "cols": [
+          "Category"
+        ],
+        "subtotals": true,
+        "grandTotal": true,
+        "totalCol": true,
+        "collapsed": true
+      }
     }
   ]
 }

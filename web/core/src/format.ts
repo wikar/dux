@@ -59,3 +59,74 @@ export function formatValue(
     return String(value);
   }
 }
+
+/** Magnitude suffixes, largest first. Thousands are **T**, not K. Trillions
+ *  would collide with that T, so the scale stops at B and keeps counting
+ *  there (1e12 → "1,000B") rather than inventing a notation. */
+const SCALES = [
+  { div: 1e9, suffix: "B" },
+  { div: 1e6, suffix: "M" },
+  { div: 1e3, suffix: "T" },
+] as const;
+
+/** Currency affixes for a locale, so a scaled number can be rebuilt with the
+ *  symbol in the right place ("€15M" vs "15M €"). */
+function currencyAffixes(currency: string, locale?: string): [string, string] {
+  try {
+    const parts = new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency,
+      maximumFractionDigits: 0,
+    }).formatToParts(1);
+    const i = parts.findIndex((p) => p.type === "integer");
+    return [
+      parts.slice(0, i).map((p) => p.value).join(""),
+      parts.slice(i + 1).filter((p) => p.type !== "decimal" && p.type !== "fraction").map((p) => p.value).join(""),
+    ];
+  } catch {
+    return ["", ""];
+  }
+}
+
+/**
+ * Axis-scale rendering: the same value `formatValue` spells out in full, cut
+ * down to something that fits a tick label — 15300000 → "€15.3M".
+ *
+ * Percentages and values under a thousand fall through to `formatValue`:
+ * they are already short, and scaling a ratio would be nonsense.
+ */
+export function formatCompactValue(
+  value: string | number | null,
+  format: MeasureFormat | undefined,
+  locale?: string
+): string {
+  if (value === null) return "";
+  const n = typeof value === "number" ? value : Number(value);
+  if (isNaN(n)) return formatValue(value, format, locale);
+  if (format?.kind === "percent") return formatValue(value, format, locale);
+
+  const abs = Math.abs(n);
+  const scale = SCALES.find((s) => abs >= s.div);
+  if (!scale) return formatValue(value, format, locale);
+
+  const scaled = Math.abs(n) / scale.div;
+  // The sign sits outside the currency affix ("-€15.3M", not "€-15.3M"), so
+  // the magnitude is formatted unsigned and the sign put back on the front.
+  const sign = n < 0 ? "-" : "";
+  // One decimal below 100 keeps 15.3M distinguishable from 15.8M; above that
+  // the extra digit is noise on an axis.
+  const digits = scaled < 100 ? 1 : 0;
+  try {
+    const num = new Intl.NumberFormat(locale, {
+      maximumFractionDigits: digits,
+      minimumFractionDigits: 0,
+    }).format(scaled);
+    if (format?.kind === "currency" && format.currency) {
+      const [pre, post] = currencyAffixes(format.currency, locale);
+      return `${sign}${pre}${num}${scale.suffix}${post}`;
+    }
+    return `${sign}${num}${scale.suffix}`;
+  } catch {
+    return formatValue(value, format, locale);
+  }
+}

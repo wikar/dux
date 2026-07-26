@@ -32,7 +32,11 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 10px;
+  /* Fixed, not derived from the font's line box: an element's usable body
+     height has to be a whole number an author can subtract. At 26.5px every
+     content-fitted height lands a fraction over its grid step. */
+  height: 26px;
+  padding: 0 10px;
   font-size: 12px;
   font-weight: 600;
   background: var(--th-title-bg, transparent);

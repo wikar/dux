@@ -59,6 +59,17 @@ While active, extra metrics are ignored; NULL/empty series values label as
 - `viz.showEmpty`: show axis items whose metrics are all NULL (default
   hidden).
 
+Numeric axis ticks render scaled (`€15.3M` — thousands T, millions M,
+billions B) and size themselves to their widest label; tooltips still show
+the full measure format. Nothing to configure.
+
+The empty-row drop keys on *all* metrics being NULL, so one measure that
+outlives the data keeps the row. A date dimension usually spans years beyond
+what is loaded, and a time-intelligence measure (`SAMEPERIODLASTYEAR`,
+`DATEADD`) is non-NULL for the year *after* the last loaded one — enough to
+stretch the axis into empty space. Bound such elements with an explicit
+`query.filters` range rather than relying on the drop.
+
 ## kpi
 
 - Fields: 1 metric (first one renders). Shows the formatted value large,
@@ -97,12 +108,49 @@ While active, extra metrics are ignored; NULL/empty series values label as
 }
 ```
 
+## map
+
+A MapLibre canvas with one or two point layers. Layers are fetched per layer
+rather than through the shared query pipeline, so the element carries
+`query.filters` (for slicer/filter fan-out) but no `query.fields`.
+
+```json
+{
+  "type": "map",
+  "query": { "mode": "builder", "filters": [] },
+  "viz": {
+    "layers": [{
+      "id": "layer-1",
+      "kind": "circle",
+      "lng": { "table": "Venue", "name": "Longitude", "kind": "column", "dataType": "DECIMAL(10,7)" },
+      "lat": { "table": "Venue", "name": "Latitude",  "kind": "column", "dataType": "DECIMAL(10,7)" },
+      "size": { "table": "Sales", "name": "NetRevenue", "kind": "measure" },
+      "category": { "table": "Venue", "name": "VenueType", "kind": "column", "dataType": "VARCHAR" }
+    }],
+    "center": [10.45, 51.16],
+    "zoom": 4.6
+  }
+}
+```
+
+- `kind`: `circle` | `pin` | `heatmap`.
+- `lng` / `lat` are required; the layer renders nothing without both. They
+  are numeric columns used as **dimensions**, so the layer query applies
+  `aggregate: "VALUES"` to them for you.
+- `size` (optional) scales the mark by a measure, relative to the layer max.
+- `category` (optional) colors marks by a dim's values from the palette.
+  Only use it when the distinct count fits the palette — beyond that the
+  hues cycle and two categories share a color.
+- `center` / `zoom` set the initial view; omit both to fit the extent.
+- The basemap is styled from the theme, so the element reads as part of the
+  dashboard rather than a pasted-in map.
+
 ## slicer
 
 ```json
 {
   "id": "slicer-1", "type": "slicer",
-  "layout": { "x": 16, "y": 300, "w": 200, "h": 240 },
+  "layout": { "x": 8, "y": 176, "w": 240, "h": 88 },
   "title": { "text": "Category", "show": true },
   "slicer": {
     "table": "Product", "column": "Category",
@@ -125,6 +173,14 @@ While active, extra metrics are ignored; NULL/empty series values label as
   `{"kind": "column", "dataType": "...", "aggregate": "SUM"}`.
 - Slicers receive each other's filters (cascading option lists).
   Selections live only in the page URL (`?f=`), never in the document.
+- Clearing is an eraser control in the slicer's title bar, shown only while
+  something is selected. It needs no configuration — but it does need a
+  title bar, so leave `title.show` on unless the element is deliberately
+  chrome-less (a titleless slicer falls back to a floating control).
+
+Heights are a layout concern, not a slicer one — `dropdown` is 68px,
+`daterange`/`range` 96px, and `buttons` is sized to its pill rows. See
+[layout.md](layout.md).
 
 ## text
 

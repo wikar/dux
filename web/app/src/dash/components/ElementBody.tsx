@@ -4,6 +4,7 @@
 import { Component, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import styles from "./ElementBody.module.css";
+import { applySlicerSelection } from "../actions";
 import { downloadCsv } from "../csv";
 import { dropEmptyRows, splitElementFields, useAffectingFilters, useFormats, useResolvedTheme } from "../data";
 import { useElementData } from "../elementQuery";
@@ -12,7 +13,7 @@ import type { DashElement, ElementType, VizSettings } from "../types";
 import { QueryFailedError } from "@dux/core";
 import type { MeasureFormat, QueryResponse } from "@dux/core";
 import { toChartData, toSeriesData, type ChartDim, type ChartRow, type Interaction } from "../charts/ChartKit";
-import { downloadIcon, funnelIcon } from "../glyphs";
+import { downloadIcon, eraserIcon, funnelIcon } from "../glyphs";
 import { TYPE_LABEL, VISUALS } from "../visuals";
 import type { DataBodyProps, StaticBodyProps, VisualDef } from "../visuals/types";
 
@@ -29,6 +30,24 @@ export function CsvButton({ el, className }: { el: DashElement; className: strin
       onClick={() => downloadCsv(data, el.title?.text || el.id)}
     >
       {downloadIcon}
+    </button>
+  );
+}
+
+/** Clears a slicer's selection from its title bar. Renders nothing until
+ *  something is selected, so the header stays quiet on an untouched slicer. */
+export function ClearButton({ el, className }: { el: DashElement; className: string }) {
+  const sel = useUiStore((s) => s.slicerSelections[el.id]);
+  if (!sel) return null;
+  const n = sel.kind === "values" ? sel.values.length : 1;
+  return (
+    <button
+      className={className}
+      title={`Clear selection (${n})`}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={() => applySlicerSelection(el.id, null)}
+    >
+      {eraserIcon}
     </button>
   );
 }
@@ -102,9 +121,13 @@ function FloatingActions({ el, def }: { el: DashElement; def: VisualDef }) {
   if (titleShown) return null;
   const funnel = !!def.controls?.funnel && controls?.funnel !== false;
   const csv = !!def.controls?.csv && controls?.csv !== false;
-  if (!funnel && !csv) return null;
+  // Clear is not document-toggleable: without a title bar this is the only
+  // way back out of a selection.
+  const clear = !!def.controls?.clear;
+  if (!funnel && !csv && !clear) return null;
   return (
     <div className={styles.floatingActions}>
+      {clear && <ClearButton el={el} className={styles.exportBtn} />}
       {funnel && <FunnelButton el={el} floating />}
       {csv && <CsvButton el={el} className={styles.exportBtn} />}
     </div>

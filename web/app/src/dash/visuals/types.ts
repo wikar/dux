@@ -48,6 +48,10 @@ export interface DataSpec {
 export interface ControlSpec {
   funnel?: boolean;
   csv?: boolean;
+  /** Eraser that drops this element's slicer selection. Unlike funnel/csv it
+   *  is not chrome the document can hide — clearing a filter is the only way
+   *  back out of one. */
+  clear?: boolean;
 }
 
 /** Inputs a cartesian visual turns into its Recharts series. */

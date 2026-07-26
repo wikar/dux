@@ -14,6 +14,16 @@ export const funnelIcon: JSX.Element = (
   </svg>
 );
 
+/** Eraser glyph for the slicer's "clear selection" header control. */
+export const eraserIcon: JSX.Element = (
+  <svg {...S}>
+    <path d="M7.6 14.5 L3.2 10.1 A1 1 0 0 1 3.2 8.7 L9.4 2.5 A1 1 0 0 1 10.8 2.5 L15.2 6.9 A1 1 0 0 1 15.2 8.3 L9 14.5 Z"
+      {...stroke} strokeLinejoin="round" />
+    <path d="M6.3 5.6 L12.1 11.4" {...stroke} />
+    <path d="M7.6 14.5 L15.5 14.5" {...stroke} strokeLinecap="round" />
+  </svg>
+);
+
 /** Download glyph for the CSV-export header control (matches funnelIcon weight). */
 export const downloadIcon: JSX.Element = (
   <svg {...S}>

@@ -17,6 +17,7 @@ const slicer: VisualDef = {
     </svg>
   ),
   size: { w: 200, h: 240 },
+  controls: { clear: true },
   seed: () => ({ slicer: { table: "", column: "", kind: "buttons", multi: true } }),
   Body: ({ el }: StaticBodyProps) => <SlicerBody el={el} />,
 };
@@ -93,14 +94,8 @@ function ButtonsSlicer({ el, sel }: { el: DashElement; sel: SlicerSelection | un
         {options.length === 0 && !loading && !error && <span className={styles.hint}>No values</span>}
       </div>
       {error && <div className={styles.error}>{error.message}</div>}
-      <div className={styles.footer}>
-        {loading && <span className={styles.loading}>…</span>}
-        {cur.length > 0 && (
-          <button className={styles.clear} onClick={() => applySlicerSelection(el.id, null)}>
-            Clear ({cur.length})
-          </button>
-        )}
-      </div>
+      {/* Clearing lives on the title bar's eraser control — see ClearButton. */}
+      <div className={styles.footer}>{loading && <span className={styles.loading}>…</span>}</div>
     </div>
   );
 }
@@ -249,11 +244,6 @@ function RangeSlicer({
           onBlur={(e) => commit(from, e.target.value)}
         />
       </label>
-      {(from !== "" || to !== "") && (
-        <button className={styles.clear} onClick={() => applySlicerSelection(el.id, null)}>
-          Clear
-        </button>
-      )}
     </div>
   );
 }

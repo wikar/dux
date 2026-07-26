@@ -18,7 +18,7 @@ import {
   YAxis,
 } from "recharts";
 import type { XAxisTickContentProps } from "recharts";
-import { formatValue } from "@dux/core";
+import { formatCompactValue, formatValue } from "@dux/core";
 import type { MeasureFormat, QueryResponse } from "@dux/core";
 import { markKey, type CrossMark } from "../store";
 
@@ -115,10 +115,12 @@ export function toSeriesData(
 
 type Formats = Record<string, MeasureFormat>;
 
-/** Axis tick formatter using the first series' measure format. */
+/** Axis tick formatter using the first series' measure format. Ticks are
+ *  scaled ("€15.3M") — a tick label has no room for the full format, and the
+ *  tooltip still spells the value out in full. */
 function tickFormatter(formats: Formats, series: string[]) {
   const fmt = series.map((s) => formats[s]).find(Boolean);
-  return (v: number) => formatValue(v, fmt);
+  return (v: number) => formatCompactValue(v, fmt);
 }
 
 function tooltipFormatter(formats: Formats) {
@@ -130,6 +132,10 @@ function tooltipFormatter(formats: Formats) {
 }
 
 const commonAxis = { stroke: AXIS, tick: { fill: AXIS, fontSize: 10 }, tickLine: false } as const;
+
+/** Numeric axes size to their widest tick instead of a fixed guess — a fixed
+ *  width clips the label the moment a measure's format is wider than it. */
+const numericAxisWidth = { width: "auto", minWidth: 40 } as const;
 
 /** Compact ISO timestamps on axes; the underlying value remains untouched for
  * tooltips and cross-filtering. Multiple dimension labels are handled too. */
@@ -425,7 +431,7 @@ export function CartesianChart({
               {...categoryAxis}
               {...(insetTicks ? { tick: lineCategoryTick } : {})}
             />
-            <YAxis yAxisId="left" type="number" {...commonAxis} tickFormatter={leftFmt} width={48} />
+            <YAxis yAxisId="left" type="number" {...commonAxis} tickFormatter={leftFmt} {...numericAxisWidth} />
             {right.length > 0 && (
               <YAxis
                 yAxisId="right"
@@ -433,7 +439,7 @@ export function CartesianChart({
                 type="number"
                 {...commonAxis}
                 tickFormatter={tickFormatter(formats, right.map((s) => s.key))}
-                width={48}
+                {...numericAxisWidth}
               />
             )}
           </>

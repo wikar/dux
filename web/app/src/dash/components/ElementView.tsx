@@ -4,9 +4,14 @@ import { applyGesture, type GestureKind } from "../docOps";
 import { updateElement, useDocStore, useUiStore } from "../store";
 import type { CanvasSpec, DashElement, Layout } from "../types";
 import { VISUALS } from "../visuals";
-import ElementBody, { CsvButton, FunnelButton } from "./ElementBody";
+import ElementBody, { ClearButton, CsvButton, FunnelButton } from "./ElementBody";
 
 const HANDLES: GestureKind[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
+
+/** Screen-pixel slop a press must exceed before it counts as a drag. Without
+ *  it, clicking to select re-runs the gesture math at zero delta and the grid
+ *  snap shifts any element the settings pane placed off-grid. */
+const DRAG_SLOP = 3;
 
 interface Props {
   el: DashElement;
@@ -26,7 +31,13 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
   const showFunnel = useDocStore((s) => s.doc?.controls?.funnel) !== false;
   const showCsv = useDocStore((s) => s.doc?.controls?.csv) !== false;
   const [ghost, setGhost] = useState<Layout | null>(null);
-  const gesture = useRef<{ kind: GestureKind; startX: number; startY: number; orig: Layout } | null>(null);
+  const gesture = useRef<{
+    kind: GestureKind;
+    startX: number;
+    startY: number;
+    orig: Layout;
+    live: boolean;
+  } | null>(null);
 
   const editing = mode === "edit";
   const layout = ghost ?? el.layout;
@@ -35,16 +46,22 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
     if (!editing || e.button !== 0) return;
     e.stopPropagation();
     select(el.id);
-    gesture.current = { kind, startX: e.clientX, startY: e.clientY, orig: { ...el.layout } };
+    gesture.current = { kind, startX: e.clientX, startY: e.clientY, orig: { ...el.layout }, live: false };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
 
   const resolve = (e: React.PointerEvent): Layout | null => {
     const g = gesture.current;
     if (!g) return null;
-    const dx = (e.clientX - g.startX) / scale;
-    const dy = (e.clientY - g.startY) / scale;
-    return applyGesture(g.kind, g.orig, dx, dy, canvas);
+    const sx = e.clientX - g.startX;
+    const sy = e.clientY - g.startY;
+    // A press stays inert until it clears the slop, so selecting leaves the
+    // layout byte-identical; once dragging, it stays live for the gesture.
+    if (!g.live) {
+      if (Math.abs(sx) < DRAG_SLOP && Math.abs(sy) < DRAG_SLOP) return null;
+      g.live = true;
+    }
+    return applyGesture(g.kind, g.orig, sx / scale, sy / scale, canvas);
   };
 
   const move = (e: React.PointerEvent) => {
@@ -84,6 +101,7 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
         <div className={styles.titleBar}>
           <span className={styles.titleText}>{el.title!.text}</span>
           <div className={styles.titleActions}>
+            {meta?.controls?.clear && <ClearButton el={el} className={styles.titleCsv} />}
             {meta?.controls?.funnel && showFunnel && <FunnelButton el={el} />}
             {meta?.controls?.csv && showCsv && <CsvButton el={el} className={styles.titleCsv} />}
           </div>
