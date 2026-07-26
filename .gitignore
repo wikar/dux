@@ -34,6 +34,7 @@ db/*.db
 db/*.wal
 db/*.sqlite
 db/*/
+db/*.sql
 
 # Reference data
 reference/

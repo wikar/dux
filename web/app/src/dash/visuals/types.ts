@@ -81,8 +81,6 @@ export interface VisualMeta {
   cartesian?: {
     /** Honors viz.orientation (category on the y axis). */
     orientable?: boolean;
-    /** Nudge the first/last category tick inward. */
-    insetTicks?: boolean;
   };
   series?: (ctx: SeriesContext) => SeriesSpec[];
   /** Transparent element container (the map paints its own surface). */

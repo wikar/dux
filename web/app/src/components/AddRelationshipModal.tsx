@@ -40,6 +40,23 @@ export default function AddRelationshipModal(props: {
     setToCol(fromCol);
   }
 
+  async function remove() {
+    const orig = props.initial;
+    if (!orig) return;
+    setSaving(true);
+    setError("");
+    try {
+      await client.deleteRelationship({
+        from_table: orig.FromTable, from_column: orig.FromColumn,
+        to_table: orig.ToTable, to_column: orig.ToColumn,
+      });
+      props.onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setSaving(false);
+    }
+  }
+
   async function save() {
     if (!fromTable || !fromCol || !toTable || !toCol) {
       setError("All four fields are required.");
@@ -120,6 +137,11 @@ export default function AddRelationshipModal(props: {
       onClose={props.onClose}
       footer={
         <>
+          {isEdit && (
+            <button className={modalStyles.btnDanger} onClick={remove} disabled={saving} style={{ marginRight: 8 }}>
+              Delete
+            </button>
+          )}
           <button className={modalStyles.btn} onClick={reverse} disabled={saving} style={{ marginRight: 8 }}>
             ⇄ Reverse
           </button>

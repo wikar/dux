@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { Schema, DragPayload, Relationship, MeasureFormat } from "@dux/core";
@@ -9,6 +9,7 @@ import Modal, { modalStyles } from "./Modal";
 import styles from "./SchemaTree.module.css";
 import AddRelationshipModal from "./AddRelationshipModal";
 import { EyeOffIcon } from "./icons";
+import TreeCaret from "./TreeCaret";
 
 // ─── Draggable field row ─────────────────────────────────────────────────────
 
@@ -53,46 +54,48 @@ function FieldRow(props: {
 
 // ─── Collapsible table group ─────────────────────────────────────────────────
 
-function TableGroup(props: {
-  tableName: string;
-  schema: Schema;
-  showHidden?: boolean;
-  onToggleHidden?: () => void;
-  onToggleColumnHidden?: (colName: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-
-  const table = props.schema.Tables[props.tableName];
-  const isHidden = table?.Hidden === true;
-
+/** Visible columns and measures of one table, both sorted by name. */
+function tableFields(schema: Schema, tableName: string, showHidden?: boolean) {
+  const table = schema.Tables[tableName];
   const columns = !table
     ? []
     : Object.values(table.Columns)
-        .filter((c) => props.showHidden || !c.Hidden)
+        .filter((c) => showHidden || !c.Hidden)
         .sort((a, b) => a.Name.localeCompare(b.Name));
 
-  const measures = (() => {
-    const m = props.schema.Measures;
-    if (!m) return [];
-    // Measures may be keyed by bare name ("Sales") or qualified ("bev.Sales").
-    // Try both so qualified table names in the schema panel still find their measures.
-    const dot = props.tableName.indexOf(".");
-    const bare = dot >= 0 ? props.tableName.slice(dot + 1) : props.tableName;
-    const tblMeasures = m[props.tableName] ?? m[bare];
-    if (!tblMeasures) return [];
-    return Object.keys(tblMeasures).sort();
-  })();
+  // Measures may be keyed by bare name ("Sales") or qualified ("bev.Sales").
+  // Try both so qualified table names in the schema panel still find their measures.
+  const dot = tableName.indexOf(".");
+  const bare = dot >= 0 ? tableName.slice(dot + 1) : tableName;
+  const tblMeasures = schema.Measures?.[tableName] ?? schema.Measures?.[bare];
+  const measures = tblMeasures ? Object.keys(tblMeasures).sort() : [];
 
+  return { columns, measures };
+}
+
+function TableGroup(props: {
+  tableName: string;
+  schema: Schema;
+  columns: ReturnType<typeof tableFields>["columns"];
+  measures: string[];
+  open: boolean;
+  onToggleOpen: () => void;
+  onToggleHidden?: () => void;
+  onToggleColumnHidden?: (colName: string) => void;
+}) {
+  const { open, columns, measures } = props;
+  const table = props.schema.Tables[props.tableName];
+  const isHidden = table?.Hidden === true;
   const total = columns.length + measures.length;
 
   return (
     <div className={styles.tableGroup}>
       <button
         className={`${styles.tableHeader}${isHidden ? ` ${styles.tableHeaderHidden}` : ""}`}
-        onClick={() => setOpen((v) => !v)}
+        onClick={props.onToggleOpen}
         title={`${total} fields`}
       >
-        <span className={styles.chevron}>{open ? "▾" : "▸"}</span>
+        <TreeCaret open={open} />
         <span className={styles.tableName}>{props.tableName}</span>
         {table?.IsView && (
           <span className={styles.viewBadge} title="DuckDB view">view</span>
@@ -177,6 +180,20 @@ function AddMeasureModal(props: {
     return f;
   }
 
+  async function remove() {
+    const orig = props.initial;
+    if (!orig) return;
+    setSaving(true);
+    setError("");
+    try {
+      await client.deleteMeasure(orig.table, orig.name);
+      props.onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setSaving(false);
+    }
+  }
+
   async function save() {
     if (!table || !name || !expression) {
       setError("Table, name, and expression are required.");
@@ -206,6 +223,11 @@ function AddMeasureModal(props: {
       onClose={props.onClose}
       footer={
         <>
+          {isEdit && (
+            <button className={modalStyles.btnDanger} onClick={remove} disabled={saving} style={{ marginRight: "auto" }}>
+              Delete
+            </button>
+          )}
           <button className={modalStyles.btn} onClick={props.onClose} disabled={saving}>Cancel</button>
           <button className={modalStyles.btnPrimary} onClick={save} disabled={saving}>
             {saving ? "Saving…" : "Save"}
@@ -303,7 +325,7 @@ function RelationshipsSection(props: {
   return (
     <div className={styles.sideSection}>
       <button className={styles.sideSectionHeader} onClick={() => setOpen((v) => !v)}>
-        <span className={styles.chevron}>{open ? "▾" : "▸"}</span>
+        <TreeCaret open={open} />
         <span className={styles.sideSectionTitle}>Relationships</span>
         <span className={styles.fieldCount}>{rels.length}</span>
         <span
@@ -377,7 +399,7 @@ function MeasuresSection(props: {
   return (
     <div className={styles.sideSection}>
       <button className={styles.sideSectionHeader} onClick={() => setOpen((v) => !v)}>
-        <span className={styles.chevron}>{open ? "▾" : "▸"}</span>
+        <TreeCaret open={open} />
         <span className={styles.sideSectionTitle}>Measures</span>
         <span className={styles.fieldCount}>{entries.length}</span>
         <span
@@ -439,12 +461,43 @@ export default function SchemaTree(props: {
   const [editTarget, setEditTarget] = useState<EditTarget | undefined>(undefined);
   const [relEditTarget, setRelEditTarget] = useState<Relationship | undefined>(undefined);
 
+  // Expansion: `expanded` is what the user opened by hand; while a search is
+  // active a hit expands its table instead, and `searchToggled` records tables
+  // the user flipped during that search. Clearing the search therefore restores
+  // exactly the hand-expanded set from before it.
+  const [search, setSearch] = useState("");
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [searchToggled, setSearchToggled] = useState<ReadonlySet<string>>(new Set());
+  const q = search.trim().toLowerCase();
+  useEffect(() => setSearchToggled(new Set()), [q]);
+
+  function flip(set: ReadonlySet<string>, name: string) {
+    const next = new Set(set);
+    if (!next.delete(name)) next.add(name);
+    return next;
+  }
+
   const tableNames = !schema
     ? []
     : Object.keys(schema.Tables)
         .filter((n) => !isMetaTable(n))
         .filter((n) => props.showHidden || !schema.Tables[n].Hidden)
         .sort();
+
+  /** Per-table fields, narrowed to the search hits. A table whose own name
+   *  matches keeps all of its fields. */
+  const groups = !schema
+    ? []
+    : tableNames
+        .map((name) => {
+          const all = tableFields(schema, name, props.showHidden);
+          if (!q) return { name, ...all, hit: false };
+          if (name.toLowerCase().includes(q)) return { name, ...all, hit: true };
+          const columns = all.columns.filter((c) => c.Name.toLowerCase().includes(q));
+          const measures = all.measures.filter((m) => m.toLowerCase().includes(q));
+          return { name, columns, measures, hit: columns.length + measures.length > 0 };
+        })
+        .filter((g) => !q || g.hit);
 
   const [deleteError, setDeleteError] = useState("");
 
@@ -497,19 +550,38 @@ export default function SchemaTree(props: {
   return (
     <div className={props.bare ? styles.panelBare : styles.panel}>
       {!props.bare && <div className={styles.panelHeader}>Schema</div>}
+      <div className={styles.searchRow}>
+        <input
+          className={styles.searchInput}
+          type="search"
+          placeholder="Search columns and measures…"
+          value={search}
+          onChange={(e) => setSearch(e.currentTarget.value)}
+        />
+      </div>
       <div className={styles.scrollArea}>
         {loading && <div className={styles.status}>Loading…</div>}
         {schemaError && (
           <div className={styles.statusError}>{schemaError.message}</div>
         )}
-        {schema && tableNames.map((name) => (
+        {schema && q !== "" && groups.length === 0 && (
+          <div className={styles.status}>No matches</div>
+        )}
+        {schema && groups.map((g) => (
           <TableGroup
-            key={name}
-            tableName={name}
+            key={g.name}
+            tableName={g.name}
             schema={schema}
-            showHidden={props.showHidden}
-            onToggleHidden={() => toggle(name)}
-            onToggleColumnHidden={(col) => toggle(name, col)}
+            columns={g.columns}
+            measures={g.measures}
+            open={(q ? g.hit : expanded.has(g.name)) !== searchToggled.has(g.name)}
+            onToggleOpen={() =>
+              q
+                ? setSearchToggled((s) => flip(s, g.name))
+                : setExpanded((s) => flip(s, g.name))
+            }
+            onToggleHidden={() => toggle(g.name)}
+            onToggleColumnHidden={(col) => toggle(g.name, col)}
           />
         ))}
       </div>

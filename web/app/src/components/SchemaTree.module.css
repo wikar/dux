@@ -25,6 +25,33 @@
   flex-shrink: 0;
 }
 
+/* ─── Search ──────────────────────────────── */
+
+.searchRow {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--surface1);
+  flex-shrink: 0;
+}
+
+.searchInput {
+  width: 100%;
+  background: var(--base);
+  border: 1px solid var(--surface1);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 4px 8px;
+  outline: none;
+}
+
+.searchInput:focus {
+  border-color: var(--blue);
+}
+
+.searchInput::placeholder {
+  color: var(--subtext0);
+}
+
 .scrollArea {
   flex: 1;
   overflow-y: auto;
@@ -67,13 +94,6 @@
 
 .tableHeader:hover {
   background: var(--surface1);
-}
-
-.chevron {
-  font-size: 10px;
-  width: 12px;
-  color: var(--subtext0);
-  flex-shrink: 0;
 }
 
 .tableName {

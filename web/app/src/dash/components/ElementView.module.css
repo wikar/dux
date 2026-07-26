@@ -2,11 +2,11 @@
   position: absolute;
   display: flex;
   flex-direction: column;
-  background: var(--th-el-bg, color-mix(in srgb, var(--mantle) 82%, transparent));
-  border: 1px solid var(--th-border, var(--surface1));
+  background: var(--th-el-bg);
+  border: 1px solid var(--th-border);
   border-radius: 6px;
   overflow: hidden;
-  color: var(--th-text, var(--text));
+  color: var(--th-text);
 }
 
 .map {
@@ -14,7 +14,7 @@
 }
 
 .map .titleBar {
-  background: linear-gradient(var(--th-title-bg, transparent), var(--th-title-bg, transparent)), var(--th-el-bg, var(--mantle));
+  background: linear-gradient(var(--th-title-bg), var(--th-title-bg)), var(--th-el-bg);
 }
 
 .editing {
@@ -39,9 +39,9 @@
   padding: 0 10px;
   font-size: 12px;
   font-weight: 600;
-  background: var(--th-title-bg, transparent);
-  color: var(--th-text, var(--subtext1));
-  border-bottom: 1px solid var(--th-border, var(--surface1));
+  background: var(--th-title-bg);
+  color: var(--th-text);
+  border-bottom: 1px solid var(--th-border);
 }
 
 .titleText {
@@ -75,7 +75,7 @@
   border: none;
   border-radius: 3px;
   background: transparent;
-  color: var(--th-text, var(--subtext0));
+  color: var(--th-muted);
   line-height: 1;
   cursor: pointer;
   opacity: 0.35;

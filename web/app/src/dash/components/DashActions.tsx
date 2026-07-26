@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import styles from "./DashActions.module.css";
 import Modal, { modalStyles } from "../../components/Modal";
+import TreeCaret from "../../components/TreeCaret";
 import { listDashboards, type DashEntry } from "../api";
 import { createDashboard, gotoDashboard, save, setFullscreen } from "../actions";
 import { redo, undo, useDirty, useTemporal, useUiStore } from "../store";
@@ -93,26 +94,44 @@ export default function DashActions() {
 
 interface TreeNode {
   name: string;
+  /** Full slash path — the dashboard path for leaves, the folder path for dirs. */
+  path: string;
   entry?: DashEntry;
   children: TreeNode[];
 }
 
 function buildTree(entries: DashEntry[]): TreeNode[] {
-  const root: TreeNode = { name: "", children: [] };
+  const root: TreeNode = { name: "", path: "", children: [] };
   for (const entry of [...entries].sort((a, b) => a.path.localeCompare(b.path))) {
     const segments = entry.path.split("/");
     let node = root;
     for (let i = 0; i < segments.length - 1; i++) {
       let child = node.children.find((c) => !c.entry && c.name === segments[i]);
       if (!child) {
-        child = { name: segments[i], children: [] };
+        child = { name: segments[i], path: segments.slice(0, i + 1).join("/"), children: [] };
         node.children.push(child);
       }
       node = child;
     }
-    node.children.push({ name: segments[segments.length - 1], entry, children: [] });
+    const name = segments[segments.length - 1];
+    node.children.push({ name, path: entry.path, entry, children: [] });
   }
   return root.children;
+}
+
+/** Keeps dashboards whose name matches and the folders leading to them. */
+function filterTree(nodes: TreeNode[], q: string): TreeNode[] {
+  if (!q) return nodes;
+  const kept: TreeNode[] = [];
+  for (const n of nodes) {
+    if (n.entry) {
+      if (n.name.toLowerCase().includes(q)) kept.push(n);
+      continue;
+    }
+    const children = filterTree(n.children, q);
+    if (children.length > 0) kept.push({ ...n, children });
+  }
+  return kept;
 }
 
 function DashboardPicker() {
@@ -135,11 +154,34 @@ function DashboardPicker() {
     return () => window.removeEventListener("mousedown", onDown);
   }, [open]);
 
+  // Folders are collapsed by default. While a search is active every folder on
+  // a hit path is expanded, and `searchToggled` records folders the user flipped
+  // during that search — so clearing it restores the hand-expanded set.
+  const [search, setSearch] = useState("");
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [searchToggled, setSearchToggled] = useState<ReadonlySet<string>>(new Set());
+  const q = search.trim().toLowerCase();
+  useEffect(() => setSearchToggled(new Set()), [q]);
+  useEffect(() => { if (!open) setSearch(""); }, [open]);
+
   const pick = (p: string) => {
     setOpen(false);
     void queryClient.invalidateQueries({ queryKey: ["dashboards"] });
     gotoDashboard(p);
   };
+
+  const toggleFolder = (p: string) => {
+    const flip = (set: ReadonlySet<string>) => {
+      const next = new Set(set);
+      if (!next.delete(p)) next.add(p);
+      return next;
+    };
+    if (q) setSearchToggled(flip);
+    else setExpanded(flip);
+  };
+  const isFolderOpen = (p: string) => (q ? true : expanded.has(p)) !== searchToggled.has(p);
+
+  const tree = entries ? filterTree(buildTree(entries), q) : [];
 
   return (
     <div className={styles.picker} ref={ref}>
@@ -149,10 +191,31 @@ function DashboardPicker() {
       </button>
       {open && (
         <div className={styles.dropdown}>
+          <div className={styles.searchRow}>
+            <input
+              autoFocus
+              className={styles.searchInput}
+              type="search"
+              placeholder="Search dashboards…"
+              value={search}
+              onChange={(e) => setSearch(e.currentTarget.value)}
+              onKeyDown={(e) => { if (e.key === "Escape") setOpen(false); }}
+            />
+          </div>
           {isLoading && <div className={styles.dim}>Loading…</div>}
           {error != null && <div className={styles.dim}>failed to list: {String(error)}</div>}
           {entries && entries.length === 0 && <div className={styles.dim}>No dashboards yet</div>}
-          {entries && <TreeLevel nodes={buildTree(entries)} depth={0} onPick={pick} current={path} />}
+          {entries && entries.length > 0 && tree.length === 0 && (
+            <div className={styles.dim}>No matches</div>
+          )}
+          <TreeLevel
+            nodes={tree}
+            depth={0}
+            onPick={pick}
+            current={path}
+            isFolderOpen={isFolderOpen}
+            onToggleFolder={toggleFolder}
+          />
         </div>
       )}
     </div>
@@ -164,36 +227,60 @@ function TreeLevel({
   depth,
   onPick,
   current,
+  isFolderOpen,
+  onToggleFolder,
 }: {
   nodes: TreeNode[];
   depth: number;
   onPick: (path: string) => void;
   current: string;
+  isFolderOpen: (path: string) => boolean;
+  onToggleFolder: (path: string) => void;
 }) {
   return (
     <>
-      {nodes.map((n) =>
-        n.entry ? (
-          <button
-            key={n.entry.path}
-            className={`${styles.item}${n.entry.path === current ? ` ${styles.itemActive}` : ""}`}
-            style={{ paddingLeft: 12 + depth * 14 }}
-            disabled={!n.entry.valid}
-            title={n.entry.valid ? n.entry.path : n.entry.error}
-            onClick={() => onPick(n.entry!.path)}
-          >
-            {n.name}
-            {!n.entry.valid && <span className={styles.invalid}> ⚠ invalid</span>}
-          </button>
-        ) : (
-          <div key={`dir:${depth}:${n.name}`}>
-            <div className={styles.folder} style={{ paddingLeft: 12 + depth * 14 }}>
-              {n.name}/
-            </div>
-            <TreeLevel nodes={n.children} depth={depth + 1} onPick={onPick} current={current} />
+      {nodes.map((n) => {
+        if (n.entry) {
+          return (
+            <button
+              key={n.entry.path}
+              className={`${styles.item}${n.entry.path === current ? ` ${styles.itemActive}` : ""}`}
+              style={{ paddingLeft: 12 + depth * 14 }}
+              disabled={!n.entry.valid}
+              title={n.entry.valid ? n.entry.path : n.entry.error}
+              onClick={() => onPick(n.entry!.path)}
+            >
+              {n.name}
+              {!n.entry.valid && <span className={styles.invalid}> ⚠ invalid</span>}
+            </button>
+          );
+        }
+        const folderOpen = isFolderOpen(n.path);
+        return (
+          <div key={`dir:${n.path}`}>
+            <button
+              className={styles.folder}
+              style={{ paddingLeft: 12 + depth * 14 }}
+              title={`${n.children.length} item${n.children.length === 1 ? "" : "s"}`}
+              onClick={() => onToggleFolder(n.path)}
+            >
+              <TreeCaret open={folderOpen} />
+              <span className={styles.folderName}>{n.name}</span>
+              <span className={styles.folderCount}>{n.children.length}</span>
+            </button>
+            {folderOpen && (
+              <TreeLevel
+                nodes={n.children}
+                depth={depth + 1}
+                onPick={onPick}
+                current={current}
+                isFolderOpen={isFolderOpen}
+                onToggleFolder={onToggleFolder}
+              />
+            )}
           </div>
-        )
-      )}
+        );
+      })}
     </>
   );
 }

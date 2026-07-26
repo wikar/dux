@@ -9,20 +9,20 @@
 
 .hint {
   font-size: 11px;
-  color: var(--surface2);
+  color: var(--th-faint);
   padding: 4px;
 }
 
 .error {
   font-size: 11px;
-  color: var(--red);
+  color: var(--th-danger);
   padding: 2px 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .loading {
-  color: var(--subtext0);
+  color: var(--th-muted);
 }
 
 .footer {
@@ -38,7 +38,7 @@
 .clear {
   background: none;
   border: none;
-  color: var(--th-text, var(--subtext0));
+  color: var(--th-muted);
   opacity: 0.75;
   font-size: 11px;
   cursor: pointer;
@@ -48,7 +48,7 @@
 
 .clear:hover {
   opacity: 1;
-  background: var(--surface1);
+  background: var(--th-border);
 }
 
 /* ── Buttons (value pills) ── */
@@ -74,21 +74,21 @@
   padding: 3px 10px;
   font-size: 11px;
   border-radius: 999px;
-  border: 1px solid var(--th-border, var(--surface1));
+  border: 1px solid var(--th-border);
   background: transparent;
-  color: var(--th-text, var(--text));
+  color: var(--th-text);
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
 }
 
 .pill:hover {
-  border-color: var(--blue);
+  border-color: var(--th-accent);
 }
 
 .pillActive {
-  background: var(--blue);
-  border-color: var(--blue);
-  color: var(--base);
+  background: var(--th-accent);
+  border-color: var(--th-accent);
+  color: var(--th-on-accent);
   font-weight: 600;
 }
 
@@ -96,8 +96,8 @@
   padding: 3px 10px;
   font-size: 11px;
   border-radius: 999px;
-  border: 1px dashed var(--th-border, var(--surface1));
-  color: var(--th-text, var(--subtext0));
+  border: 1px dashed var(--th-border);
+  color: var(--th-muted);
   opacity: 0.7;
 }
 
@@ -117,14 +117,14 @@
   padding: 4px 8px;
   font-size: 12px;
   background: transparent;
-  color: var(--th-text, var(--text));
-  border: 1px solid var(--th-border, var(--surface1));
+  color: var(--th-text);
+  border: 1px solid var(--th-border);
   border-radius: 4px;
   cursor: pointer;
 }
 
 .dropdownBtn:hover {
-  border-color: var(--blue);
+  border-color: var(--th-accent);
 }
 
 .dropdownLabel {
@@ -153,30 +153,31 @@
 .popup {
   position: fixed;
   z-index: 300;
-  background: var(--mantle);
-  border: 1px solid var(--surface1);
+  background: var(--th-bg);
+  border: 1px solid var(--th-border);
   border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   padding: 6px;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  color: var(--text);
+  color: var(--th-text);
 }
 
 .search {
   width: 100%;
-  background: var(--base);
-  border: 1px solid var(--surface1);
+  /* Inset against the popup, which is already --th-bg. */
+  background: var(--th-tint);
+  border: 1px solid var(--th-border);
   border-radius: 4px;
-  color: var(--text);
+  color: var(--th-text);
   font-size: 12px;
   padding: 4px 8px;
   outline: none;
 }
 
 .search:focus {
-  border-color: var(--blue);
+  border-color: var(--th-accent);
 }
 
 .optionList {
@@ -194,7 +195,7 @@
   text-align: left;
   background: none;
   border: none;
-  color: var(--text);
+  color: var(--th-text);
   font-size: 12px;
   padding: 4px 6px;
   border-radius: 4px;
@@ -202,24 +203,24 @@
 }
 
 .option:hover {
-  background: var(--surface1);
+  background: var(--th-border);
 }
 
 .checkbox {
   width: 14px;
   height: 14px;
   flex-shrink: 0;
-  border: 1px solid var(--surface2);
+  border: 1px solid var(--th-faint);
   border-radius: 3px;
   font-size: 10px;
   line-height: 12px;
   text-align: center;
-  color: var(--base);
+  color: var(--th-on-accent);
 }
 
 .checkboxOn {
-  background: var(--blue);
-  border-color: var(--blue);
+  background: var(--th-accent);
+  border-color: var(--th-accent);
 }
 
 .optionText {
@@ -244,7 +245,7 @@
 
 .rangeField span {
   font-size: 11px;
-  color: var(--th-text, var(--subtext0));
+  color: var(--th-muted);
   opacity: 0.8;
   min-width: 30px;
 }
@@ -253,18 +254,17 @@
   flex: 1;
   min-width: 0;
   background: transparent;
-  border: 1px solid var(--th-border, var(--surface1));
+  border: 1px solid var(--th-border);
   border-radius: 4px;
-  color: var(--th-text, var(--text));
+  color: var(--th-text);
   font-size: 12px;
   padding: 3px 6px;
   outline: none;
 }
 
 .rangeInput:focus {
-  border-color: var(--blue);
+  border-color: var(--th-accent);
 }
 
-.rangeInput::-webkit-calendar-picker-indicator {
-  filter: invert(0.8);
-}
+/* The calendar indicator, the picker panel and the scrollbars are the browser's
+   own; Canvas sets color-scheme from the theme's lightness so they follow it. */

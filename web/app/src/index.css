@@ -18,6 +18,40 @@
   --teal:     #94e2d5;
   --sky:      #89dceb;
   --yellow:   #f9e2af;
+
+  /* ── Dashboard theme tokens ──
+     Canvas overwrites the six base tokens on <html> from the resolved theme
+     cascade (defaults ← theme.json ← dashboard.theme). They live on the root
+     rather than the canvas element because the slicer dropdown and the filter
+     funnel portal to <body>, outside the canvas subtree.
+
+     Everything else derives, so an author configures a handful of colors and
+     the whole dashboard follows. Reach for a derived token before adding a
+     configurable one — and never for a --base/--surface/--text app token,
+     which is the dark app shell and does not follow the dashboard. */
+  --th-bg:         var(--base);
+  --th-el-bg:      color-mix(in srgb, var(--mantle) 82%, transparent);
+  --th-title-bg:   transparent;
+  --th-border:     var(--surface1);
+  --th-text:       var(--text);
+  --th-accent:     var(--blue);
+
+  /* Text tints mix toward the background, not toward transparent: an alpha
+     color makes 10px axis labels wash out under antialiasing, and it drifts
+     with whatever sits behind the element. These land within ~4/255 of
+     Catppuccin's own subtext0 and surface2 in both Latte and Mocha, so a
+     theme built from a flavor's Text + Base gets that flavor's muted ramp. */
+  --th-muted:      color-mix(in srgb, var(--th-text) 78%, var(--th-bg));
+  --th-faint:      color-mix(in srgb, var(--th-text) 45%, var(--th-bg));
+  /* Surface tints stay translucent — they tint the frosted element background
+     and whatever wallpaper is behind it, rather than painting over it. */
+  --th-tint:       color-mix(in srgb, var(--th-text) 10%, transparent);
+  --th-tint-hi:    color-mix(in srgb, var(--th-text) 18%, transparent);
+  /* Text drawn on an --th-accent fill. */
+  --th-on-accent:  var(--th-bg);
+  /* ponytail: one fixed danger hue rather than a seventh configurable token —
+     readable on both light and dark. Make it a token when someone asks. */
+  --th-danger:     #e64553;
 }
 
 * {

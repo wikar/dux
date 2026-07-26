@@ -21,7 +21,6 @@ const lineChart: VisualDef = {
     seriesSplit: true,
     sortByDims: true,
   },
-  cartesian: { insetTicks: true },
   options: [SHOW_EMPTY, LEGEND],
   series: (ctx) => {
     // Split series are dim values, never right-axis metrics. Left series are

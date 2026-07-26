@@ -49,9 +49,14 @@
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  border: 1px solid var(--exit-border);
-  background: color-mix(in srgb, var(--exit-text) 20%, transparent);
-  color: var(--exit-text);
+  /* Opaque, not a tint of the text color: this button is fixed to the viewport
+     and usually sits over the letterboxing around the scaled canvas, which is
+     app-shell dark whatever the dashboard theme is. A tinted glyph from a light
+     theme disappears there. A filled pill in the theme's own background/text
+     pair carries its own contrast onto either surface. */
+  border: 1px solid var(--th-border);
+  background: var(--th-bg);
+  color: var(--th-text);
   font-size: 12px;
   cursor: pointer;
   opacity: 0;
@@ -65,5 +70,6 @@
 }
 
 .exitFullscreenVisible:hover {
-  background: color-mix(in srgb, var(--exit-text) 30%, transparent);
+  background: color-mix(in srgb, var(--th-text) 15%, var(--th-bg));
+  border-color: var(--th-text);
 }

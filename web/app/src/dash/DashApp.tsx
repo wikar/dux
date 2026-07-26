@@ -7,7 +7,6 @@
 import { useEffect, useRef, useState } from "react";
 import styles from "./DashApp.module.css";
 import { fullscreenFromUrl, openDashboard, save, setFullscreen } from "./actions";
-import { useResolvedTheme } from "./data";
 import { nudgeElement, removeElement } from "./docOps";
 import { redo, undo, useDocStore, useUiStore } from "./store";
 import CollapsiblePanel from "../components/CollapsiblePanel";
@@ -31,7 +30,6 @@ export default function DashApp({ path, refreshCount, showHidden }: Props) {
   const fullscreen = useUiStore((s) => s.fullscreen);
   const conflict = useUiStore((s) => s.conflict);
   const doc = useDocStore((s) => s.doc);
-  const theme = useResolvedTheme(doc);
   const setPath = useUiStore((s) => s.setPath);
   const [exitVisible, setExitVisible] = useState(false);
   const exitTimer = useRef<number | null>(null);
@@ -122,11 +120,7 @@ export default function DashApp({ path, refreshCount, showHidden }: Props) {
   if (!path) return <Home />;
 
   return (
-    <div
-      className={styles.main}
-      style={{ "--exit-text": theme.text, "--exit-border": theme.border } as React.CSSProperties}
-      onPointerMove={fullscreen ? revealExit : undefined}
-    >
+    <div className={styles.main} onPointerMove={fullscreen ? revealExit : undefined}>
       {mode === "edit" && doc && (
         <CollapsiblePanel title="Schema" side="left" width={260} storageKey="dux.dash.schema">
           <SchemaTree bare refreshCount={refreshCount} showHidden={showHidden} />

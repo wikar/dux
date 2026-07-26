@@ -135,9 +135,9 @@
 }
 
 .message {
-  color: var(--subtext0);
+  color: var(--th-muted);
   font-size: 11px;
-  background: color-mix(in srgb, var(--th-el-bg, var(--base)) 75%, transparent);
+  background: color-mix(in srgb, var(--th-el-bg) 75%, transparent);
 }
 
 .loading {
@@ -145,15 +145,15 @@
   width: 20px;
   height: 20px;
   padding: 0;
-  border: 3px solid var(--surface1);
-  border-top-color: var(--blue);
+  border: 3px solid var(--th-border);
+  border-top-color: var(--th-accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
 
 .error {
-  color: var(--red);
-  background: rgba(17, 17, 27, 0.75);
+  color: var(--th-danger);
+  background: color-mix(in srgb, var(--th-bg) 80%, transparent);
   font-size: 12px;
 }
 

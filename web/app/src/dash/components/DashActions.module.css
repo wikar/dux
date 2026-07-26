@@ -138,13 +138,67 @@
   padding: 8px 12px;
 }
 
-.folder {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+/* Search row — sticks to the top while the tree scrolls under it. */
+.searchRow {
+  position: sticky;
+  top: -4px;
+  background: var(--mantle);
+  padding: 4px 8px 6px;
+  border-bottom: 1px solid var(--surface1);
+  margin-bottom: 4px;
+}
+
+.searchInput {
+  width: 100%;
+  background: var(--base);
+  border: 1px solid var(--surface1);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 4px 8px;
+  outline: none;
+}
+
+.searchInput:focus {
+  border-color: var(--blue);
+}
+
+.searchInput::placeholder {
   color: var(--subtext0);
-  padding: 5px 12px 3px;
+}
+
+/* Folder header — same idiom as a table header in the schema pane. */
+.folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 10px;
+  cursor: pointer;
+  text-align: left;
+  user-select: none;
+}
+
+.folder:hover {
+  background: var(--surface1);
+}
+
+.folderName {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folderCount {
+  font-size: 11px;
+  color: var(--subtext0);
+  flex-shrink: 0;
 }
 
 .item {
@@ -153,14 +207,15 @@
   text-align: left;
   background: none;
   border: none;
-  color: var(--text);
+  color: var(--subtext1);
   font-size: 12px;
-  padding: 5px 12px;
+  padding: 3px 12px;
   cursor: pointer;
 }
 
 .item:hover:not(:disabled) {
   background: var(--surface1);
+  color: var(--text);
 }
 
 .item:disabled {

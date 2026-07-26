@@ -22,15 +22,22 @@ import { formatCompactValue, formatValue } from "@dux/core";
 import type { MeasureFormat, QueryResponse } from "@dux/core";
 import { markKey, type CrossMark } from "../store";
 
-// Catppuccin chrome (literal values — SVG attributes can't resolve CSS vars).
-const GRID = "#313244";
-const AXIS = "#a6adc8";
+// Chart chrome from the dashboard theme. SVG presentation attributes are CSS
+// properties, so fill/stroke resolve var() the same as any style does.
+const GRID = "var(--th-border)";
+const AXIS = "var(--th-muted)";
+const TEXT = "var(--th-text)";
+// Opaque, unlike the frosted element background: a tooltip sits over the marks
+// it describes and has to stay legible against them.
 const TOOLTIP_STYLE = {
-  backgroundColor: "#181825",
-  border: "1px solid #45475a",
+  backgroundColor: "var(--th-bg)",
+  border: "1px solid var(--th-border)",
   borderRadius: 6,
   fontSize: 12,
+  color: TEXT,
 } as const;
+const TOOLTIP_LABEL_STYLE = { color: TEXT } as const;
+const LEGEND_STYLE = { fontSize: 11, color: TEXT } as const;
 
 /** One dim column→value pair carried by a chart row, so a clicked mark can be
  *  turned back into a cross-filter (the joined __x string loses this). */
@@ -133,9 +140,54 @@ function tooltipFormatter(formats: Formats) {
 
 const commonAxis = { stroke: AXIS, tick: { fill: AXIS, fontSize: 10 }, tickLine: false } as const;
 
-/** Numeric axes size to their widest tick instead of a fixed guess — a fixed
- *  width clips the label the moment a measure's format is wider than it. */
-const numericAxisWidth = { width: "auto", minWidth: 40 } as const;
+const TICK_FONT_PX = 10;
+/** Tick label → axis line, plus slack for a numeric tick landing slightly wider
+ *  than the extremes we measure (Recharts rounds the domain outward). */
+const TICK_GAP = 12;
+const AXIS_WIDTH_MIN = 40;
+/** A pathological category label takes plot width up to here, then wraps. */
+const AXIS_WIDTH_MAX = 220;
+
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+
+/** Width of the widest label at the tick font, in CSS pixels.
+ *
+ *  Not Recharts' width:"auto": that measures tick text with
+ *  getBoundingClientRect *inside* the canvas, which Canvas.tsx CSS-scales to
+ *  fit the viewport, and then applies the post-transform number as an
+ *  untransformed SVG unit. Every auto axis therefore comes out short by the
+ *  scale factor and its longest label overhangs the element border — visible
+ *  at any scale below 1, i.e. every window that isn't exactly canvas-sized.
+ *  A 2D context measures in CSS pixels whatever the ancestors do. */
+function axisWidth(labels: string[]): number {
+  if (measureCtx === undefined) measureCtx = document.createElement("canvas").getContext("2d");
+  if (!measureCtx) return AXIS_WIDTH_MAX;
+  measureCtx.font = `${TICK_FONT_PX}px ${getComputedStyle(document.body).fontFamily}`;
+  const widest = labels.reduce((w, s) => Math.max(w, measureCtx!.measureText(s).width), 0);
+  return Math.min(AXIS_WIDTH_MAX, Math.max(AXIS_WIDTH_MIN, Math.ceil(widest) + TICK_GAP));
+}
+
+/** Formatted extremes of the series plotted on one numeric axis — the widest
+ *  tick is one of them, give or take the domain rounding TICK_GAP absorbs. */
+function numericAxisWidth(data: ChartRow[], keys: string[], fmt: (v: number) => string): number {
+  let lo = 0;
+  let hi = 0;
+  for (const row of data) {
+    for (const k of keys) {
+      const v = row[k];
+      if (typeof v !== "number") continue;
+      lo = Math.min(lo, v);
+      hi = Math.max(hi, v);
+    }
+  }
+  return axisWidth([fmt(lo), fmt(hi)]);
+}
+
+/** Inner margin, in canvas pixels. Matches the dashboard's own 8px gap so a
+ *  chart's labels sit off the element border by the same amount its neighbours
+ *  do. The right edge needs no extra room for a half-overhanging end label —
+ *  edgeSafeTick anchors those inward instead. */
+const CHART_MARGIN = { top: 8, right: 8, bottom: 8, left: 8 } as const;
 
 /** Compact ISO timestamps on axes; the underlying value remains untouched for
  * tooltips and cross-filtering. Multiple dimension labels are handled too. */
@@ -151,24 +203,31 @@ const categoryAxis = {
   ...commonAxis,
   padding: { left: 12, right: 12 },
   minTickGap: 16,
+  // Kept even though edgeSafeTick draws the label: Recharts measures formatted
+  // ticks to decide which ones "auto" interval can fit.
   tickFormatter: formatCategoryTick,
 } as const;
 
-function lineCategoryTick({ x, y, payload, index, visibleTicksCount, className }: XAxisTickContentProps) {
-  const inset = index === 0 ? 8 : index === visibleTicksCount - 1 ? -8 : 0;
-  return (
-    <Text
-      className={className}
-      x={Number(x) + inset}
-      y={y}
-      fill={AXIS}
-      fontSize={10}
-      textAnchor="middle"
-      verticalAnchor="start"
-    >
-      {formatCategoryTick(payload.value)}
-    </Text>
-  );
+/** Bottom-axis tick that cannot cross the plot edge: the first and last labels
+ *  anchor inward instead of centering on their tick. A centered end label
+ *  overhangs by half its width, and how wide that is depends on the measure
+ *  format ("€160M" vs "€1,234.56"), so no fixed margin can cover every case. */
+function edgeSafeTick(format: (value: unknown) => string) {
+  return function EdgeSafeTick({ x, y, payload, index, visibleTicksCount, className }: XAxisTickContentProps) {
+    return (
+      <Text
+        className={className}
+        x={x}
+        y={y}
+        fill={AXIS}
+        fontSize={10}
+        textAnchor={index === 0 ? "start" : index === visibleTicksCount - 1 ? "end" : "middle"}
+        verticalAnchor="start"
+      >
+        {format(payload.value)}
+      </Text>
+    );
+  };
 }
 
 // ─── Cross-filter interaction (click a mark → filter the other visuals) ──────
@@ -264,8 +323,6 @@ interface CartesianProps {
   interaction?: Interaction;
   /** Category on the y axis (horizontal bars). */
   horizontal?: boolean;
-  /** Nudge the first/last category tick inward so labels stay inside. */
-  insetTicks?: boolean;
   /** Outline for a cross-filter-selected marker — the theme's text color, so
    *  the mark separates from its own line without borrowing a series color. */
   markStroke?: string;
@@ -333,14 +390,16 @@ export function CartesianChart({
   legend,
   interaction,
   horizontal,
-  insetTicks,
   markStroke,
 }: CartesianProps) {
   const split = interaction?.seriesDim; // when set, each series key is a dim value
   const click = interaction?.onMarkClick;
   const sel = interaction?.selectedKeys;
   const right = series.filter((s) => s.axis === "right");
-  const leftFmt = tickFormatter(formats, series.filter((s) => s.axis !== "right").map((s) => s.key));
+  const leftKeys = series.filter((s) => s.axis !== "right").map((s) => s.key);
+  const rightKeys = right.map((s) => s.key);
+  const leftFmt = tickFormatter(formats, leftKeys);
+  const rightFmt = tickFormatter(formats, rightKeys);
   // A horizontal layout has a single numeric axis, so series carry no axis id.
   const axisId = (s: SeriesSpec) => (horizontal ? undefined : s.axis ?? "left");
 
@@ -412,7 +471,7 @@ export function CartesianChart({
       <ComposedChart
         data={data}
         layout={horizontal ? "vertical" : "horizontal"}
-        margin={{ top: 8, right: 12, bottom: 4, left: 4 }}
+        margin={CHART_MARGIN}
         onClick={chartClick}
         // The whole plot is the target, so say so.
         style={chartClick ? { cursor: "pointer" } : undefined}
@@ -420,26 +479,38 @@ export function CartesianChart({
         <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={!horizontal} vertical={horizontal} />
         {horizontal ? (
           <>
-            <XAxis type="number" {...commonAxis} tickFormatter={leftFmt} />
-            <YAxis type="category" dataKey="__x" {...commonAxis} tickFormatter={formatCategoryTick} width={92} />
+            <XAxis
+              type="number"
+              {...commonAxis}
+              tickFormatter={leftFmt}
+              tick={edgeSafeTick((v) => leftFmt(Number(v)))}
+            />
+            <YAxis
+              type="category"
+              dataKey="__x"
+              {...commonAxis}
+              tickFormatter={formatCategoryTick}
+              width={axisWidth(data.map((r) => formatCategoryTick(r.__x)))}
+            />
           </>
         ) : (
           <>
-            <XAxis
-              type="category"
-              dataKey="__x"
-              {...categoryAxis}
-              {...(insetTicks ? { tick: lineCategoryTick } : {})}
+            <XAxis type="category" dataKey="__x" {...categoryAxis} tick={edgeSafeTick(formatCategoryTick)} />
+            <YAxis
+              yAxisId="left"
+              type="number"
+              {...commonAxis}
+              tickFormatter={leftFmt}
+              width={numericAxisWidth(data, leftKeys, leftFmt)}
             />
-            <YAxis yAxisId="left" type="number" {...commonAxis} tickFormatter={leftFmt} {...numericAxisWidth} />
             {right.length > 0 && (
               <YAxis
                 yAxisId="right"
                 orientation="right"
                 type="number"
                 {...commonAxis}
-                tickFormatter={tickFormatter(formats, right.map((s) => s.key))}
-                {...numericAxisWidth}
+                tickFormatter={rightFmt}
+                width={numericAxisWidth(data, rightKeys, rightFmt)}
               />
             )}
           </>
@@ -447,10 +518,11 @@ export function CartesianChart({
         <Tooltip
           formatter={tooltipFormatter(formats)}
           contentStyle={TOOLTIP_STYLE}
+          labelStyle={TOOLTIP_LABEL_STYLE}
           // Bars get a band cursor; a line/area hover would be obscured by it.
-          cursor={series.some((s) => s.kind === "bar") ? { fill: "#31324455" } : undefined}
+          cursor={series.some((s) => s.kind === "bar") ? { fill: "var(--th-tint)" } : undefined}
         />
-        {legend && <Legend wrapperStyle={{ fontSize: 11 }} />}
+        {legend && <Legend wrapperStyle={LEGEND_STYLE} />}
         {series.map(renderSeries)}
       </ComposedChart>
     </ResponsiveContainer>
@@ -498,9 +570,10 @@ export function DonutChartViz({ data, metric, palette, formats, legend, interact
             return [formatValue(v, fmt) || String(v), String(name ?? "")];
           }}
           contentStyle={TOOLTIP_STYLE}
+          labelStyle={TOOLTIP_LABEL_STYLE}
         />
-        {legend && <Legend wrapperStyle={{ fontSize: 11 }} />}
-        <text x="50%" y="50%" textAnchor="middle" dominantBaseline="middle" fill={AXIS} fontSize={13} fontWeight={600}>
+        {legend && <Legend wrapperStyle={LEGEND_STYLE} />}
+        <text x="50%" y="50%" textAnchor="middle" dominantBaseline="middle" fill={TEXT} fontSize={13} fontWeight={600}>
           {formatValue(total, fmt)}
         </text>
       </PieChart>

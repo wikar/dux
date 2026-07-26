@@ -949,16 +949,21 @@ const COLOR_TOKENS: { key: keyof ThemeTokens; label: string }[] = [
 // slider; elsewhere it degrades to the plain picker). Committed values are
 // normalised to #rrggbb, or rgba(r, g, b, a) only when alpha < 1.
 
-function parseColor(c: string): { r: number; g: number; b: number; a: number } | null {
+export function parseColor(c: string): { r: number; g: number; b: number; a: number } | null {
   const s = c.trim();
-  let m = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(s);
+  // Hex, forgiving about what a paste actually carries: the leading # is
+  // optional and 3/4-digit shorthand expands, so a value copied out of a
+  // palette page or a stylesheet lands as-is.
+  let m = /^#?([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(s);
   if (m) {
-    const n = parseInt(m[1], 16);
+    const h = m[1];
+    const wide = h.length > 4 ? h : [...h].map((d) => d + d).join("");
+    const n = parseInt(wide.slice(0, 6), 16);
     return {
       r: (n >> 16) & 255,
       g: (n >> 8) & 255,
       b: n & 255,
-      a: m[2] ? parseInt(m[2], 16) / 255 : 1,
+      a: wide.length === 8 ? parseInt(wide.slice(6), 16) / 255 : 1,
     };
   }
   m = /^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+%?))?\s*\)$/i.exec(s);
@@ -984,11 +989,21 @@ function toPickerValue(c: string): string {
 }
 
 /** Normalise a committed color: rgba only when the alpha channel is set. */
-function normalizeColor(v: string): string {
+export function normalizeColor(v: string): string {
   const p = parseColor(v);
   if (!p) return v;
   if (p.a >= 1) return `#${hex2(p.r)}${hex2(p.g)}${hex2(p.b)}`;
   return `rgba(${p.r}, ${p.g}, ${p.b}, ${Math.round(p.a * 1000) / 1000})`;
+}
+
+/** Re-emit a color with a different alpha, keeping its RGB. The native picker
+ *  only carries an alpha channel where the `alpha` attribute is supported,
+ *  which is still nowhere by default — so without this the only way to set one
+ *  is to hand-write rgba() into the text field. */
+export function withAlpha(color: string, a: number): string {
+  const p = parseColor(color);
+  if (!p || Number.isNaN(a)) return color;
+  return normalizeColor(`rgba(${p.r}, ${p.g}, ${p.b}, ${Math.min(1, Math.max(0, a))})`);
 }
 
 /** Marks a native color input as alpha-capable (no React typing for the
@@ -996,8 +1011,10 @@ function normalizeColor(v: string): string {
 const enableAlpha = (el: HTMLInputElement | null) => el?.setAttribute("alpha", "");
 
 /** One themable color: swatch + native picker (with alpha slider where
- *  supported) and a text field accepting any CSS color incl. alpha
- *  (#rrggbbaa, rgba(…)). Empty = inherit; both commit on blur. */
+ *  supported), a text field accepting any CSS color incl. alpha (#rrggbbaa,
+ *  rgba(…), bare or shorthand hex), and an alpha box so the channel is
+ *  reachable without knowing rgba() syntax. Empty = inherit; all commit on
+ *  blur. Picking an RGB in the native dialog keeps the current alpha. */
 function ColorField({
   value,
   placeholder,
@@ -1007,16 +1024,20 @@ function ColorField({
   placeholder: string;
   onCommit: (v: string) => void;
 }) {
+  const shown = value || placeholder;
+  const alpha = parseColor(shown)?.a ?? 1;
   return (
     <div className={styles.row}>
-      <span className={styles.swatch} style={{ background: value || placeholder }} title={value || `inherited: ${placeholder}`} />
+      <span className={styles.swatch} style={{ background: shown }} title={value || `inherited: ${placeholder}`} />
       <input
         type="color"
         ref={enableAlpha}
         className={styles.color}
         key={`p:${value}`}
-        defaultValue={toPickerValue(value || placeholder)}
-        onBlur={(e) => onCommit(normalizeColor(e.target.value))}
+        defaultValue={toPickerValue(shown)}
+        // The dialog reports #rrggbb where it has no alpha channel, which would
+        // silently reset a translucent token to opaque on every pick.
+        onBlur={(e) => onCommit(pickerHasAlpha ? normalizeColor(e.target.value) : withAlpha(e.target.value, alpha))}
       />
       <input
         className={styles.input}
@@ -1024,6 +1045,17 @@ function ColorField({
         defaultValue={value}
         placeholder={placeholder}
         onBlur={(e) => onCommit(normalizeColor(e.target.value.trim()))}
+      />
+      <input
+        className={styles.alpha}
+        type="number"
+        min={0}
+        max={1}
+        step={0.05}
+        title="Alpha — 0 = fully transparent, 0.5 = 50% transparent, 1 = fully opaque"
+        key={`a:${value}`}
+        defaultValue={Math.round(alpha * 100) / 100}
+        onBlur={(e) => onCommit(withAlpha(shown, parseFloat(e.target.value)))}
       />
     </div>
   );
@@ -1152,33 +1184,72 @@ function ThemeSection() {
   );
 }
 
+/** Series colors: a compact swatch grid, deliberately not a stack of full
+ *  ColorField rows — a palette runs to a dozen-plus entries and rows tall
+ *  enough to hold a hex box put the whole settings pane into a scrollbar.
+ *
+ *  Alpha is therefore one field for the whole palette rather than per entry:
+ *  series translucency is a look you pick once, not per colour. */
 function PaletteEditor({ colors, onChange }: { colors: string[]; onChange: (c: string[]) => void }) {
+  const alpha = parseColor(colors[0] ?? "")?.a ?? 1;
   return (
-    <div className={styles.swatchRow}>
-      {colors.map((c, i) => (
-        <span key={i} className={styles.swatchEdit}>
-          <input
-            type="color"
-            ref={enableAlpha}
-            className={styles.swatchInput}
-            key={`c:${i}:${c}`}
-            defaultValue={toPickerValue(c)}
-            title={c}
-            onBlur={(e) => onChange(colors.map((x, j) => (j === i ? normalizeColor(e.target.value) : x)))}
-          />
-          <button
-            className={styles.swatchRemove}
-            title="Remove color"
-            onClick={() => onChange(colors.filter((_, j) => j !== i))}
-          >
-            ×
-          </button>
-        </span>
-      ))}
-      <button className={styles.btn} onClick={() => onChange([...colors, "#89b4fa"])} title="Add color">
-        +
-      </button>
-    </div>
+    <>
+      <div className={styles.swatchRow}>
+        {colors.map((c, i) => (
+          <span key={i} className={styles.swatchEdit}>
+            <input
+              type="color"
+              ref={enableAlpha}
+              className={styles.swatchInput}
+              key={`c:${i}:${c}`}
+              defaultValue={toPickerValue(c)}
+              title={c}
+              // Keep this entry's alpha: the dialog reports #rrggbb wherever it
+              // has no alpha channel, which is everywhere by default.
+              onBlur={(e) =>
+                onChange(
+                  colors.map((x, j) => (j === i ? withAlpha(e.target.value, parseColor(x)?.a ?? 1) : x))
+                )
+              }
+            />
+            <button
+              className={styles.swatchRemove}
+              title="Remove color"
+              onClick={() => onChange(colors.filter((_, j) => j !== i))}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        <button
+          className={styles.btn}
+          onClick={() => onChange([...colors, withAlpha("#89b4fa", alpha)])}
+          title="Add color"
+        >
+          +
+        </button>
+      </div>
+
+      {/* Label beside the box, not above it: the pane is tight enough that one
+          more stacked label + field is what tips it into a scrollbar. */}
+      <label className={styles.alphaField}>
+        <span>Data color alpha</span>
+        <input
+          className={styles.alpha}
+          type="number"
+          min={0}
+          max={1}
+          step={0.05}
+          title="Applies to every data color — 0 = fully transparent, 0.5 = 50% transparent, 1 = fully opaque"
+          key={`pa:${alpha}`}
+          defaultValue={Math.round(alpha * 100) / 100}
+          onBlur={(e) => {
+            const a = parseFloat(e.target.value);
+            if (!Number.isNaN(a)) onChange(colors.map((c) => withAlpha(c, a)));
+          }}
+        />
+      </label>
+    </>
   );
 }
 

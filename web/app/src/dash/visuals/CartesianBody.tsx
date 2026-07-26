@@ -25,7 +25,6 @@ export default function CartesianBody({
       interaction={interaction}
       markStroke={textColor}
       horizontal={!!meta.cartesian?.orientable && viz.orientation === "horizontal"}
-      insetTicks={meta.cartesian?.insetTicks}
     />
   );
 }
