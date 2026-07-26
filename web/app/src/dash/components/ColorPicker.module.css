@@ -1,0 +1,36 @@
+/* Sketch panel, dressed in the builder palette.
+   The library sets its --sketch-* / --editable-input-* defaults inline on the
+   elements themselves, so overriding them needs !important — a stylesheet
+   declaration marked important beats an inline one, custom properties
+   included. */
+
+.pop {
+  position: fixed;
+  z-index: 1000;
+}
+
+.pop :global(.w-color-sketch) {
+  --sketch-background: var(--mantle) !important;
+  --sketch-box-shadow: 0 0 0 1px var(--surface1), 0 8px 24px rgba(0, 0, 0, 0.45) !important;
+  --sketch-swatch-box-shadow: 0 0 0 1px var(--surface1) inset !important;
+  --sketch-alpha-box-shadow: 0 0 0 1px var(--surface1) inset !important;
+  --sketch-swatch-border-top: 1px solid var(--surface1) !important;
+}
+
+.pop :global(.w-color-editable-input) {
+  --editable-input-label-color: var(--subtext0) !important;
+  --editable-input-color: var(--text) !important;
+  --editable-input-box-shadow: 0 0 0 1px var(--surface1) inset !important;
+}
+
+/* The hex/RGBA boxes are bare inputs with a box-shadow border — give them the
+   pane's own input background and focus ring. */
+.pop :global(.w-color-editable-input) input {
+  background: var(--base) !important;
+  border-radius: 3px;
+  outline: none;
+}
+
+.pop :global(.w-color-editable-input) input:focus {
+  box-shadow: 0 0 0 1px var(--blue) inset !important;
+}

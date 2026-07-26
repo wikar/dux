@@ -12,6 +12,7 @@
     "@dux/core": "workspace:*",
     "@tanstack/react-query": "^5.62.0",
     "@tanstack/react-virtual": "^3",
+    "@uiw/react-color-sketch": "^2.10.3",
     "highlight.js": "^11.11.1",
     "maplibre-gl": "^5.24.0",
     "react": "^19.1.0",

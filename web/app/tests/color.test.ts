@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { normalizeColor, parseColor, withAlpha } from "../src/dash/components/Settings";
+import { normalizeColor, parseColor, toHexa, withAlpha } from "../src/dash/components/color";
 
 test("parseColor accepts the hex shapes a paste actually carries", () => {
   // Canonical, and the same value without the # a copy often drops.
@@ -27,6 +27,13 @@ test("normalizeColor emits rgba only when alpha is set", () => {
   expect(normalizeColor("rgba(30, 102, 245, 1)")).toBe("#1e66f5");
   expect(normalizeColor("#1e66f580")).toBe("rgba(30, 102, 245, 0.502)");
   expect(normalizeColor("transparent")).toBe("transparent");
+});
+
+test("toHexa always hands the picker 8 digits", () => {
+  expect(toHexa("#1e66f5")).toBe("#1e66f5ff");
+  expect(toHexa("rgba(30, 102, 245, 0.5)")).toBe("#1e66f580");
+  // Unparseable → the neutral base, never an empty string the panel rejects.
+  expect(toHexa("transparent")).toBe("#1e1e2eff");
 });
 
 test("withAlpha keeps RGB and clamps the channel", () => {

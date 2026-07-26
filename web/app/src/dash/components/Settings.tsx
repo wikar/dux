@@ -1,6 +1,8 @@
 import { useState, type ComponentType } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import styles from "./ElementsPane.module.css";
+import ColorPicker from "./ColorPicker";
+import { normalizeColor, parseColor, withAlpha } from "./color";
 import Modal, { modalStyles } from "../../components/Modal";
 import DuxEditor from "../../components/DuxEditor";
 import FieldPill from "../../components/FieldPill";
@@ -944,77 +946,9 @@ const COLOR_TOKENS: { key: keyof ThemeTokens; label: string }[] = [
   { key: "text", label: "Text color" },
 ];
 
-// ── Color plumbing ──
-// The native picker gets the `alpha` attribute (Chromium 133+ shows an alpha
-// slider; elsewhere it degrades to the plain picker). Committed values are
-// normalised to #rrggbb, or rgba(r, g, b, a) only when alpha < 1.
-
-export function parseColor(c: string): { r: number; g: number; b: number; a: number } | null {
-  const s = c.trim();
-  // Hex, forgiving about what a paste actually carries: the leading # is
-  // optional and 3/4-digit shorthand expands, so a value copied out of a
-  // palette page or a stylesheet lands as-is.
-  let m = /^#?([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(s);
-  if (m) {
-    const h = m[1];
-    const wide = h.length > 4 ? h : [...h].map((d) => d + d).join("");
-    const n = parseInt(wide.slice(0, 6), 16);
-    return {
-      r: (n >> 16) & 255,
-      g: (n >> 8) & 255,
-      b: n & 255,
-      a: wide.length === 8 ? parseInt(wide.slice(6), 16) / 255 : 1,
-    };
-  }
-  m = /^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+%?))?\s*\)$/i.exec(s);
-  if (m) {
-    let a = 1;
-    if (m[4] !== undefined) a = m[4].endsWith("%") ? parseFloat(m[4]) / 100 : parseFloat(m[4]);
-    return { r: +m[1], g: +m[2], b: +m[3], a };
-  }
-  return null;
-}
-
-const hex2 = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
-
-const pickerHasAlpha =
-  typeof document !== "undefined" && "alpha" in document.createElement("input");
-
-/** Value for the native picker: #rrggbbaa when the picker supports alpha,
- *  plain #rrggbb otherwise. Unparseable colors fall back to a neutral base. */
-function toPickerValue(c: string): string {
-  const p = parseColor(c) ?? { r: 30, g: 30, b: 46, a: 1 };
-  const base = `#${hex2(p.r)}${hex2(p.g)}${hex2(p.b)}`;
-  return pickerHasAlpha ? base + hex2(p.a * 255) : base;
-}
-
-/** Normalise a committed color: rgba only when the alpha channel is set. */
-export function normalizeColor(v: string): string {
-  const p = parseColor(v);
-  if (!p) return v;
-  if (p.a >= 1) return `#${hex2(p.r)}${hex2(p.g)}${hex2(p.b)}`;
-  return `rgba(${p.r}, ${p.g}, ${p.b}, ${Math.round(p.a * 1000) / 1000})`;
-}
-
-/** Re-emit a color with a different alpha, keeping its RGB. The native picker
- *  only carries an alpha channel where the `alpha` attribute is supported,
- *  which is still nowhere by default — so without this the only way to set one
- *  is to hand-write rgba() into the text field. */
-export function withAlpha(color: string, a: number): string {
-  const p = parseColor(color);
-  if (!p || Number.isNaN(a)) return color;
-  return normalizeColor(`rgba(${p.r}, ${p.g}, ${p.b}, ${Math.min(1, Math.max(0, a))})`);
-}
-
-/** Marks a native color input as alpha-capable (no React typing for the
- *  attribute yet; unknown attributes are ignored by older browsers). */
-const enableAlpha = (el: HTMLInputElement | null) => el?.setAttribute("alpha", "");
-
-/** One themable color: swatch + native picker (with alpha slider where
- *  supported), a text field accepting any CSS color incl. alpha (#rrggbbaa,
- *  rgba(…), bare or shorthand hex), and an alpha box so the channel is
- *  reachable without knowing rgba() syntax. Empty = inherit; all commit on
- *  blur. Picking an RGB in the native dialog keeps the current alpha. */
+/** One themable color: the Sketch picker (hex field and alpha slider live
+ *  inside it) plus a text field that also accepts any CSS color and, left
+ *  empty, falls back to the inherited value. */
 function ColorField({
   value,
   placeholder,
@@ -1025,19 +959,13 @@ function ColorField({
   onCommit: (v: string) => void;
 }) {
   const shown = value || placeholder;
-  const alpha = parseColor(shown)?.a ?? 1;
   return (
     <div className={styles.row}>
-      <span className={styles.swatch} style={{ background: shown }} title={value || `inherited: ${placeholder}`} />
-      <input
-        type="color"
-        ref={enableAlpha}
+      <ColorPicker
         className={styles.color}
-        key={`p:${value}`}
-        defaultValue={toPickerValue(shown)}
-        // The dialog reports #rrggbb where it has no alpha channel, which would
-        // silently reset a translucent token to opaque on every pick.
-        onBlur={(e) => onCommit(pickerHasAlpha ? normalizeColor(e.target.value) : withAlpha(e.target.value, alpha))}
+        value={shown}
+        title={value || `inherited: ${placeholder}`}
+        onChange={onCommit}
       />
       <input
         className={styles.input}
@@ -1045,17 +973,6 @@ function ColorField({
         defaultValue={value}
         placeholder={placeholder}
         onBlur={(e) => onCommit(normalizeColor(e.target.value.trim()))}
-      />
-      <input
-        className={styles.alpha}
-        type="number"
-        min={0}
-        max={1}
-        step={0.05}
-        title="Alpha — 0 = fully transparent, 0.5 = 50% transparent, 1 = fully opaque"
-        key={`a:${value}`}
-        defaultValue={Math.round(alpha * 100) / 100}
-        onBlur={(e) => onCommit(withAlpha(shown, parseFloat(e.target.value)))}
       />
     </div>
   );
@@ -1197,20 +1114,12 @@ function PaletteEditor({ colors, onChange }: { colors: string[]; onChange: (c: s
       <div className={styles.swatchRow}>
         {colors.map((c, i) => (
           <span key={i} className={styles.swatchEdit}>
-            <input
-              type="color"
-              ref={enableAlpha}
+            <ColorPicker
               className={styles.swatchInput}
-              key={`c:${i}:${c}`}
-              defaultValue={toPickerValue(c)}
-              title={c}
-              // Keep this entry's alpha: the dialog reports #rrggbb wherever it
-              // has no alpha channel, which is everywhere by default.
-              onBlur={(e) =>
-                onChange(
-                  colors.map((x, j) => (j === i ? withAlpha(e.target.value, parseColor(x)?.a ?? 1) : x))
-                )
-              }
+              value={c}
+              // Alpha is the palette-wide field below, so a pick keeps this
+              // entry's channel rather than the one the panel returns.
+              onChange={(v) => onChange(colors.map((x, j) => (j === i ? withAlpha(v, alpha) : x)))}
             />
             <button
               className={styles.swatchRemove}

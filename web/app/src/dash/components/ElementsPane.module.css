@@ -146,18 +146,20 @@
   gap: 8px;
 }
 
+/* Swatch buttons that open the Sketch panel (see ColorPicker). The color is
+   the button's own background, so a translucent token reads against the
+   pane. */
 .color {
+  flex: none;
   width: 34px;
   height: 27px;
-  padding: 2px;
-  background: var(--base);
+  padding: 0;
   border: 1px solid var(--surface1);
   border-radius: 4px;
   cursor: pointer;
 }
 
-/* Alpha channel — the native picker only carries one where the `alpha`
-   attribute is supported, which is still nowhere by default. */
+/* Alpha channel for the whole data palette. */
 .alpha {
   flex: none;
   width: 52px;
@@ -328,8 +330,7 @@
 .swatchInput {
   width: 24px;
   height: 24px;
-  padding: 1px;
-  background: var(--base);
+  padding: 0;
   border: 1px solid var(--surface1);
   border-radius: 4px;
   cursor: pointer;
