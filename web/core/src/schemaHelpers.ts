@@ -7,7 +7,7 @@ export const isMetaTable = (name: string): boolean => {
 };
 
 // Resolve a possibly bare table name (e.g. "matches") to its fully-qualified
-// schema key (e.g. "bev.Sales") using the list of known table keys.
+// schema key (e.g. "analytics.Sales") using the list of known table keys.
 export const resolveTable = (name: string, tableKeys: string[]): string => {
   if (tableKeys.includes(name)) return name;
   const match = tableKeys.find((k) => k.endsWith("." + name));

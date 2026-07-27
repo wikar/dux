@@ -49,7 +49,7 @@ A measure is a named DUX expression bound to a home table:
 ```
 POST /measures
 {"table": "Sales", "name": "Total Revenue",
- "expression": "SUM(Sales[NetRevenue])",
+ "expression": "SUM(Sales[_NetSalesAmount])",
  "format": {"kind": "compact"}}
 ```
 

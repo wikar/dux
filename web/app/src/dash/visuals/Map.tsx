@@ -7,6 +7,7 @@
 import { lazy, Suspense } from "react";
 import styles from "../components/ElementBody.module.css";
 import { S, stroke } from "../glyphs";
+import { useMapLayerData } from "../mapData";
 import type { StaticBodyProps, VisualDef } from "./types";
 
 const MapBody = lazy(() => import("./MapBody"));
@@ -29,7 +30,10 @@ const mapVisual: VisualDef = {
   // The map paints its own surface edge to edge.
   bare: true,
   // Layers are fetched per layer rather than through the shared query
-  // pipeline, so the map carries filters without a `data` spec.
+  // pipeline, so the map carries filters without a `data` spec — and declares
+  // its own live-refresh probe. The hook lives in mapData, not the lazy body:
+  // the registry entry has to stay statically importable.
+  useFetching: (el) => useMapLayerData(el).loading,
   seed: () => ({
     query: { mode: "builder", filters: [] },
     viz: { layers: [{ id: "layer-1", kind: "circle" }] },

@@ -63,7 +63,7 @@ function tableFields(schema: Schema, tableName: string, showHidden?: boolean) {
         .filter((c) => showHidden || !c.Hidden)
         .sort((a, b) => a.Name.localeCompare(b.Name));
 
-  // Measures may be keyed by bare name ("Sales") or qualified ("bev.Sales").
+  // Measures may be keyed by bare name ("Sales") or qualified ("analytics.Sales").
   // Try both so qualified table names in the schema panel still find their measures.
   const dot = tableName.indexOf(".");
   const bare = dot >= 0 ? tableName.slice(dot + 1) : tableName;

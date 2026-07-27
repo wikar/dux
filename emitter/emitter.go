@@ -149,7 +149,7 @@ func (e *Emitter) emitTermBase(t *parser.Term) (string, error) {
 		// Single-quoted table name as a bare term (e.g. 'Order Lines' argument).
 		return e.sqlTable(semantic.StripSingleQuotes(t.QuotedIdent)), nil
 	case t.QualifiedIdent != "":
-		// db.table as a bare term (e.g. first argument of FILTER(bev.Sales, ...)).
+		// db.table as a bare term (e.g. first argument of FILTER(analytics.Sales, ...)).
 		return e.sqlTable(t.QualifiedIdent), nil
 	case t.Ident != "":
 		// Check scalar VAR substitution before treating as a table name.
@@ -1371,8 +1371,8 @@ func (e *Emitter) sqlTable(name string) string {
 }
 
 // sqlQualifiedIdent returns a DuckDB-safe SQL identifier for a qualified
-// table name with any number of segments (e.g. "bev.Sales" → bev.Sales,
-// "bev.sales.Customer" → bev.sales.customer, "my db.my table" → "my db"."my table").
+// table name with any number of segments (e.g. "analytics.Sales" → analytics.Sales,
+// "analytics.sales.Customer" → analytics.sales.customer, "my db.my table" → "my db"."my table").
 func sqlQualifiedIdent(name string) string {
 	parts := strings.Split(name, ".")
 	if len(parts) < 2 {

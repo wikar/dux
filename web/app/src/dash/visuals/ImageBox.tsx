@@ -41,6 +41,10 @@ const imageBox: VisualDef = {
   // The picture is the content; a title bar would crop it.
   titled: false,
   seed: () => ({ image: { fit: "contain" } }),
+  // Drops the element's background, border and radius so a logo blends into
+  // the canvas instead of sitting in a card. Read by the shell — any visual
+  // can offer it by declaring the same option.
+  options: [{ key: "transparent", label: "Transparent background", kind: "check", default: false }],
   Body: ImageBody,
 };
 

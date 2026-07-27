@@ -6,7 +6,14 @@ import { createPortal } from "react-dom";
 import styles from "./ElementBody.module.css";
 import { applySlicerSelection } from "../actions";
 import { downloadCsv } from "../csv";
-import { dropEmptyRows, splitElementFields, useAffectingFilters, useFormats, useResolvedTheme } from "../data";
+import {
+  dropEmptyRows,
+  splitElementFields,
+  useAffectingFilters,
+  useFormats,
+  useRefreshInterval,
+  useResolvedTheme,
+} from "../data";
 import { useElementData } from "../elementQuery";
 import { markKey, useDocStore, useUiStore } from "../store";
 import type { DashElement, ElementType, VizSettings } from "../types";
@@ -49,6 +56,37 @@ export function ClearButton({ el, className }: { el: DashElement; className: str
     >
       {eraserIcon}
     </button>
+  );
+}
+
+/** Live-refresh status light, rightmost in the header. It exists only while the
+ *  dashboard refreshes on an interval: a muted static ring at rest that spins
+ *  while a fetch is in flight. Refreshing a visual in place is what keeps the
+ *  body from being veiled by the loading overlay on every tick. */
+export function RefreshDot({ el }: { el: DashElement }) {
+  const def = VISUALS[el.type];
+  // Which query to watch is a registry fact — never a type branch here. Most
+  // visuals ride the shared element query; the ones that don't declare a probe.
+  const probe = def?.useFetching ?? (def?.data ? useElementFetching : undefined);
+  if (!probe) return null;
+  // Keyed on the type: re-typing an element in edit mode swaps the probe hook,
+  // which is only safe across a remount.
+  return <RefreshProbe key={el.type} el={el} use={probe} />;
+}
+
+function useElementFetching(el: DashElement): boolean {
+  return useElementData(el).loading;
+}
+
+function RefreshProbe({ el, use }: { el: DashElement; use: (el: DashElement) => boolean }) {
+  const live = useRefreshInterval(el.id) !== false;
+  const fetching = use(el);
+  if (!live) return null;
+  return (
+    <span
+      className={`${styles.refreshDot}${fetching ? ` ${styles.refreshDotOn}` : ""}`}
+      title={fetching ? "Refreshing…" : "Live refresh on"}
+    />
   );
 }
 
@@ -117,6 +155,7 @@ export function FunnelButton({ el, floating }: { el: DashElement; floating?: boo
 /** Hover controls for an element with no title bar to hang them in. */
 function FloatingActions({ el, def }: { el: DashElement; def: VisualDef }) {
   const controls = useDocStore((s) => s.doc?.controls);
+  const live = useRefreshInterval(el.id) !== false;
   const titleShown = el.title?.show !== false && !!el.title?.text;
   if (titleShown) return null;
   const funnel = !!def.controls?.funnel && controls?.funnel !== false;
@@ -124,20 +163,26 @@ function FloatingActions({ el, def }: { el: DashElement; def: VisualDef }) {
   // Clear is not document-toggleable: without a title bar this is the only
   // way back out of a selection.
   const clear = !!def.controls?.clear;
-  if (!funnel && !csv && !clear) return null;
+  if (!funnel && !csv && !clear && !live) return null;
   return (
     <div className={styles.floatingActions}>
-      {clear && <ClearButton el={el} className={styles.exportBtn} />}
-      {funnel && <FunnelButton el={el} floating />}
-      {csv && <CsvButton el={el} className={styles.exportBtn} />}
+      <ControlsBoundary el={el}>
+        {clear && <ClearButton el={el} className={styles.exportBtn} />}
+        {funnel && <FunnelButton el={el} floating />}
+        {csv && <CsvButton el={el} className={styles.exportBtn} />}
+        <RefreshDot el={el} />
+      </ControlsBoundary>
     </div>
   );
 }
 
-/** A throwing body must not reach the React root: an escaping error unmounts the
- *  whole SPA, leaving a blank page instead of one broken element. Keyed on the
- *  type so re-typing an element in edit mode gives it a fresh attempt. */
-class BodyBoundary extends Component<{ el: DashElement; children: ReactNode }, { error: Error | null }> {
+/** Nothing an element renders may reach the React root: an escaping error
+ *  unmounts the whole SPA, leaving a blank page instead of one broken element.
+ *  fallback turns the caught error into what takes its place. */
+export class ElementBoundary extends Component<
+  { fallback: (error: Error) => ReactNode; children: ReactNode },
+  { error: Error | null }
+> {
   state: { error: Error | null } = { error: null };
 
   static getDerivedStateFromError(error: Error) {
@@ -146,16 +191,32 @@ class BodyBoundary extends Component<{ el: DashElement; children: ReactNode }, {
 
   render() {
     const { error } = this.state;
-    if (!error) return this.props.children;
-    return <Placeholder type={this.props.el.type} note={error.message.split("\n")[0]} />;
+    return error ? this.props.fallback(error) : this.props.children;
   }
+}
+
+/** Header/floating controls run the same data hooks as the body (the CSV button
+ *  and the refresh dot both read the element query), so they can throw for the
+ *  same reasons — and they hang outside the body's boundary. Chrome that fails
+ *  is worth less than the visual it decorates: it disappears silently. */
+export function ControlsBoundary({ el, children }: { el: DashElement; children: ReactNode }) {
+  // Keyed on the type, like the body: re-typing an element in edit mode swaps
+  // which hooks run, and that is only safe across a remount.
+  return (
+    <ElementBoundary key={el.type} fallback={() => null}>
+      {children}
+    </ElementBoundary>
+  );
 }
 
 export default function ElementBody({ el }: { el: DashElement }) {
   return (
-    <BodyBoundary key={el.type} el={el}>
+    <ElementBoundary
+      key={el.type}
+      fallback={(error) => <Placeholder type={el.type} note={error.message.split("\n")[0]} />}
+    >
       <TypedBody el={el} />
-    </BodyBoundary>
+    </ElementBoundary>
   );
 }
 
@@ -213,7 +274,10 @@ function DataBody({ el, def }: { el: DashElement; def: VisualDef }) {
         <DataViz el={el} def={def} data={data} formats={formats} palette={theme.palette} textColor={theme.text} />
       )}
       {data && <FloatingActions el={el} def={def} />}
-      {loading && (
+      {/* First load only. A refresh keeps the previous result on screen
+          (keepPreviousData) — veiling it every interval would make a live
+          dashboard flash. The header dot carries the in-flight state. */}
+      {loading && !data && (
         <div className={styles.overlay}>
           <div className={styles.spinner} />
         </div>

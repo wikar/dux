@@ -104,6 +104,10 @@ export interface SlicerConfig {
   multi?: boolean;
   /** Max value pills shown by the buttons kind (default 20). */
   limit?: number;
+  /** Preset selection applied on open (a ?f= selection wins over it). It is
+   *  configuration, not session state: values missing from the data are
+   *  dropped from the live selection on load, never from the preset. */
+  default?: SlicerSelection;
   /** Optional metric that trims the option list to non-null rows: a measure,
    *  or a numeric column with an aggregate. */
   measure?: {
@@ -115,8 +119,8 @@ export interface SlicerConfig {
   };
 }
 
-/** A slicer's runtime selection (never stored in the document; shared via
- *  the ?f= deep-link parameter). */
+/** A slicer's runtime selection (shared via the ?f= deep-link parameter; the
+ *  document stores only the preset that seeds it — SlicerConfig.default). */
 export type SlicerSelection =
   | { kind: "values"; values: string[] }
   | { kind: "range"; from?: string; to?: string };

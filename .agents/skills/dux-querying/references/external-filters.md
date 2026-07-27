@@ -11,7 +11,7 @@ Content-Type: application/json
 
 ```json
 {
-  "query": "EVALUATE SUMMARIZECOLUMNS(Product[Category], \"Net Revenue\", SUM(Sales[NetRevenue]))",
+  "query": "EVALUATE SUMMARIZECOLUMNS(Product[Category], \"Net Sales\", SUM(Sales[_NetSalesAmount]))",
   "filters": [
     { "table": "Product", "column": "Category", "op": "in", "values": ["Water", "Soft Drinks"] },
     { "table": "Sales", "column": "Quantity", "op": ">=", "value": 10 }

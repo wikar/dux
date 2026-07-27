@@ -435,7 +435,8 @@ function SlicerSection({ el }: { el: DashElement }) {
           if (p.kind !== "column") return;
           updateElement(el.id, (x) => ({
             ...x,
-            slicer: { kind: "buttons" as SlicerKind, ...x.slicer, table: p.table, column: p.name, dataType: p.dataType },
+            // A new column invalidates the old selection and preset alike.
+            slicer: { kind: "buttons" as SlicerKind, ...x.slicer, table: p.table, column: p.name, dataType: p.dataType, default: undefined },
             // The column names the slicer — still manually renameable after.
             title: { ...x.title, text: p.name, show: x.title?.show ?? true },
           }));
@@ -454,7 +455,7 @@ function SlicerSection({ el }: { el: DashElement }) {
               onClick={() => {
                 updateElement(el.id, (x) => ({
                   ...x,
-                  slicer: { kind: "buttons" as SlicerKind, ...x.slicer, table: "", column: "", dataType: undefined },
+                  slicer: { kind: "buttons" as SlicerKind, ...x.slicer, table: "", column: "", dataType: undefined, default: undefined },
                   title: { ...x.title, text: TYPE_LABEL.slicer, show: x.title?.show ?? true },
                 }));
                 applySlicerSelection(el.id, null);
@@ -514,7 +515,9 @@ function SlicerSection({ el }: { el: DashElement }) {
         className={styles.input}
         value={s?.kind ?? "buttons"}
         onChange={(e) => {
-          setSlicer({ kind: e.target.value as SlicerKind });
+          // range/daterange and the value kinds take different selection
+          // shapes, so switching style drops both selection and preset.
+          setSlicer({ kind: e.target.value as SlicerKind, default: undefined });
           applySlicerSelection(el.id, null);
         }}
       >
@@ -552,6 +555,8 @@ function SlicerSection({ el }: { el: DashElement }) {
         </label>
       )}
 
+      {/* The preset filter has no control of its own: in edit mode the slicer's
+          live selection IS slicer.default, saved with the document. */}
       <IgnoreSlicers el={el} />
     </div>
   );

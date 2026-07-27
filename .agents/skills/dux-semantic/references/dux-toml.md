@@ -29,7 +29,7 @@ bidirectional  = true
 [[measure]]
 table      = "Sales"
 name       = "Total Revenue"
-expression = "SUM(Sales[NetRevenue])"
+expression = "SUM(Sales[_NetSalesAmount])"
 
 # Optional display format (structured enum, validated server-side)
 [measure.format]

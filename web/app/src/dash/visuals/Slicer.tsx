@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import styles from "./Slicer.module.css";
-import { applySlicerSelection } from "../actions";
+import { applySlicerSelection, dropStaleSlicerValues } from "../actions";
 import { useSlicerOptions } from "../data";
 import { S, stroke } from "../glyphs";
 import { useUiStore } from "../store";
@@ -18,6 +18,8 @@ const slicer: VisualDef = {
   ),
   size: { w: 200, h: 240 },
   controls: { clear: true },
+  // The slicer runs its own options query, not the shared element query.
+  useFetching: (el) => useSlicerOptions(el).loading,
   seed: () => ({ slicer: { table: "", column: "", kind: "buttons", multi: true } }),
   Body: ({ el }: StaticBodyProps) => <SlicerBody el={el} />,
 };
@@ -29,6 +31,8 @@ export default slicer;
 function SlicerBody({ el }: { el: DashElement }) {
   const s = el.slicer;
   const sel = useUiStore((st) => st.slicerSelections[el.id]);
+  const dropped = useUiStore((st) => st.presetDropped[el.id]);
+  useSlicerPreset(el);
 
   if (!s?.table || !s?.column) {
     return <div className={styles.hint}>Drop a column on the slicer in the settings pane</div>;
@@ -37,6 +41,11 @@ function SlicerBody({ el }: { el: DashElement }) {
   const kind = s.kind ?? "buttons";
   return (
     <div className={styles.root} onPointerDown={(e) => e.stopPropagation()}>
+      {dropped && dropped.length > 0 && (
+        <div className={styles.stale} title={`No longer in the data: ${dropped.join(", ")}`}>
+          {dropped.length} preset value{dropped.length === 1 ? "" : "s"} missing from the data
+        </div>
+      )}
       {kind === "range" || kind === "daterange" ? (
         <RangeSlicer el={el} sel={sel} date={kind === "daterange"} />
       ) : kind === "dropdown" ? (
@@ -46,6 +55,36 @@ function SlicerBody({ el }: { el: DashElement }) {
       )}
     </div>
   );
+}
+
+/** Check the selection this slicer was seeded with (from slicer.default or the
+ *  ?f= link) against the data, once — values the column no longer offers are
+ *  dropped from the live selection and reported in the body, so a preset can
+ *  never silently filter a dashboard by a category that has since been deleted
+ *  or renamed.
+ *
+ *  Option lists cascade, so a value can also go missing because another
+ *  slicer's preset excludes it: dropping it is still right — it selects nothing
+ *  in the current filter context — and the notice says which values went. */
+function useSlicerPreset(el: DashElement) {
+  const pending = useUiStore((st) => st.presetPending[el.id] ?? false);
+  const { options, loaded } = useSlicerOptions(el);
+  const range = el.slicer?.kind === "range" || el.slicer?.kind === "daterange";
+
+  useEffect(() => {
+    if (!pending) return;
+    // Range bounds are free scalars with no option list to check against.
+    if (range) return useUiStore.getState().resolveSlicerPreset(el.id, []);
+    // A failed options query leaves the selection alone — the slicer already
+    // shows the error, and a transient failure must not discard a preset.
+    if (!loaded) return;
+    const cur = values(useUiStore.getState().slicerSelections[el.id]);
+    dropStaleSlicerValues(
+      el.id,
+      cur.filter((v) => options.includes(v)),
+      cur.filter((v) => !options.includes(v))
+    );
+  }, [el.id, pending, range, loaded, options]);
 }
 
 const values = (sel: SlicerSelection | undefined): string[] =>
@@ -94,8 +133,12 @@ function ButtonsSlicer({ el, sel }: { el: DashElement; sel: SlicerSelection | un
         {options.length === 0 && !loading && !error && <span className={styles.hint}>No values</span>}
       </div>
       {error && <div className={styles.error}>{error.message}</div>}
-      {/* Clearing lives on the title bar's eraser control — see ClearButton. */}
-      <div className={styles.footer}>{loading && <span className={styles.loading}>…</span>}</div>
+      {/* Clearing lives on the title bar's eraser control — see ClearButton.
+          The footer only reports the first load: a refresh keeps the pills on
+          screen, and its in-flight state belongs to the header dot. */}
+      <div className={styles.footer}>
+        {loading && options.length === 0 && <span className={styles.loading}>…</span>}
+      </div>
     </div>
   );
 }

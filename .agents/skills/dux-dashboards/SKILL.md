@@ -74,7 +74,10 @@ Full endpoint semantics (ETags, conflicts, raw download):
 
 Twelve types. `bar`, `line`, `combo`, `area`, `donut`, `table`, `pivot`,
 `kpi` are **query-backed**; `map` runs a query per layer; `slicer` filters
-the others; `text` (markdown) and `image` (URL) are static.
+the others; `text` (markdown) and `image` (URL) are static. An `image` takes
+an external URL or a path relative to the server's dashboards root
+(`assets/logo.png`), served read-only from disk —
+[references/api.md](references/api.md) covers deploying them.
 
 A query-backed element in builder mode:
 
@@ -87,9 +90,9 @@ A query-backed element in builder mode:
     "mode": "builder",
     "fields": [
       { "table": "Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
-      { "table": "Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
+      { "table": "Sales", "name": "_NetSalesAmount", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
     ],
-    "sort": [{ "field": "NetRevenue", "dir": "desc" }],
+    "sort": [{ "field": "_NetSalesAmount", "dir": "desc" }],
     "topN": 5
   },
   "viz": { "stacked": false, "legend": true }
@@ -107,7 +110,7 @@ Field rules (order matters — dims before metrics):
 - `"mode": "raw"` with `"raw": "EVALUATE …"` runs hand-written DUX instead
   (first result column = x axis, rest = series). Display formats resolve by
   **output-column name**, so alias a measure to its own name
-  (`"NetRevenue", Sales[NetRevenue]`) to keep its format; a prettier alias
+  (`"NetSalesAmount", Sales[NetSalesAmount]`) to keep its format; a prettier alias
   renders the raw number. Query-local `DEFINE MEASURE` results have no format
   at all — round them in the expression if they need shaping.
 
@@ -117,13 +120,17 @@ rows/columns/totals), and slicer configuration:
 
 ## Slicers and cross-filtering
 
-A slicer element declares a column; its runtime **selections are never
-stored in the document** — they live in the page URL's `?f=` parameter,
-which is also the deep-link/share mechanism:
+A slicer element declares a column; its runtime **selections are not stored
+in the document** — they live in the page URL's `?f=` parameter, which is
+also the deep-link/share mechanism:
 
 ```
 /dash/sales/overview?f={"slicer-1":["Water"],"slicer-2":["B2C"]}
 ```
+
+What a slicer *starts* filtered by is configuration: `slicer.default` seeds
+the selection on open (`?f=` wins over it), and values missing from the data
+are dropped at load time — see [references/elements.md](references/elements.md).
 
 Selections fan out to every other element as external filters (AND
 semantics), slicers cascade each other's option lists, and

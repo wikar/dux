@@ -4,7 +4,8 @@
   flex-direction: column;
   background: var(--th-el-bg);
   border: 1px solid var(--th-border);
-  border-radius: 6px;
+  --el-radius: 6px;
+  border-radius: var(--el-radius);
   overflow: hidden;
   color: var(--th-text);
 }
@@ -17,9 +18,39 @@
   background: linear-gradient(var(--th-title-bg), var(--th-title-bg)), var(--th-el-bg);
 }
 
+/* Per-element chrome override (viz.transparent): the content blends straight
+   into the canvas, for logos and other art that shouldn't read as a card.
+   border-color rather than border: none — the global border-box reset keeps
+   the 1px band reserved, so toggling never shifts the content by a pixel.
+   The radius goes with it: the container clips its content, so rounding a
+   frame nobody can see would only shave the corners off the picture. It comes
+   back below wherever the border does. */
+.transparent {
+  background: transparent;
+  border-color: transparent;
+  border-radius: 0;
+}
+
+.transparent .titleBar {
+  background: transparent;
+  border-bottom-color: transparent;
+}
+
 .editing {
   cursor: move;
   user-select: none;
+}
+
+/* Invisible chrome means an invisible click target while authoring. Hovering
+   brings the border back — rounded, so it reads as the same frame every other
+   element wears — and so does selecting; view mode leaves it alone. */
+.editing.transparent:not(.selected):hover,
+.transparent.selected {
+  border-radius: var(--el-radius);
+}
+
+.editing.transparent:not(.selected):hover {
+  border-color: var(--th-border);
 }
 
 .selected {

@@ -47,6 +47,19 @@ func TestExplicitEmptyImportDirectoryIsDistinguishableFromDefault(t *testing.T) 
 	}
 }
 
+// An empty result set must still marshal columns and rows as arrays: clients
+// (the dashboard visuals among them) read rows as an array, and JSON null there
+// breaks every one of them.
+func TestEmptyQueryResultMarshalsAsArrays(t *testing.T) {
+	data, err := json.Marshal(newQueryResponse(nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); got != `{"columns":[],"rows":[]}` {
+		t.Errorf("empty result marshalled as %s", got)
+	}
+}
+
 func TestBodyLimit(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(strings.Repeat("x", maxRequestBodyBytes+1)))
 	_, err := readBody(httptest.NewRecorder(), req)

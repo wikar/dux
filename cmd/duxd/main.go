@@ -82,7 +82,7 @@ var (
 )
 
 func init() {
-	flag.Var(&importDir, "import-dir", "controlled Parquet inbox (default: <db-dir>/inbox; empty disables imports)")
+	flag.Var(&importDir, "import-dir", "controlled Parquet inbox (default: inbox/ alongside <db-dir>; empty disables imports)")
 }
 
 const maxRequestBodyBytes = 4 << 20
@@ -190,7 +190,7 @@ const openAPISpec = `{
     "/export": {
       "get": {
         "summary": "Export dux.toml",
-        "description": "Download all measures and relationships as a dux.toml file.",
+        "description": "Download the semantic model — relationships, measures, date tables, and hidden designations — as a dux.toml file.",
         "responses": {
           "200": {
             "description": "TOML file",
@@ -206,7 +206,7 @@ const openAPISpec = `{
     "/import": {
       "post": {
         "summary": "Import dux.toml",
-        "description": "Upload a dux.toml body. Replaces all measures and relationships in the metadata database.",
+        "description": "Upload a dux.toml body. Replaces the whole semantic model — relationships, measures, date tables, and hidden designations — in the metadata database.",
         "requestBody": {
           "required": true,
           "content": {
@@ -658,7 +658,11 @@ func main() {
 	}
 	resolvedImportDir := importDir.value
 	if !importDir.set {
-		resolvedImportDir = filepath.Join(runtime.DBDir, "inbox")
+		// A sibling of the state directory, never a child: the catalog and data
+		// files under --db-dir require a native local filesystem, while the
+		// inbox is explicitly allowed to be a mount or host bridge. Nesting the
+		// inbox inside --db-dir would force one filesystem choice on both.
+		resolvedImportDir = filepath.Join(filepath.Dir(filepath.Clean(runtime.DBDir)), "inbox")
 	}
 	ducklakeService, err := ducklake.NewService(ducklake.ServiceConfig{
 		Owner: runtime.Owner, Metadata: metaDB.DB(), DataPath: runtime.DataPath,
@@ -826,6 +830,19 @@ type queryResponse struct {
 	Rows    [][]any  `json:"rows"`
 }
 
+// newQueryResponse keeps the documented array shape for an empty result: a nil
+// Go slice marshals to JSON null, and clients that legitimately treat rows as
+// an array break on it.
+func newQueryResponse(cols []string, rows [][]any) queryResponse {
+	if cols == nil {
+		cols = []string{}
+	}
+	if rows == nil {
+		rows = [][]any{}
+	}
+	return queryResponse{Columns: cols, Rows: rows}
+}
+
 // writeJSON encodes v as JSON to w with the appropriate Content-Type.
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -912,7 +929,7 @@ func queryHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.Ha
 			return
 		}
 
-		writeJSON(w, queryResponse{Columns: cols, Rows: rows})
+		writeJSON(w, newQueryResponse(cols, rows))
 	}
 }
 

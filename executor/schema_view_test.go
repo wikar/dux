@@ -28,10 +28,10 @@ func setupSchemaViewDB(t *testing.T) (*sql.DB, *semantic.Schema) {
 		`CREATE SCHEMA sales`,
 		`CREATE TABLE sales.Customer (customer_id INTEGER, name VARCHAR)`,
 		`INSERT INTO sales.Customer VALUES (1, 'Alice'), (2, 'Bob')`,
-		`ATTACH ':memory:' AS bev`,
-		`CREATE SCHEMA bev.dim`,
-		`CREATE TABLE bev.dim.Region (region_id INTEGER, region VARCHAR)`,
-		`INSERT INTO bev.dim.Region VALUES (1, 'North'), (2, 'South'), (3, 'East')`,
+		`ATTACH ':memory:' AS analytics`,
+		`CREATE SCHEMA analytics.dim`,
+		`CREATE TABLE analytics.dim.Region (region_id INTEGER, region VARCHAR)`,
+		`INSERT INTO analytics.dim.Region VALUES (1, 'North'), (2, 'South'), (3, 'East')`,
 	}
 	for _, s := range ddl {
 		if _, err := db.Exec(s); err != nil {
@@ -67,8 +67,8 @@ func TestIntrospectViewsAndSchemas(t *testing.T) {
 	}
 
 	// A table in a non-default schema of an attached db is keyed db.schema.table.
-	if _, ok := schema.Tables["bev.dim.Region"]; !ok {
-		t.Fatalf("bev.dim.Region not introspected; keys: %v", tableKeys(schema))
+	if _, ok := schema.Tables["analytics.dim.Region"]; !ok {
+		t.Fatalf("analytics.dim.Region not introspected; keys: %v", tableKeys(schema))
 	}
 }
 
@@ -88,9 +88,9 @@ func TestQueryViewAndSchemaQualifiedTables(t *testing.T) {
 	}
 
 	// Three-part db.schema.table name.
-	_, rows = run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(bev.dim.Region[region], "N", COUNT(bev.dim.Region[region_id]))`)
+	_, rows = run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(analytics.dim.Region[region], "N", COUNT(analytics.dim.Region[region_id]))`)
 	if len(rows) != 3 {
-		t.Errorf("bev.dim.Region rows = %v", rows)
+		t.Errorf("analytics.dim.Region rows = %v", rows)
 	}
 }
 

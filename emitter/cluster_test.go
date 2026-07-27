@@ -25,7 +25,7 @@ func scArgs(t *testing.T, dux string) []*parser.Expr {
 
 func clusterSchema() *semantic.Schema {
 	s := semantic.NewSchema()
-	for _, name := range []string{"dates", "fact_sales", "fact_returns", "bev.Orders"} {
+	for _, name := range []string{"dates", "fact_sales", "fact_returns", "analytics.Orders"} {
 		s.Tables[name] = &semantic.Table{Name: name, Columns: map[string]*semantic.Column{}}
 	}
 	return s
@@ -57,9 +57,9 @@ func TestClusterMeasures(t *testing.T) {
 	})
 
 	t.Run("QualifiedAndBareNamesMerge", func(t *testing.T) {
-		// "Orders" resolves to schema key "bev.Orders" -- one cluster, not two.
+		// "Orders" resolves to schema key "analytics.Orders" -- one cluster, not two.
 		args := scArgs(t, `EVALUATE SUMMARIZECOLUMNS(dates[year],
-			"A", SUM(bev.Orders[amount]), "B", COUNT(Orders[id]))`)
+			"A", SUM(analytics.Orders[amount]), "B", COUNT(Orders[id]))`)
 		e := &Emitter{Schema: clusterSchema()}
 		clusters := e.planMeasures(args[1:], nil, true).clusters
 		if tableClusterCount(clusters) != 1 {

@@ -88,7 +88,7 @@ func InferJoinPath(schema *Schema, tables []string) (*JoinPath, error) {
 // Both FK directions (FromTable→ToTable and ToTable→FromTable) are traversed
 // so that fact→dimension and dimension→fact traversal both work.
 // Table name comparisons tolerate case differences and the presence or absence
-// of a database qualifier (e.g. "bev.Sales" matches "Sales" stored in the
+// of a database qualifier (e.g. "analytics.Sales" matches "Sales" stored in the
 // relationship).
 func bfsJoin(schema *Schema, from, to string) ([]JoinStep, error) {
 	if tableNamesMatch(from, to) {
@@ -123,7 +123,7 @@ func bfsJoin(schema *Schema, from, to string) ([]JoinStep, error) {
 				continue
 			}
 
-			// Resolve to the canonical schema key (e.g. bare "Sales" → "bev.Sales").
+			// Resolve to the canonical schema key (e.g. bare "Sales" → "analytics.Sales").
 			nextTable, err := resolveTableStrict(schema, nextRaw)
 			if err != nil {
 				return nil, err
@@ -164,7 +164,7 @@ func bfsJoin(schema *Schema, from, to string) ([]JoinStep, error) {
 // table, tolerating both case differences and the presence or absence of a
 // database qualifier. This allows relationships stored with bare names (e.g.
 // "Sales") to be traversed against schema tables keyed with a qualifier (e.g.
-// "bev.Sales").
+// "analytics.Sales").
 func tableNamesMatch(a, b string) bool {
 	al := strings.ToLower(a)
 	bl := strings.ToLower(b)

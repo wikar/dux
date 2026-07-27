@@ -48,7 +48,7 @@
         "multi": true,
         "measure": {
           "table": "Sales",
-          "name": "NetRevenue",
+          "name": "_NetSalesAmount",
           "kind": "column",
           "dataType": "DECIMAL(14,4)",
           "aggregate": "SUM"
@@ -169,7 +169,7 @@
         "fields": [
           {
             "table": "Sales",
-            "name": "NetRevenue",
+            "name": "_NetSalesAmount",
             "kind": "column",
             "dataType": "DECIMAL(14,4)",
             "aggregate": "SUM"
@@ -195,7 +195,7 @@
         "fields": [
           {
             "table": "Sales",
-            "name": "Orders",
+            "name": "OrderCount",
             "kind": "measure"
           }
         ]
@@ -219,7 +219,7 @@
         "fields": [
           {
             "table": "Sales",
-            "name": "AvgOrderValue",
+            "name": "NetSalesPerOrder",
             "kind": "measure"
           }
         ]
@@ -273,14 +273,14 @@
           },
           {
             "table": "Sales",
-            "name": "NetRevenue",
+            "name": "_NetSalesAmount",
             "kind": "column",
             "dataType": "DECIMAL(14,4)",
             "aggregate": "SUM"
           },
           {
             "table": "Sales",
-            "name": "NetRevenuePY",
+            "name": "NetSalesAmountPY",
             "kind": "measure"
           }
         ],
@@ -296,7 +296,7 @@
       },
       "viz": {
         "lines": [
-          "NetRevenuePY"
+          "NetSalesAmountPY"
         ],
         "lineY2": false,
         "legend": true
@@ -326,7 +326,7 @@
           },
           {
             "table": "Sales",
-            "name": "NetRevenue",
+            "name": "_NetSalesAmount",
             "kind": "column",
             "dataType": "DECIMAL(14,4)",
             "aggregate": "SUM"
@@ -334,7 +334,7 @@
         ],
         "sort": [
           {
-            "field": "NetRevenue",
+            "field": "_NetSalesAmount",
             "dir": "desc"
           }
         ],
@@ -369,7 +369,7 @@
           },
           {
             "table": "Sales",
-            "name": "NetRevenue",
+            "name": "_NetSalesAmount",
             "kind": "column",
             "dataType": "DECIMAL(14,4)",
             "aggregate": "SUM"
@@ -404,7 +404,7 @@
           },
           {
             "table": "Sales",
-            "name": "NetRevenue",
+            "name": "_NetSalesAmount",
             "kind": "column",
             "dataType": "DECIMAL(14,4)",
             "aggregate": "SUM"
@@ -412,7 +412,7 @@
         ],
         "sort": [
           {
-            "field": "NetRevenue",
+            "field": "_NetSalesAmount",
             "dir": "desc"
           }
         ],
@@ -449,7 +449,7 @@
           },
           {
             "table": "Sales",
-            "name": "NetRevenue",
+            "name": "_NetSalesAmount",
             "kind": "column",
             "dataType": "DECIMAL(14,4)",
             "aggregate": "SUM"

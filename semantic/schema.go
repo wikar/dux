@@ -239,7 +239,7 @@ func IntrospectDuckDB(db *sql.DB) (*Schema, error) {
 		// segment: "db.schema.table" (or "schema.table" for the primary db).
 		dbAlias := ""
 		if catalog != "memory" && catalog != "" {
-			// catalog holds the attachment alias (e.g. "bev") for attached databases,
+			// catalog holds the attachment alias (e.g. "analytics") for attached databases,
 			// and the filename stem for the primary. We distinguish them by checking
 			// whether the catalog matches the reserved primary marker stored in the
 			// schema — but since we don't know the primary name here, we key ALL

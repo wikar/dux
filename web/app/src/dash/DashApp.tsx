@@ -6,9 +6,9 @@
 // matter of adding a second Vite entry over src/dash + src/components.
 import { useEffect, useRef, useState } from "react";
 import styles from "./DashApp.module.css";
-import { fullscreenFromUrl, openDashboard, save, setFullscreen } from "./actions";
+import { fullscreenFromUrl, openDashboard, redo, save, setFullscreen, undo } from "./actions";
 import { nudgeElement, removeElement } from "./docOps";
-import { redo, undo, useDocStore, useUiStore } from "./store";
+import { useDocStore, useUiStore } from "./store";
 import CollapsiblePanel from "../components/CollapsiblePanel";
 import SchemaTree from "../components/SchemaTree";
 import Canvas from "./components/Canvas";

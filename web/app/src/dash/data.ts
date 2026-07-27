@@ -367,6 +367,9 @@ export interface SlicerOptionsState {
   options: string[];
   loading: boolean;
   error: Error | null;
+  /** The option list reflects a successful query — an empty list means the
+   *  column really has no values, not "not fetched yet". */
+  loaded: boolean;
 }
 
 /** Distinct values for a slicer, cascaded by the other slicers' filters and
@@ -430,7 +433,12 @@ export function useSlicerOptions(el: DashElement): SlicerOptionsState {
     return out;
   }, [q.data, s?.measure]);
 
-  return { options, loading: q.isFetching, error: (q.error as Error | null) ?? null };
+  return {
+    options,
+    loading: q.isFetching,
+    error: (q.error as Error | null) ?? null,
+    loaded: q.isSuccess && !q.isPlaceholderData,
+  };
 }
 
 // ─── Theme cascade (defaults ← theme.json ← dashboard.theme, per token) ──────

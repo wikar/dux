@@ -295,7 +295,7 @@ func (m *MetadataDB) SaveRelationship(fromTable, fromColumn, toTable, toColumn s
 }
 
 // SaveMeasure inserts or replaces a measure in the metadata DB.
-// expression should be the raw DUX expression string (e.g. "SUM(bev.Sales[NetRevenue])").
+// expression should be the raw DUX expression string (e.g. "SUM(analytics.Sales[_NetSalesAmount])").
 // format is the optional display format; nil clears any stored format.
 func (m *MetadataDB) SaveMeasure(tableName, name, expression string, format *MeasureFormat) error {
 	var formatJSON any // NULL when no format

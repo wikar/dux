@@ -85,6 +85,11 @@ export interface VisualMeta {
   series?: (ctx: SeriesContext) => SeriesSpec[];
   /** Transparent element container (the map paints its own surface). */
   bare?: boolean;
+  /** Live-refresh probe: is a fetch for this element in flight? Visuals with a
+   *  `data` spec are covered by the shared element query and need not declare
+   *  it; the ones running their own queries (slicer, map) do. Hits the same
+   *  cache entry the body already reads, so it costs no extra request. */
+  useFetching?: (el: DashElement) => boolean;
 }
 
 export interface StaticBodyProps {

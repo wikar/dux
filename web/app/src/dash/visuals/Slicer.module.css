@@ -21,6 +21,19 @@
   text-overflow: ellipsis;
 }
 
+/* Preset values that are no longer in the source data — advisory, so it shares
+   the danger hue but not the weight of a query error. */
+.stale {
+  font-size: 10px;
+  color: var(--th-danger);
+  padding: 1px 0 3px;
+  flex: none;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: help;
+}
+
 .loading {
   color: var(--th-muted);
 }

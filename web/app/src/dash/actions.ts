@@ -1,9 +1,9 @@
 // Cross-component actions: navigation, load, save, and conflict resolution.
 import { DashConflictError, encodePath, getDashboard, putDashboard } from "./api";
 import { navigate } from "../router";
-import { loadDoc, useDocStore, useUiStore } from "./store";
+import { loadDoc, updateElement, useDocStore, useUiStore } from "./store";
 import { newDashboard } from "./types";
-import type { SlicerSelection } from "./types";
+import type { Dashboard, SlicerSelection } from "./types";
 
 /** Navigate to a dashboard by identity (updates the /dash/<path> URL). */
 export function gotoDashboard(path: string) {
@@ -51,11 +51,103 @@ function selectionsToUrl(selections: Record<string, SlicerSelection>) {
   window.history.replaceState({}, "", url);
 }
 
-/** Set (or clear) one slicer's selection and mirror it into the deep link. */
-export function applySlicerSelection(id: string, sel: SlicerSelection | null) {
+/** Set (or clear) one slicer's selection: session state plus the deep link. */
+function syncSlicerSelection(id: string, sel: SlicerSelection | null) {
   const ui = useUiStore.getState();
   ui.setSlicerSelection(id, sel);
   selectionsToUrl(useUiStore.getState().slicerSelections);
+}
+
+/** A user changing a slicer. In edit mode the selection is also the element's
+ *  preset (slicer.default), so what the author leaves selected is what the
+ *  dashboard opens with — clearing it removes the preset. In view mode the
+ *  selection stays session state and the document is untouched. */
+export function applySlicerSelection(id: string, sel: SlicerSelection | null) {
+  const ui = useUiStore.getState();
+  // An explicit choice supersedes the seeded preset — never prune it after.
+  if (ui.presetPending[id]) ui.resolveSlicerPreset(id, []);
+  syncSlicerSelection(id, sel);
+  if (ui.mode === "edit") setSlicerPreset(id, sel);
+}
+
+// ─── Slicer presets (slicer.default) ─────────────────────────────────────────
+
+/** Write (or remove) one slicer's preset in the document — one undo step, and
+ *  it makes the dashboard dirty like any other authoring change. */
+function setSlicerPreset(id: string, sel: SlicerSelection | null) {
+  updateElement(id, (el) => {
+    if (!el.slicer) return el;
+    const { default: prev, ...rest } = el.slicer;
+    if (!sel) return prev ? { ...el, slicer: rest } : el;
+    if (JSON.stringify(prev) === JSON.stringify(sel)) return el;
+    return { ...el, slicer: { ...rest, default: sel } };
+  });
+}
+
+/** Drop seeded values the data no longer offers, and record which they were.
+ *  Session state only: the document keeps the preset, so a value that returns
+ *  to the source data (or an author who never saves) is unaffected. */
+export function dropStaleSlicerValues(id: string, kept: string[], dropped: string[]) {
+  if (dropped.length > 0) syncSlicerSelection(id, kept.length > 0 ? { kind: "values", values: kept } : null);
+  useUiStore.getState().resolveSlicerPreset(id, dropped);
+}
+
+/** The document's preset selections, keyed by slicer element id. */
+function presetSelections(doc: Dashboard | null): Record<string, SlicerSelection> {
+  const out: Record<string, SlicerSelection> = {};
+  for (const el of doc?.elements ?? []) {
+    const d = el.slicer?.default;
+    if (!d) continue;
+    if (d.kind === "values" && d.values.length > 0) out[el.id] = { kind: "values", values: d.values };
+    else if (d.kind === "range" && (d.from !== undefined || d.to !== undefined)) {
+      out[el.id] = { kind: "range", from: d.from, to: d.to };
+    }
+  }
+  return out;
+}
+
+// ─── Undo / redo ─────────────────────────────────────────────────────────────
+
+/** Step the document history, then realign the live selection of every slicer
+ *  whose preset the step actually changed — otherwise undoing a preset edit
+ *  leaves the slicer visibly selected while the document says otherwise.
+ *
+ *  Comparing before against after, rather than reseeding wholesale, is what
+ *  keeps an unrelated undo from disturbing a selection that came from a ?f=
+ *  link and has no preset of its own. A restored preset is queued for a fresh
+ *  data check: redo can bring back an older preset whose values are gone. */
+function stepHistory(step: () => void) {
+  const before = presetSelections(useDocStore.getState().doc);
+  step();
+  const after = presetSelections(useDocStore.getState().doc);
+  for (const id of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    if (JSON.stringify(before[id]) === JSON.stringify(after[id])) continue;
+    syncSlicerSelection(id, after[id] ?? null);
+    if (after[id]) useUiStore.getState().recheckSlicerPreset(id);
+    else useUiStore.getState().resolveSlicerPreset(id, []);
+  }
+}
+
+export function undo() {
+  stepHistory(() => useDocStore.temporal.getState().undo());
+}
+
+export function redo() {
+  stepHistory(() => useDocStore.temporal.getState().redo());
+}
+
+/** Seed the live selections for a freshly opened document: presets first, then
+ *  the ?f= deep link on top (an explicit link always wins). Every seeded slicer
+ *  is marked pending, so values that no longer exist in the data are dropped
+ *  once its option list arrives — a preset or a link must not silently filter a
+ *  dashboard by a category that has since been deleted or renamed. See
+ *  useSlicerPreset in visuals/Slicer. */
+export function seedSlicerSelections(doc: Dashboard) {
+  const all = { ...presetSelections(doc), ...selectionsFromUrl() };
+  useUiStore.getState().setSlicerSelections(all, Object.keys(all));
+  // Presets are not in the URL yet — mirror them so the link a viewer copies
+  // reproduces what they see.
+  selectionsToUrl(all);
 }
 
 // ─── Full-screen (chrome-less) view ──────────────────────────────────────────
@@ -92,8 +184,8 @@ export async function openDashboard(path: string) {
     }
     loadDoc(d.document);
     ui.opened(path, d.etag, JSON.stringify(d.document));
-    // Deep link / reload persistence: seed slicer selections from ?f=.
-    ui.setSlicerSelections(selectionsFromUrl());
+    // Presets from the document, then the ?f= deep link on top.
+    seedSlicerSelections(d.document);
   } catch (e) {
     if (useUiStore.getState().path !== path) return;
     loadDoc(null);

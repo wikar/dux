@@ -351,7 +351,9 @@ export default function MapBody({ el }: { el: DashElement }) {
       <div ref={containerRef} className={styles.canvas} />
       {unavailable && <div className={styles.message}>This browser could not create a WebGL context, so the map cannot render</div>}
       {!unavailable && !renderable && <div className={styles.message}>Add longitude and latitude to a layer</div>}
-      {loading && renderable && <div className={styles.loading} />}
+      {/* First load only — a refresh leaves the drawn layers alone; the header
+          dot carries its in-flight state. */}
+      {loading && renderable && !Object.values(byLayer).some(Boolean) && <div className={styles.loading} />}
       {error && <div className={styles.error}>{error.message}</div>}
       {legendGroups.length > 0 && (
         <div className={styles.legend}>

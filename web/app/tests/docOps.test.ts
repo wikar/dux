@@ -3,7 +3,7 @@ import { reorderFieldsInElement } from "../src/dash/docOps";
 import { loadDoc, useDocStore } from "../src/dash/store";
 import type { BuilderFieldRef, DashElement } from "../src/dash/types";
 
-const field = (name: string): BuilderFieldRef => ({ table: "bev.Sales", name, kind: "column" });
+const field = (name: string): BuilderFieldRef => ({ table: "analytics.Sales", name, kind: "column" });
 const element = (id: string, type: "table" | "pivot", fields: BuilderFieldRef[]): DashElement => ({
   id,
   type,

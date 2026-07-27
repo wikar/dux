@@ -112,7 +112,10 @@ interface Props {
 function PivotBody({ el, data, formats }: Props) {
   const raw = el.query?.mode === "raw";
   const viz = el.viz ?? {};
-  const { byKey, loading: totalsLoading } = usePivotTotals(el);
+  const { byKey, loading } = usePivotTotals(el);
+  // Only the first load is worth a caption: refreshed totals replace the shown
+  // ones in place, and the header dot already reports the fetch.
+  const totalsLoading = loading && !Object.values(byKey).some(Boolean);
 
   // Cross-filter: clicking a leaf row selects its full row-dim tuple (view
   // mode, builder queries — raw mode has no per-dim tables).

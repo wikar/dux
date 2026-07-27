@@ -4,8 +4,8 @@ import styles from "./DashActions.module.css";
 import Modal, { modalStyles } from "../../components/Modal";
 import TreeCaret from "../../components/TreeCaret";
 import { listDashboards, type DashEntry } from "../api";
-import { createDashboard, gotoDashboard, save, setFullscreen } from "../actions";
-import { redo, undo, useDirty, useTemporal, useUiStore } from "../store";
+import { createDashboard, gotoDashboard, redo, save, setFullscreen, undo } from "../actions";
+import { useDirty, useTemporal, useUiStore } from "../store";
 
 /** Top-bar actions while the Dash tab is active: dashboard picker, new,
  *  save, undo/redo, edit/view mode. Rendered inside the shared TopBar. */

@@ -12,7 +12,9 @@ import styles from "./Explorer.module.css";
 const CARD_WIDTH = 240;
 const GRID_COLS = 3;
 const GRID_COL_STEP = CARD_WIDTH + 80;
-const GRID_ROW_STEP = 360;
+// Rows clear a full-height card (its columns area caps out around 356) with room
+// to spare, so a line between vertically adjacent cards is not a stub.
+const GRID_ROW_STEP = 430;
 
 type Pos = { x: number; y: number };
 
@@ -31,7 +33,37 @@ function computeGridLayout(s: Schema): Record<string, Pos> {
 }
 
 type RelDrag = { fromTable: string; fromCol: string; x1: number; y1: number; x2: number; y2: number };
-type LineDatum = { key: string; d: string; x1: number; y1: number; x2: number; y2: number; bidirectional: boolean };
+type LineDatum = { key: string; label: string; d: string; x1: number; y1: number; x2: number; y2: number; bidirectional: boolean };
+
+// ─── Relationship line anchors ───────────────────────────────────────────────
+
+/** Card bounds in canvas space, with the centre precomputed. */
+type Rect = { left: number; top: number; right: number; bottom: number; cx: number; cy: number };
+
+type Side = "left" | "right" | "top" | "bottom";
+
+/** Where one end of a relationship line attaches: a side of the whole card. */
+type EndPoint = { table: string; side: Side; rect: Rect };
+
+const NORMAL: Record<Side, { x: number; y: number }> = {
+  left: { x: -1, y: 0 },
+  right: { x: 1, y: 0 },
+  top: { x: 0, y: -1 },
+  bottom: { x: 0, y: 1 },
+};
+
+/** Which side of `rect` faces `other` — the side a ray between the two centres
+ *  exits through. Both offsets are weighed against the card's own proportions so
+ *  a wide card does not spuriously prefer its top and bottom edges. */
+function sideToward(rect: Rect, other: Rect): Side {
+  const w = rect.right - rect.left;
+  const h = rect.bottom - rect.top;
+  const dx = other.cx - rect.cx;
+  const dy = other.cy - rect.cy;
+  return Math.abs(dx) * h > Math.abs(dy) * w
+    ? dx > 0 ? "right" : "left"
+    : dy > 0 ? "bottom" : "top";
+}
 type CardDrag = { table: string; startMouseX: number; startMouseY: number; startCardX: number; startCardY: number };
 
 export default function Explorer(props: { refreshCount?: number; showHidden?: boolean }) {
@@ -170,34 +202,15 @@ export default function Explorer(props: { refreshCount?: number; showHidden?: bo
   }
 
   // ── DOM-based relationship lines ───────────────────────────────────────────
-  // We defer DOM queries to requestAnimationFrame so the card DOM is painted
-  // before we call getBoundingClientRect. For columns inside a max-height
-  // scrollable card, dots scrolled out of view are clamped to the card bounds.
+  // Lines join whole cards, not individual columns: an end attaches to the side
+  // of the card that faces the other table. Which columns a line relates is in
+  // its tooltip and its edit dialog. We defer the DOM reads to
+  // requestAnimationFrame so the cards are painted before getBoundingClientRect.
   const [lineData, setLineData] = useState<LineDatum[]>([]);
   const [hoveredRel, setHoveredRel] = useState<string | null>(null);
   const hoveredRelRef = useRef<string | null>(null);
   hoveredRelRef.current = hoveredRel;
   const lineRaf = useRef(0);
-
-  /** Read a dot's canvas-local centre, clamped to its card's scrollable column area. */
-  function dotPos(dot: HTMLElement, canvasRect: DOMRect): Pos {
-    const dr = dot.getBoundingClientRect();
-    let cx = dr.left + dr.width / 2 - canvasRect.left;
-    let cy = dr.top + dr.height / 2 - canvasRect.top;
-
-    // Clamp to the scrollable columns container (not the full card with header)
-    const scrollArea = dot.closest("[data-card]")?.querySelector("[data-card-columns]") as HTMLElement | null;
-    if (scrollArea) {
-      const sr = scrollArea.getBoundingClientRect();
-      const areaTop = sr.top - canvasRect.top;
-      const areaBot = sr.bottom - canvasRect.top;
-      const areaLeft = sr.left - canvasRect.left;
-      const areaRight = sr.right - canvasRect.left;
-      cy = Math.max(areaTop, Math.min(areaBot, cy));
-      cx = Math.max(areaLeft, Math.min(areaRight, cx));
-    }
-    return { x: cx, y: cy };
-  }
 
   const computeLines = useCallback(() => {
     const s = schemaRef.current;
@@ -208,33 +221,91 @@ export default function Explorer(props: { refreshCount?: number; showHidden?: bo
     const tnames = Object.keys(s.Tables).filter((n) => !isMetaTable(n));
     const canvasRect = canvas.getBoundingClientRect();
 
-    const lines = rels.flatMap((rel) => {
+    const cardRect = (table: string): Rect | null => {
+      const el = canvas.querySelector(`[data-card="${CSS.escape(table)}"]`) as HTMLElement | null;
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      const left = r.left - canvasRect.left;
+      const top = r.top - canvasRect.top;
+      const right = r.right - canvasRect.left;
+      const bottom = r.bottom - canvasRect.top;
+      return { left, top, right, bottom, cx: (left + right) / 2, cy: (top + bottom) / 2 };
+    };
+
+    // Pass 1: pick the side of each card that faces the other one. A hidden
+    // table has no card to attach to, so its lines are dropped.
+    const pending = rels.flatMap((rel) => {
       const fromKey = resolveTable(rel.FromTable, tnames);
       const toKey = resolveTable(rel.ToTable, tnames);
+      const fromRect = cardRect(fromKey);
+      const toRect = cardRect(toKey);
+      if (!fromRect || !toRect) return [];
 
-      const fromDot = canvas.querySelector(
-        `[data-dot-table="${CSS.escape(fromKey)}"][data-dot-col="${CSS.escape(rel.FromColumn)}"]`
-      ) as HTMLElement | null;
-      const toDot = canvas.querySelector(
-        `[data-dot-table="${CSS.escape(toKey)}"][data-dot-col="${CSS.escape(rel.ToColumn)}"]`
-      ) as HTMLElement | null;
-      if (!fromDot || !toDot) return [];
+      return [{
+        rel, fromKey, toKey,
+        from: { table: fromKey, rect: fromRect, side: sideToward(fromRect, toRect) },
+        to: { table: toKey, rect: toRect, side: sideToward(toRect, fromRect) },
+      }];
+    });
 
-      const p1 = dotPos(fromDot, canvasRect);
-      const p2 = dotPos(toDot, canvasRect);
+    // Pass 2: every end lands on a card edge, so any two relationships reaching
+    // the same side of the same card would draw on top of each other. Count the
+    // ends sharing an edge and fan them out along it; a single occupant sits at
+    // the midpoint.
+    const edgeTotal = new Map<string, number>();
+    for (const p of pending) {
+      for (const e of [p.from, p.to]) {
+        const k = `${e.table}\0${e.side}`;
+        edgeTotal.set(k, (edgeTotal.get(k) ?? 0) + 1);
+      }
+    }
+    const edgeSeen = new Map<string, number>();
+    const place = (e: EndPoint): Pos => {
+      const k = `${e.table}\0${e.side}`;
+      const i = edgeSeen.get(k) ?? 0;
+      edgeSeen.set(k, i + 1);
+      const f = (i + 1) / ((edgeTotal.get(k) ?? 1) + 1);
+      const { rect, side } = e;
+      const alongY = rect.top + (rect.bottom - rect.top) * f;
+      const alongX = rect.left + (rect.right - rect.left) * f;
+      switch (side) {
+        case "left": return { x: rect.left, y: alongY };
+        case "right": return { x: rect.right, y: alongY };
+        case "top": return { x: alongX, y: rect.top };
+        case "bottom": return { x: alongX, y: rect.bottom };
+      }
+    };
 
-      const cxOff = Math.max(60, Math.abs(p2.x - p1.x) / 2);
-      const dir = p2.x >= p1.x ? 1 : -1;
+    // Pass 3: curve each line out of its end along that side's outward normal,
+    // so it leaves the card square to the edge it attaches to.
+    const lines = pending.map(({ rel, fromKey, toKey, from, to }) => {
+      const p1 = place(from);
+      const p2 = place(to);
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+
+      const n1 = NORMAL[from.side];
+      const n2 = NORMAL[to.side];
+      // The 60 gives short lines a visible curve, but it has to yield to the gap
+      // itself: stacked cards sit nearly flush, and a fixed floor there would
+      // throw the control points past both ends and kink the line.
+      const floor = Math.min(60, Math.hypot(dx, dy) / 2);
+      const off1 = Math.max(floor, Math.abs(n1.x * dx + n1.y * dy) / 2);
+      const off2 = Math.max(floor, Math.abs(n2.x * -dx + n2.y * -dy) / 2);
+      const c1 = { x: p1.x + n1.x * off1, y: p1.y + n1.y * off1 };
+      const c2 = { x: p2.x + n2.x * off2, y: p2.y + n2.y * off2 };
 
       // Encode full rel metadata in the key so we can delete by key alone
       const key = `${rel.FromTable}\0${rel.FromColumn}\0${rel.ToTable}\0${rel.ToColumn}`;
 
-      return [{
+      return {
         key,
-        d: `M${p1.x},${p1.y} C${p1.x + dir * cxOff},${p1.y} ${p2.x - dir * cxOff},${p2.y} ${p2.x},${p2.y}`,
+        // An edge-anchored end does not show which column it is, so name both.
+        label: `${fromKey}[${rel.FromColumn}] → ${toKey}[${rel.ToColumn}]`,
+        d: `M${p1.x},${p1.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${p2.x},${p2.y}`,
         x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y,
         bidirectional: rel.Bidirectional ?? false,
-      }];
+      };
     });
 
     setLineData(lines);
@@ -366,7 +437,9 @@ export default function Explorer(props: { refreshCount?: number; showHidden?: bo
                   const [ft, fc, tt, tc] = line.key.split("\0");
                   setRelEdit({ FromTable: ft, FromColumn: fc, ToTable: tt, ToColumn: tc, Bidirectional: line.bidirectional });
                 }}
-              />
+              >
+                <title>{line.label}</title>
+              </path>
             ))}
             {relDrag && (
               <line
@@ -393,7 +466,6 @@ export default function Explorer(props: { refreshCount?: number; showHidden?: bo
                 showHidden={props.showHidden}
                 onHeaderMouseDown={(e) => onHeaderMouseDown(name, e)}
                 onColDotMouseDown={(e, col) => onColDotMouseDown(name, col, e)}
-                onColumnsScroll={computeLines}
                 onPreview={() => setPreviewTable(name)}
                 onToggleDateTable={() => toggleDateTable(name)}
                 onSetDateColumn={(col) => setDateColumn(name, col)}

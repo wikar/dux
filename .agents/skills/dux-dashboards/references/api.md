@@ -58,11 +58,27 @@ GET /api/dash/assets/{path}    → the image (proper Content-Type; SVG served wi
 ```
 
 Images referenced in documents (`image.url`, `backgroundImage`) are external
-URLs, or `/api/dash/assets/...` paths that resolve to image files
-(.png/.jpg/.jpeg/.webp/.svg) placed **on disk under the dashboards root** —
-deploy them alongside the documents. There is deliberately no upload
-endpoint: assets are versioned and lifecycle-managed as files, like the
-dashboards themselves.
+URLs, or image files (.png/.jpg/.jpeg/.webp/.svg) placed **on disk under the
+dashboards root** — deploy them alongside the documents. There is
+deliberately no upload endpoint: assets are versioned and lifecycle-managed
+as files, like the dashboards themselves.
+
+The `{path}` is relative to the dashboards root, so a file in a subfolder
+carries that segment too — a common source of unexpected 404s:
+
+```
+dashboards/logo.png          →  GET /api/dash/assets/logo.png
+dashboards/assets/logo.png   →  GET /api/dash/assets/assets/logo.png
+```
+
+Any other extension is a 404 even when the file exists. Paths are matched
+case-insensitively. Assets are read from disk per request, so a file copied
+into a running server is served immediately — no restart, no rebuild, and
+nothing to invalidate.
+
+In a document, write the path **relative to the dashboards root** and let the
+client resolve it (`"url": "assets/logo.png"`). Values starting with `http:`,
+`https:`, `data:`, or `/` are used verbatim instead.
 
 ## Typical agent operations
 

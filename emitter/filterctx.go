@@ -424,7 +424,7 @@ func (e *Emitter) emitCalculateFastPath(innerExpr *parser.Expr, cm *calcModifier
 }
 
 // calcAlias returns the subquery alias for a table inside a cleared-context
-// CALCULATE subquery (e.g. "bev.Sales" → "__cal_bev_sales").
+// CALCULATE subquery (e.g. "analytics.Sales" → "__cal_analytics_sales").
 func calcAlias(name string) string {
 	return "__cal_" + sanitizeAliasSuffix(name)
 }

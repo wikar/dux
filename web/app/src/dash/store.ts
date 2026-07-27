@@ -54,13 +54,9 @@ export function updateElement(id: string, fn: (el: DashElement) => DashElement) 
   }));
 }
 
-export function undo() {
-  useDocStore.temporal.getState().undo();
-}
-
-export function redo() {
-  useDocStore.temporal.getState().redo();
-}
+// Stepping the history lives in actions.ts: undo/redo of a slicer preset has to
+// realign the live selection with it, which is selection state, not document
+// state. See undo/redo there.
 
 /** Reactive selector over the undo history (for enabling toolbar buttons). */
 export function useTemporal<T>(selector: (s: { pastStates: unknown[]; futureStates: unknown[] }) => T): T {
@@ -93,6 +89,12 @@ interface UiState {
   saving: boolean;
   /** Runtime slicer selections by element id (deep-linked via ?f=, not saved). */
   slicerSelections: Record<string, SlicerSelection>;
+  /** Slicer ids whose preset selection still has to be checked against the
+   *  data. Set on open, cleared per slicer by resolveSlicerPreset. */
+  presetPending: Record<string, true>;
+  /** Preset values that no longer exist in the data, per slicer id — dropped
+   *  from the live selection and reported in the slicer. */
+  presetDropped: Record<string, string[]>;
   /** Runtime chart cross-filter selections, keyed by the SOURCE element id.
    *  Transient — cleared on open/mode change/outside click, never saved. */
   crossFilters: Record<string, CrossMark[]>;
@@ -108,7 +110,12 @@ interface UiState {
   setSaveError: (msg: string | null) => void;
   setSaving: (saving: boolean) => void;
   setSlicerSelection: (id: string, sel: SlicerSelection | null) => void;
-  setSlicerSelections: (all: Record<string, SlicerSelection>) => void;
+  /** Replace every selection; pending marks the ids seeded from a preset. */
+  setSlicerSelections: (all: Record<string, SlicerSelection>, pending?: string[]) => void;
+  /** Record one slicer's preset check: which of its values were missing. */
+  resolveSlicerPreset: (id: string, dropped: string[]) => void;
+  /** Queue one slicer's preset for a fresh check against the data. */
+  recheckSlicerPreset: (id: string) => void;
   /** Toggle a clicked mark. additive (Ctrl/⌘) accumulates within a source and
    *  keeps other sources; a plain click replaces the whole selection. */
   toggleCrossMark: (sourceId: string, mark: CrossMark, additive: boolean) => void;
@@ -128,6 +135,8 @@ export const useUiStore = create<UiState>()((set) => ({
   saveError: null,
   saving: false,
   slicerSelections: {},
+  presetPending: {},
+  presetDropped: {},
   crossFilters: {},
   fullscreen: false,
 
@@ -142,6 +151,8 @@ export const useUiStore = create<UiState>()((set) => ({
       conflict: null,
       saveError: null,
       crossFilters: {},
+      presetPending: {},
+      presetDropped: {},
     }),
   setSlicerSelection: (id, sel) =>
     set((s) => {
@@ -150,7 +161,27 @@ export const useUiStore = create<UiState>()((set) => ({
       else slicerSelections[id] = sel;
       return { slicerSelections };
     }),
-  setSlicerSelections: (slicerSelections) => set({ slicerSelections }),
+  setSlicerSelections: (slicerSelections, pending = []) =>
+    set({
+      slicerSelections,
+      presetPending: Object.fromEntries(pending.map((id) => [id, true as const])),
+      presetDropped: {},
+    }),
+  recheckSlicerPreset: (id) =>
+    set((s) => {
+      const presetDropped = { ...s.presetDropped };
+      delete presetDropped[id];
+      return { presetPending: { ...s.presetPending, [id]: true }, presetDropped };
+    }),
+  resolveSlicerPreset: (id, dropped) =>
+    set((s) => {
+      const presetPending = { ...s.presetPending };
+      delete presetPending[id];
+      const presetDropped = { ...s.presetDropped };
+      if (dropped.length > 0) presetDropped[id] = dropped;
+      else delete presetDropped[id];
+      return { presetPending, presetDropped };
+    }),
   toggleCrossMark: (sourceId, mark, additive) =>
     set((s) => {
       if (!additive) {

@@ -178,6 +178,32 @@
         "kind":     { "enum": ["buttons", "list", "dropdown", "range", "daterange"] },
         "multi":    { "type": "boolean" },
         "limit":    { "type": "integer", "minimum": 1, "description": "Max value pills shown by the buttons kind (default 20)." },
+        "default": {
+          "description": "Preset selection applied when the dashboard opens. A ?f= selection for this slicer wins over it, and values that no longer exist in the data are dropped on load (the preset itself is kept).",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["kind", "values"],
+              "additionalProperties": false,
+              "properties": {
+                "kind":   { "const": "values" },
+                "values": { "type": "array", "minItems": 1, "maxItems": 1000, "items": { "type": "string" } }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["kind"],
+              "additionalProperties": false,
+              "description": "Range preset for the range/daterange kinds; at least one bound is required.",
+              "anyOf": [{ "required": ["from"] }, { "required": ["to"] }],
+              "properties": {
+                "kind": { "const": "range" },
+                "from": { "type": "string", "maxLength": 64 },
+                "to":   { "type": "string", "maxLength": 64 }
+              }
+            }
+          ]
+        },
         "measure": {
           "type": "object",
           "required": ["table", "name"],

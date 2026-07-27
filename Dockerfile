@@ -33,4 +33,4 @@ COPY --from=go-builder /app/dux .
 COPY --from=go-builder /root/.duckdb/extensions /root/.duckdb/extensions
 RUN mkdir -p /app/db/ducklake /app/inbox /app/dashboards
 EXPOSE 8080
-CMD ["./duxd", "--import-dir", "/app/inbox"]
+CMD ["./duxd"]

@@ -20,7 +20,7 @@ before it (reusable measures) and `ORDER BY` after it.
 
 ```dux
 DEFINE
-    MEASURE Sales[Avg Order Value] = AVERAGE(Sales[NetRevenue])
+    MEASURE Sales[Avg Order Value] = AVERAGE(Sales[_NetSalesAmount])
 
 EVALUATE
     SUMMARIZECOLUMNS(
@@ -52,14 +52,14 @@ EVALUATE
         Product[Category],
         TREATAS({"Water", "Soft Drinks"}, Product[Category]),
         "Orders",    COUNT(Sales[OrderId]),
-        "Avg Value", AVERAGE(Sales[NetRevenue])
+        "Avg Value", AVERAGE(Sales[_NetSalesAmount])
     )
 ```
 
 Filter arguments:
 - `TREATAS({v1, v2}, table[col])` — equality on a value set.
 - `FILTER(table, predicate)` — arbitrary predicate,
-  e.g. `FILTER(Sales, Sales[Quantity] >= 10)`.
+  e.g. `FILTER(Sales, Sales[_Quantity] >= 10)`.
 
 Top-N (always highest-first by the key expression):
 
@@ -75,10 +75,10 @@ Percent of total:
 EVALUATE
     SUMMARIZECOLUMNS(
         Product[Category],
-        "Net Revenue", SUM(Sales[NetRevenue]),
+        "Net Sales", SUM(Sales[_NetSalesAmount]),
         "Share",   DIVIDE(
-            SUM(Sales[NetRevenue]),
-            CALCULATE(SUM(Sales[NetRevenue]), ALL(Product))
+            SUM(Sales[_NetSalesAmount]),
+            CALCULATE(SUM(Sales[_NetSalesAmount]), ALL(Product))
         )
     )
 ```
@@ -87,7 +87,7 @@ Filter then aggregate with a VAR:
 
 ```dux
 EVALUATE
-    VAR discounted = FILTER(Sales, Sales[DiscountRate] > 0)
+    VAR discounted = FILTER(Sales, Sales[_DiscountRate] > 0)
     RETURN SUMMARIZECOLUMNS(
         discounted[VenueKey],
         "Orders", COUNT(discounted[OrderId])

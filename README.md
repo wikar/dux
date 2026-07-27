@@ -1,14 +1,30 @@
 # DUX
 
-An analytical query language and semantic modelling platform built on top of DuckDB. Syntax inspired by [DAX](https://learn.microsoft.com/en-us/dax/dax-overview) — column references, named measures, filter context, and iterator functions — without requiring a cube engine.
+A **semantic stack** for analytics: durable lakehouse storage, a semantic model, a DAX-inspired query language, a server, and dashboards — one Go binary on top of DuckDB. Query syntax follows [DAX](https://learn.microsoft.com/en-us/dax/dax-overview) — column references, named measures, filter context, and iterator functions — without requiring a cube engine.
 
-DUX is more than a query interpreter. It ships with:
+Each layer has one owner and one storage path:
 
-- **A semantic model** — tables, relationships, and named measures are declared once in `dux.toml` or managed at runtime, and are automatically applied to every query.
-- **An HTTP server (`duxd`)** — exposes a REST API for executing queries, inspecting the schema, and managing measures and relationships. Embeds the DUX UI (query builder, model explorer, and dashboards) and a Scalar API reference.
-- **Dashboards (Dash)** — canvas dashboards built from DUX-backed elements, stored as plain JSON files and editable in the UI or through the API. See [Dashboards](#dashboards-dash).
-- **A CLI (`dux`)** — run one-off queries against the DUX semantic model directly from the terminal.
-- **Agent skills** — packaged instructions for AI agents (querying, modelling, dashboard building) under [`.agents/skills/`](.agents/skills/), zipped onto every release.
+| Layer | Component | Owns |
+|-------|-----------|------|
+| **Storage** | DuckLake | Durable analytical data as Parquet, with a transactional SQLite catalog and time-travel snapshots. DuckDB is the transient embedded engine that reads it. |
+| **Semantics** | `dux.sqlite` / `dux.toml` | Relationships, named measures and their formats, the designated date table, and hidden objects — applied to every query without a restart. |
+| **Language** | DUX | `parse → resolve → emit DuckDB SQL → execute`. Join inference, filter and row context, time intelligence, and multi-table stitched codegen. |
+| **Service** | `duxd` | A REST API over query, schema, semantic model, and DuckLake operations, plus controlled Parquet imports, schema refresh, and scheduled maintenance. |
+| **Presentation** | Dash | Canvas dashboards of DUX-backed visuals, stored as plain JSON files that diff, version, and deploy like code. |
+
+Three clients sit on top: the embedded **web UI** (query builder, model Explorer, dashboard designer), the **`dux` CLI** for one-off queries, and **agent skills** — packaged instructions for AI agents (querying, modelling, dashboards, DuckLake operations) under [`.agents/skills/`](.agents/skills/), zipped onto every release.
+
+```
+    UI · dux CLI · agent skills · your HTTP client
+                       │
+                   duxd (REST)
+      ┌────────────────┼────────────────┐
+    Dash        DUX pipeline      DuckLake ops
+  dashboards/    ↑ semantic model   imports · maintenance
+   (JSON)          dux.sqlite            │
+                                     DuckLake
+                             ducklake.sqlite + Parquet
+```
 
 ## Quick start with Docker
 
@@ -20,7 +36,9 @@ docker run -d -p 8080:8080 \
   ghcr.io/wikar/dux:latest
 ```
 
-`/app/db` contains DUX-owned state and is the only required volume; use a Docker named volume or native local Linux path. `/app/inbox` is an optional delivery mount and may be a host bridge: data pipelines publish completed Parquet files there and ask DUX to import them. Mount `/app/dashboards` to persist dashboard definitions. Version that mounted directory from the host or a dedicated Git sidecar; Git is not included in the DUX image. Set `DUX_DASH=0` if dashboards are not needed.
+`/app/db` contains DUX-owned state and is the only required volume; use a Docker named volume or native local Linux path. `/app/inbox` is the default inbox — a sibling of `/app/db`, never a child, so the two can be mounted separately. It is an optional delivery mount and may be a host bridge: data pipelines publish completed Parquet files there and ask DUX to import them. Mount `/app/dashboards` to persist dashboard definitions. Version that mounted directory from the host or a dedicated Git sidecar; Git is not included in the DUX image. Set `DUX_DASH=0` if dashboards are not needed.
+
+> **`duxd` has no authentication.** Every endpoint, including the mutating semantic-model, import, and maintenance ones, assumes a trusted network. Do not publish the port to an untrusted network.
 
 ## Requirements
 
@@ -87,11 +105,27 @@ db/                  DUX-owned state
   dux.sqlite         Measures, relationships, and operation history
   ducklake.sqlite    DuckLake catalog
   ducklake/          DuckLake-managed Parquet files
-  inbox/             Inbox for controlled Parquet imports
+inbox/               Inbox for controlled Parquet imports
 dashboards/          Dashboard documents (one JSON file each) + theme.json
-dux.toml             Portable export of measures and relationships
+dux.toml             Portable export of the semantic model
 samples/             Example .dux queries
+  dux-sample/        Sample data: Parquet, dux.toml, dashboard, asset, installers
 .agents/skills/      Agent skills (packaged per release)
+```
+
+Source layout follows the pipeline stages:
+
+```
+parser/              Grammar and AST
+semantic/            Schema, measures, relationships, resolution, join inference
+emitter/             Resolved AST → DuckDB SQL
+executor/            SQL execution and tabular results
+internal/ducklake/   DuckLake owner/query runtimes, imports, maintenance
+internal/bootstrap/  Shared CLI/server startup and schema refresh
+dash/                CGO-free dashboard file store and HTTP handlers
+web/core/            Framework-independent TS types, API client, query generation
+web/app/             The React SPA (embedded into duxd at build time)
+cmd/dux, cmd/duxd    CLI and server entry points
 ```
 
 `duxd` creates and owns one DuckLake instance. Durable analytical data is Parquet, its transactional catalog is `ducklake.sqlite`, and DUX semantic metadata is isolated in `dux.sqlite`. DuckDB remains the transient embedded query engine; no native `.duckdb` database file is opened or watched.
@@ -128,6 +162,7 @@ The CLI is a read-only DuckLake client. Start `duxd` once to initialize an empty
 | `--toml` | `dux.toml` | Load measures and relationships from a `dux.toml` file |
 | `--export` | — | Write current schema to a `dux.toml` file and exit |
 | `--import` | — | Import a `dux.toml` into the metadata DB and exit |
+| `--version` | — | Print version and exit |
 
 ## Server (`duxd`)
 
@@ -148,7 +183,7 @@ Listens on `:8080` (`--listen`).
 | `--dux` | `<db-dir>/dux.sqlite` | DUX semantic metadata SQLite path |
 | `--ducklake-catalog` | `<db-dir>/ducklake.sqlite` | DuckLake SQLite catalog path |
 | `--ducklake-data` | `<db-dir>/ducklake` | DuckLake Parquet directory |
-| `--import-dir` | `<db-dir>/inbox` | Controlled Parquet inbox; an explicitly empty value disables imports |
+| `--import-dir` | `inbox` alongside `<db-dir>` | Controlled Parquet inbox; an explicitly empty value disables imports |
 | `--import-max-files` | `100` | Maximum files in one import request |
 | `--import-timeout` | `30m` | Maximum runtime for one import |
 | `--schema-refresh-interval` | `30s` | Poll for DuckLake DDL changes (`0` disables) |
@@ -180,17 +215,50 @@ credentials and remotes.
 
 Capabilities:
 
-- **Elements**: bar / line / combo / area / donut charts (with stacking, dual axes, and a series-split "Series by" well), tables (virtualized, sortable), pivot/matrix with query-backed subtotals (correct for non-additive measures), KPI cards, markdown text, and images. Element types hot-swap with their field wells remapped.
+- **Elements**: bar / line / combo / area / donut charts (with stacking, dual axes, and a series-split "Series by" well), tables (virtualized, sortable), pivot/matrix with query-backed subtotals (correct for non-additive measures), KPI cards, maps (MapLibre, lazy-loaded so dashboards without one never pay for the engine), markdown text, and images. Element types hot-swap with their field wells remapped.
 - **Slicers & cross-filtering**: buttons / dropdown / range / date-range slicers filter every element (AND semantics) and cascade each other's option lists. Selections live in the URL's `?f=` parameter — a shareable deep link — and `?fullscreen` gives a chrome-less wall-display view. In view/fullscreen mode, clicking a bar / line point / donut slice / table row cross-filters the other visuals and highlights the selection (Ctrl/⌘ to multi-select, click empty canvas to clear). A header funnel shows every filter affecting each visual. Per-element CSV export.
 - **Themes**: all styling flows from theme tokens (palette, backgrounds, borders, text, font — every color with alpha) cascading defaults ← `dashboards/theme.json` ← per-dashboard overrides.
 - **Live refresh**: per-dashboard interval with a server-side floor and per-element stagger.
-- **API-first**: everything the UI does goes through `/api/dash` — list/get/put/delete documents with ETag concurrency (`If-Match: *` for unconditional agent writes, `?raw=1` for verbatim download), theme, and the document JSON schema at `GET /api/dash/schema.json`. Every PUT is schema-validated server-side. Images are referenced by URL; image files placed in the `dashboards/` directory are served read-only at `/api/dash/assets/...` (no uploads — assets are versioned and deployed like the documents).
+- **API-first**: everything the UI does goes through `/api/dash` — list/get/put/delete documents with ETag concurrency (`If-Match: *` for unconditional agent writes, `?raw=1` for verbatim download), theme, and the document JSON schema at `GET /api/dash/schema.json`. Every PUT is schema-validated server-side.
 
 ```sh
 # Publish a dashboard from a file (create-or-overwrite)
 curl -X PUT http://localhost:8080/api/dash/dashboards/sales/overview \
   -H 'If-Match: *' --data-binary @overview.json
 ```
+
+### Assets
+
+Images — logos, background art — are ordinary files placed under the
+dashboards directory and served read-only. The path after
+`/api/dash/assets/` is relative to that directory, so a file in a subfolder
+carries the subfolder segment too:
+
+```
+dashboards/logo.png          →  GET /api/dash/assets/logo.png
+dashboards/assets/logo.png   →  GET /api/dash/assets/assets/logo.png
+dashboards/sales/bg.webp     →  GET /api/dash/assets/sales/bg.webp
+```
+
+Served extensions are `.png`, `.jpg`, `.jpeg`, `.webp`, and `.svg`; any other
+file under `dashboards/` returns 404 even when it exists, and SVG is served
+with `nosniff` and a no-script CSP. Paths are matched case-insensitively.
+
+Assets are read from disk per request, so **adding one to a running server
+needs no restart and no rebuild** — copy the file in and it is served on the
+next request. (The UI itself is different: it is embedded into `duxd` at Go
+build time and does require a rebuild.) There is deliberately no upload
+endpoint — assets are versioned and deployed as files, like the documents.
+
+To use an asset, set an element's `image.url` — or the theme's
+`backgroundImage` — to the path relative to the dashboards directory:
+
+```json
+{ "image": { "url": "assets/logo.png", "fit": "contain" } }
+```
+
+Values starting with `http:`, `https:`, `data:`, or `/` are used verbatim;
+anything else is resolved against `/api/dash/assets/`.
 
 The [`dux-dashboards`](.agents/skills/dux-dashboards/) agent skill documents the document format and API in full.
 
@@ -210,7 +278,7 @@ EVALUATE Product
 EVALUATE
     SUMMARIZECOLUMNS(
         Product[Category],
-        "Net Revenue", SUM(Sales[NetRevenue])
+        "Net Sales", SUM(Sales[_NetSalesAmount])
     )
 ```
 
@@ -314,7 +382,7 @@ DUX needs for analytical joins. Define those relationships through the DUX
 semantic API or `dux.toml`; they are semantic metadata, not DuckLake
 constraints.
 
-DuckLake health is available at `GET /api/ducklake/status`. Maintenance runs automatically; operators can also post `compact` or `checkpoint` to `/api/ducklake/maintenance` and poll `/api/ducklake/maintenance/{id}`. Snapshot retention governs time-travel history, not current business rows; cleanup only affects files DuckLake has already marked unreferenced.
+DuckLake health is available at `GET /api/ducklake/status`. Maintenance runs automatically; operators can also post `compact` or `checkpoint` to `/api/ducklake/maintenance`, list recent jobs with `GET /api/ducklake/maintenance`, and poll one with `GET /api/ducklake/maintenance/{id}`. Snapshot retention governs time-travel history, not current business rows; cleanup only affects files DuckLake has already marked unreferenced.
 
 These mutating DuckLake endpoints share DUX's trusted-network boundary. DUX does not yet provide authentication or an administrative role; do not expose `duxd` directly to an untrusted network.
 
@@ -330,17 +398,17 @@ SQLite remains the catalog while this periodic, local workload is reliable. Move
 POST /query
 Content-Type: text/plain
 
-EVALUATE SUMMARIZECOLUMNS(Product[Category], "Net Revenue", SUM(Sales[NetRevenue]))
+EVALUATE SUMMARIZECOLUMNS(Product[Category], "Net Sales", SUM(Sales[_NetSalesAmount]))
 ```
 
 ```json
 {
-  "columns": ["Category", "Net Revenue"],
+  "columns": ["Category", "Net Sales"],
   "rows": [
-    ["Alcoholic Beverages", "438382489.54"],
-    ["Juices", "44347794.1"],
-    ["Soft Drinks", "27590614.7"],
-    ["Water", "16330017.07"]
+    ["Alcoholic Beverages", "435511175.75"],
+    ["Juices", "53084544.89"],
+    ["Soft Drinks", "32910749.31"],
+    ["Water", "19499875.97"]
   ]
 }
 ```
@@ -373,6 +441,20 @@ GET /schema
 
 Returns tables, columns, relationships, and measures as JSON.
 
+```
+POST /refresh
+```
+
+Re-introspects the DuckLake schema immediately and swaps the live model, rather than waiting for `--schema-refresh-interval`.
+
+### Column values
+
+```
+GET /values?table=Product&column=Category&q=wat
+```
+
+Distinct values of a column, optionally filtered by a substring — what slicers and the filter editors use to populate their option lists.
+
 ### Import / export
 
 ```
@@ -384,10 +466,10 @@ POST /import          ← dux.toml body; replaces all of the above
 
 ```
 GET /measures
-→ [{"table": "Sales", "name": "Total Revenue", "expression": "SUM(Sales[NetRevenue])"}]
+→ [{"table": "Sales", "name": "Total Revenue", "expression": "SUM(Sales[_NetSalesAmount])"}]
 
 POST /measures
-{"table": "Sales", "name": "Total Revenue", "expression": "SUM(Sales[NetRevenue])"}
+{"table": "Sales", "name": "Total Revenue", "expression": "SUM(Sales[_NetSalesAmount])"}
 → 201 Created
 
 DELETE /measures/:table/:name
@@ -416,6 +498,17 @@ DELETE /relationships
 → 204 No Content
 ```
 
+### Date table
+
+```
+POST /datetable
+{"table": "dates", "column": "date"}
+→ 201 Created
+
+DELETE /datetable
+→ 204 No Content
+```
+
 ### Hidden
 
 ```
@@ -435,10 +528,11 @@ DELETE /hidden               (unhide — same body shapes)
 ### Reference UI
 
 ```
-GET /docs/*         Interactive API reference (Scalar)
+GET /docs           Interactive API reference (Scalar)
 GET /openapi.json   The OpenAPI 3.1 spec behind it (machine-readable)
-GET /               DUX UI — query builder, Explorer, and dashboards (/dash/)
+GET /               DUX UI — query builder, Explorer (/explorer), and dashboards (/dash/)
 *   /api/dash/*     Dashboards API (see Dashboards above)
+*   /api/ducklake/* DuckLake status, imports, and maintenance (see Loading data below)
 ```
 
 ## Measures and relationships
@@ -463,12 +557,12 @@ bidirectional  = true
 [[measure]]
 table      = "Sales"
 name       = "Total Revenue"
-expression = "SUM(Sales[NetRevenue])"
+expression = "SUM(Sales[_NetSalesAmount])"
 
 [[measure]]
 table      = "Sales"
 name       = "Avg Order Value"
-expression = "AVERAGE(Sales[NetRevenue])"
+expression = "AVERAGE(Sales[_NetSalesAmount])"
 
 # Optional display format — structured enum, rendered locale-aware by the UI
 [measure.format]
@@ -479,10 +573,12 @@ decimals = 1
 Export the current state, edit offline, re-import:
 
 ```sh
-curl http://localhost/export > dux.toml
+curl http://localhost:8080/export > dux.toml
 # ... edit dux.toml ...
-curl -X POST http://localhost/import --data-binary @dux.toml
+curl -X POST http://localhost:8080/import --data-binary @dux.toml
 ```
+
+`POST /import` replaces the whole semantic model: existing relationships, measures, hidden designations, and date-table configuration in `dux.sqlite` are cleared and rebuilt from the file in one transaction. Export first if you need the current state back.
 
 ## Hiding tables and columns
 
@@ -511,9 +607,9 @@ Every query starts with `EVALUATE`. An optional `DEFINE` block declares reusable
 EVALUATE
     SUMMARIZECOLUMNS(
         Product[Category],
-        "Net Revenue", SUM(Sales[NetRevenue])
+        "Net Sales", SUM(Sales[_NetSalesAmount])
     )
-    ORDER BY [Net Revenue] DESC, Product[Category]
+    ORDER BY [Net Sales] DESC, Product[Category]
 ```
 
 **Aggregate by a column:**
@@ -522,7 +618,7 @@ EVALUATE
 EVALUATE
     SUMMARIZECOLUMNS(
         Product[Category],
-        "Net Revenue", SUM(Sales[NetRevenue])
+        "Net Sales", SUM(Sales[_NetSalesAmount])
     )
 ```
 
@@ -532,7 +628,7 @@ EVALUATE
 EVALUATE
     VAR discounted_sales = FILTER(
         Sales,
-        Sales[DiscountRate] > 0
+        Sales[_DiscountRate] > 0
     )
     RETURN SUMMARIZECOLUMNS(
         discounted_sales[VenueKey],
@@ -545,7 +641,7 @@ EVALUATE
 ```dux
 DEFINE
     MEASURE Sales[Avg Order Value] =
-        AVERAGE(Sales[NetRevenue])
+        AVERAGE(Sales[_NetSalesAmount])
 
 EVALUATE
     SUMMARIZECOLUMNS(
@@ -612,8 +708,8 @@ Table arguments compose: any table function accepts a nested table expression wh
 EVALUATE
     TOPN(
         5,
-        SUMMARIZECOLUMNS(Venue[Venue], "Net Revenue", SUM(Sales[NetRevenue])),
-        [Net Revenue]
+        SUMMARIZECOLUMNS(Venue[Venue], "Net Sales", SUM(Sales[_NetSalesAmount])),
+        [Net Sales]
     )
 ```
 
@@ -634,10 +730,10 @@ Inside `CALCULATE`, a plain predicate on a column **replaces** any existing filt
 EVALUATE
     SUMMARIZECOLUMNS(
         Product[Category],
-        "Net Revenue", SUM(Sales[NetRevenue]),
+        "Net Sales", SUM(Sales[_NetSalesAmount]),
         "Share",   DIVIDE(
-            SUM(Sales[NetRevenue]),
-            CALCULATE(SUM(Sales[NetRevenue]), ALL(Product))
+            SUM(Sales[_NetSalesAmount]),
+            CALCULATE(SUM(Sales[_NetSalesAmount]), ALL(Product))
         )
     )
 ```
@@ -766,7 +862,7 @@ FROM _mc0
 LEFT JOIN _cc0 ON _cc0.k0 IS NOT DISTINCT FROM _mc0.k0
 ```
 
-Every intermediate is bounded by the number of group cells or the fact table's own size, and the emitted SQL contains no correlated subqueries at all — a deliberate invariant. DuckDB decorrelates a single level of correlation well but not a correlated anchor nested inside a correlated context subquery: that shape forced the range filter above a *group cells × fact rows* delim join, and a daily rolling window over a few million fact rows consumed tens of gigabytes before finishing. Grouping-set (`ROLLUPADDISSUBTOTAL`) and computed-group-key queries keep the older correlated-subquery form, where the anchor is inlined to the group column whenever the anchored column is itself a group key.
+Every intermediate is bounded by the number of group cells or the fact table's own size, and the anchor is emitted with no correlation to the outer query — a deliberate invariant for this shape. (Correlated `EXISTS` semi-joins are still used for bidirectional bridges, where they are the point: see [Bidirectional relationships](#bidirectional-relationships).) DuckDB decorrelates a single level of correlation well but not a correlated anchor nested inside a correlated context subquery: that shape forced the range filter above a *group cells × fact rows* delim join, and a daily rolling window over a few million fact rows consumed tens of gigabytes before finishing. Grouping-set (`ROLLUPADDISSUBTOTAL`) and computed-group-key queries keep the older correlated-subquery form, where the anchor is inlined to the group column whenever the anchored column is itself a group key.
 
 ## Bidirectional relationships
 
@@ -830,3 +926,7 @@ by more than one path:
 ### UI
 
 In the Explorer canvas, bidirectional relationship lines are rendered with a **30 % orange / 40 % blue / 30 % orange** gradient to distinguish them from standard (orange → blue) unidirectional lines. The relationship modal has a **Bidirectional** checkbox next to the ⇄ Reverse button.
+
+## License
+
+[MIT](LICENSE).

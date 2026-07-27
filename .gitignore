@@ -25,8 +25,9 @@ web/node_modules/
 web/*/node_modules/
 web/*/dist/
 
-# Test dashboards (real dashboards in dashboards/ are tracked; test ones are not)
+# Dashboards (real dashboards in dashboards/ are tracked; test ones are not)
 dashboards/**/*test.json
+dashboards/assets
 
 # Logs and databases
 db/*.duckdb
@@ -40,6 +41,10 @@ db/*.sql
 reference/
 docs/*
 TDD*
+
+# Controlled Parquet inbox — the directory is committed, its payload is not
+inbox/*
+!inbox/.gitkeep
 
 # Import / Export
 *.toml

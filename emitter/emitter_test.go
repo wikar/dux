@@ -804,7 +804,7 @@ func TestSpecial(t *testing.T) {
 	})
 
 	t.Run("QualifiedTableRef", func(t *testing.T) {
-		q := mustParse(t, `EVALUATE bev.Sales`)
+		q := mustParse(t, `EVALUATE analytics.Sales`)
 		em := &emitter.Emitter{}
 		sql, err := em.Emit(q)
 		if err != nil {
@@ -1019,19 +1019,19 @@ func TestBidirectionalCTE(t *testing.T) {
 		s := bidiSchema()
 		qualified := semantic.NewSchema()
 		for name, tbl := range s.Tables {
-			qualified.Tables["bev."+name] = &semantic.Table{Name: "bev." + tbl.Name, Columns: tbl.Columns}
+			qualified.Tables["analytics."+name] = &semantic.Table{Name: "analytics." + tbl.Name, Columns: tbl.Columns}
 		}
 		for _, r := range s.Relationships {
 			qualified.Relationships = append(qualified.Relationships, &semantic.Relationship{
-				FromTable: "bev." + r.FromTable, FromColumn: r.FromColumn,
-				ToTable: "bev." + r.ToTable, ToColumn: r.ToColumn,
+				FromTable: "analytics." + r.FromTable, FromColumn: r.FromColumn,
+				ToTable: "analytics." + r.ToTable, ToColumn: r.ToColumn,
 				Bidirectional: r.Bidirectional,
 			})
 		}
 		q := mustParse(t,
 			`EVALUATE SUMMARIZECOLUMNS(
-				TREATAS({"X"}, bev.DimA[Category]),
-				"Total", SUM(bev.FactMeasures[Amount])
+				TREATAS({"X"}, analytics.DimA[Category]),
+				"Total", SUM(analytics.FactMeasures[Amount])
 			)`)
 		em := &emitter.Emitter{Schema: qualified}
 		sql, err := em.Emit(q)
@@ -1040,26 +1040,26 @@ func TestBidirectionalCTE(t *testing.T) {
 		}
 		assertContains(t, sql,
 			"WITH _mc0 AS",
-			"FROM bev.factmeasures",
-			"EXISTS (SELECT 1 FROM bev.bridge",
-			"JOIN bev.dima",
+			"FROM analytics.factmeasures",
+			"EXISTS (SELECT 1 FROM analytics.bridge",
+			"JOIN analytics.dima",
 		)
 		assertNotContains(t, sql, "_bd_")
 	})
 
-	// The bidi bridge (bev.Date) is the group-by table with measures over two
+	// The bidi bridge (analytics.Date) is the group-by table with measures over two
 	// different facts — a multi-table query. Stitched codegen must evaluate
 	// each measure in its own cluster CTE; a flat join would fan the facts
-	// out against each other (and the old bidi CTE emitted "FROM bev.date
-	// JOIN bev.date" — a duplicate alias).
+	// out against each other (and the old bidi CTE emitted "FROM analytics.date
+	// JOIN analytics.date" — a duplicate alias).
 	t.Run("ProjectedBridgeGoesStitched", func(t *testing.T) {
 		s := semantic.NewSchema()
-		s.Tables["bev.Date"] = &semantic.Table{Name: "bev.Date", Columns: map[string]*semantic.Column{
+		s.Tables["analytics.Date"] = &semantic.Table{Name: "analytics.Date", Columns: map[string]*semantic.Column{
 			"DateKey": {Name: "DateKey", DataType: "INTEGER"},
 			"Date":    {Name: "Date", DataType: "DATE"},
 			"Year":    {Name: "Year", DataType: "INTEGER"},
 		}}
-		s.Tables["bev.Sales"] = &semantic.Table{Name: "bev.Sales", Columns: map[string]*semantic.Column{
+		s.Tables["analytics.Sales"] = &semantic.Table{Name: "analytics.Sales", Columns: map[string]*semantic.Column{
 			"DateKey":  {Name: "DateKey", DataType: "INTEGER"},
 			"Quantity": {Name: "Quantity", DataType: "INTEGER"},
 		}}
@@ -1072,14 +1072,14 @@ func TestBidirectionalCTE(t *testing.T) {
 			"Revenue":  {Name: "Revenue", DataType: "DOUBLE"},
 		}}
 		s.Relationships = append(s.Relationships,
-			&semantic.Relationship{FromTable: "bev.Sales", FromColumn: "DateKey", ToTable: "bev.Date", ToColumn: "DateKey"},
-			&semantic.Relationship{FromTable: "bev.Date", FromColumn: "Date", ToTable: "forecast.Periods", ToColumn: "StartDate", Bidirectional: true},
+			&semantic.Relationship{FromTable: "analytics.Sales", FromColumn: "DateKey", ToTable: "analytics.Date", ToColumn: "DateKey"},
+			&semantic.Relationship{FromTable: "analytics.Date", FromColumn: "Date", ToTable: "forecast.Periods", ToColumn: "StartDate", Bidirectional: true},
 			&semantic.Relationship{FromTable: "forecast.Plan", FromColumn: "PeriodId", ToTable: "forecast.Periods", ToColumn: "PeriodId"},
 		)
 		q := mustParse(t,
 			`EVALUATE SUMMARIZECOLUMNS(
-				bev.Date[Year],
-				"Quantity", SUM(bev.Sales[Quantity]),
+				analytics.Date[Year],
+				"Quantity", SUM(analytics.Sales[Quantity]),
 				"Planned Revenue", SUM(forecast.Plan[Revenue])
 			)`)
 		em := &emitter.Emitter{Schema: s}
@@ -1093,20 +1093,20 @@ func TestBidirectionalCTE(t *testing.T) {
 			"_mc1 AS",
 			"FULL OUTER JOIN _mc1",
 			"IS NOT DISTINCT FROM",
-			"LEFT JOIN bev.sales",
+			"LEFT JOIN analytics.sales",
 			"LEFT JOIN forecast.periods",
 			"LEFT JOIN forecast.plan",
 		)
 		// The two facts must never share one join tree: the sales fact and the
 		// forecast fact belong to different CTEs.
-		if i := strings.Index(sql, "bev.sales"); i >= 0 {
+		if i := strings.Index(sql, "analytics.sales"); i >= 0 {
 			cte := sql[:strings.Index(sql, "_mc1")]
 			if strings.Contains(cte, "forecast.plan") {
-				t.Errorf("bev.sales and forecast.plan share a join tree:\n%s", sql)
+				t.Errorf("analytics.sales and forecast.plan share a join tree:\n%s", sql)
 			}
 		}
-		if n := strings.Count(strings.ToLower(sql), "join bev.date"); n != 0 {
-			t.Errorf("bev.date must only appear in FROM clauses, found %d JOINs:\n%s", n, sql)
+		if n := strings.Count(strings.ToLower(sql), "join analytics.date"); n != 0 {
+			t.Errorf("analytics.date must only appear in FROM clauses, found %d JOINs:\n%s", n, sql)
 		}
 	})
 

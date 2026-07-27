@@ -296,6 +296,14 @@ func TestValidationErrors(t *testing.T) {
 		{"refresh below floor", `{"version":1,"canvas":{"width":1280,"height":720},"elements":[],
 			"refresh":{"enabled":true,"intervalSeconds":2}}`, "floor"},
 		{"not json", `{nope`, "JSON"},
+		{"empty slicer default", `{"version":1,"canvas":{"width":1280,"height":720},"elements":[
+			{"id":"s","type":"slicer","layout":{"x":0,"y":0,"w":10,"h":10},
+			 "slicer":{"table":"T","column":"C","kind":"buttons","default":{"kind":"values","values":[]}}}]}`,
+			"/elements/0/slicer/default"},
+		{"boundless range default", `{"version":1,"canvas":{"width":1280,"height":720},"elements":[
+			{"id":"s","type":"slicer","layout":{"x":0,"y":0,"w":10,"h":10},
+			 "slicer":{"table":"T","column":"C","kind":"daterange","default":{"kind":"range"}}}]}`,
+			"/elements/0/slicer/default"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -314,6 +322,17 @@ func TestValidationErrors(t *testing.T) {
 		"refresh":{"enabled":false,"intervalSeconds":2}}`
 	if res := do(t, "PUT", url, ok, nil); res.StatusCode != http.StatusCreated {
 		t.Errorf("disabled refresh below floor should save, got %d", res.StatusCode)
+	}
+
+	// Both preset shapes are valid configuration.
+	for i, def := range []string{`{"kind":"values","values":["Water"]}`, `{"kind":"range","from":"2026-01-01"}`} {
+		doc := `{"version":1,"canvas":{"width":1280,"height":720},"elements":[
+			{"id":"s","type":"slicer","layout":{"x":0,"y":0,"w":10,"h":10},
+			 "slicer":{"table":"T","column":"C","kind":"buttons","default":` + def + `}}]}`
+		u := fmt.Sprintf("%s/api/dash/dashboards/preset-%d", ts.URL, i)
+		if res := do(t, "PUT", u, doc, nil); res.StatusCode != http.StatusCreated {
+			t.Errorf("slicer default %s should save, got %d: %v", def, res.StatusCode, bodyJSON(t, res)["error"])
+		}
 	}
 }
 

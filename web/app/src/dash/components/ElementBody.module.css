@@ -144,6 +144,25 @@
   }
 }
 
+/* Live-refresh status light. Present whenever the dashboard refreshes on an
+   interval, so it reads as a steady indicator rather than something appearing
+   and vanishing each tick. Full opacity — this is status, not chrome; the rest
+   state is muted by color alone. */
+.refreshDot {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  /* 1px stroke: matches the weight of the funnel and download glyphs beside it. */
+  border: 1px solid color-mix(in srgb, var(--th-muted) 50%, transparent);
+  border-radius: 50%;
+}
+
+.refreshDotOn {
+  border-color: var(--th-border);
+  border-top-color: var(--th-accent);
+  animation: spin 0.8s linear infinite;
+}
+
 .overlayError {
   position: absolute;
   inset: 0;

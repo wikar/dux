@@ -15,7 +15,7 @@ var lexerDefinition = participelexer.MustStateful(participelexer.Rules{
 		// not an Ident. The (?i) flag makes the pattern case-insensitive.
 		{Name: "Keyword", Pattern: `(?i)\b(DEFINE|EVALUATE|MEASURE|CALCULATE|FILTER|SUMMARIZECOLUMNS|ADDCOLUMNS|SELECTCOLUMNS|SUMX|AVERAGEX|COUNTX|MINX|MAXX|CONCATENATEX|SUM|AVERAGE|COUNTA|COUNT|COUNTROWS|COUNTBLANK|DISTINCTCOUNT|MIN|MAX|MEDIAN|DIVIDE|ISBLANK|BLANK|IF|SWITCH|NOT|AND|OR|ALL|VALUES|DISTINCT|UNION|INTERSECT|EXCEPT|TOPN|VAR|RETURN|TRUE|FALSE|TREATAS|ORDER|BY|START|AT|ASC|DESC)\b`},
 		// QualifiedIdent matches a db-qualified table name with one or more
-		// dot-separated segments (e.g. bev.Sales, or bev.sales.Customer for a
+		// dot-separated segments (e.g. analytics.Sales, or analytics.sales.Customer for a
 		// table in a non-default DuckDB schema). Must appear before Ident so
 		// that the dots are consumed here and not treated as unknown Punct tokens.
 		{Name: "QualifiedIdent", Pattern: `[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+`},

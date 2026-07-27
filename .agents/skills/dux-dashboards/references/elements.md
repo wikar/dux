@@ -45,7 +45,7 @@ metric out into one series each (PBI's Legend well):
 "query": { "fields": [
   { "table": "Date", "name": "MonthName", "kind": "column", "dataType": "VARCHAR" },
   { "table": "Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
-  { "table": "Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
+  { "table": "Sales", "name": "_NetSalesAmount", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
 ]},
 "viz": { "series": "Category", "stacked": true }
 ```
@@ -102,7 +102,7 @@ stretch the axis into empty space. Bound such elements with an explicit
     { "table": "Region", "name": "RegionName", "kind": "column", "dataType": "VARCHAR" },
     { "table": "Product", "name": "Category", "kind": "column", "dataType": "VARCHAR" },
     { "table": "Customer", "name": "CustomerType", "kind": "column", "dataType": "VARCHAR" },
-    { "table": "Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
+    { "table": "Sales", "name": "_NetSalesAmount", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
   ]},
   "viz": { "cols": ["CustomerType"] }
 }
@@ -124,7 +124,7 @@ rather than through the shared query pipeline, so the element carries
       "kind": "circle",
       "lng": { "table": "Venue", "name": "Longitude", "kind": "column", "dataType": "DECIMAL(10,7)" },
       "lat": { "table": "Venue", "name": "Latitude",  "kind": "column", "dataType": "DECIMAL(10,7)" },
-      "size": { "table": "Sales", "name": "NetRevenue", "kind": "measure" },
+      "size": { "table": "Sales", "name": "NetSalesAmount", "kind": "measure" },
       "category": { "table": "Venue", "name": "VenueType", "kind": "column", "dataType": "VARCHAR" }
     }],
     "center": [10.45, 51.16],
@@ -158,7 +158,8 @@ rather than through the shared query pipeline, so the element carries
     "kind": "buttons",
     "multi": true,
     "limit": 20,
-    "measure": { "table": "Sales", "name": "NetRevenue", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
+    "default": { "kind": "values", "values": ["Water"] },
+    "measure": { "table": "Sales", "name": "_NetSalesAmount", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
   }
 }
 ```
@@ -172,7 +173,17 @@ rather than through the shared query pipeline, so the element carries
   a measure, or a numeric column as
   `{"kind": "column", "dataType": "...", "aggregate": "SUM"}`.
 - Slicers receive each other's filters (cascading option lists).
-  Selections live only in the page URL (`?f=`), never in the document.
+  Live selections live in the page URL (`?f=`), never in the document.
+- `default` (optional preset): the selection applied when the dashboard
+  opens — `{"kind": "values", "values": [...]}` (at least one value), or
+  `{"kind": "range", "from": "…", "to": "…"}` (at least one bound) for the
+  `range`/`daterange` kinds. A `?f=` selection for the same slicer wins.
+  In the editor there is no separate control: in edit mode a slicer's live
+  selection *is* its `default`, so slicing and saving stores the preset, and
+  clearing it (eraser, or deselecting everything) removes the preset.
+  On open, preset/link values the column no longer offers are dropped from
+  the live selection and reported in the slicer — the document keeps the
+  preset, so a value that returns to the data starts working again.
 - Clearing is an eraser control in the slicer's title bar, shown only while
   something is selected. It needs no configuration — but it does need a
   title bar, so leave `title.show` on unless the element is deliberately
@@ -188,7 +199,12 @@ Heights are a layout concern, not a slicer one — `dropdown` is 68px,
 
 ## image
 
-`"image": { "url": "https://… or /api/dash/assets/logo.png", "fit": "contain" | "cover" | "fill" }`
+`"image": { "url": "https://… or assets/logo.png", "fit": "contain" | "cover" | "fill" }`
+
+An absolute `http:`/`https:`/`data:`/`/`-rooted URL is used verbatim. Anything
+else is a path relative to the server's dashboards root, resolved against
+`/api/dash/assets/` — so `dashboards/assets/logo.png` is `assets/logo.png`
+here. See [api.md](api.md) for the served extensions and deployment rules.
 
 ## Per-element interactions
 

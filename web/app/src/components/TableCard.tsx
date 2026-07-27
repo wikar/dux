@@ -40,8 +40,6 @@ export default function TableCard(props: {
   onHeaderMouseDown: (e: MouseEvent) => void;
   /** Called when the user mousedowns on a column dot to start a relationship drag. */
   onColDotMouseDown: (e: MouseEvent, colName: string) => void;
-  /** Called when the column list is scrolled (to update relationship lines). */
-  onColumnsScroll?: () => void;
   /** Called when the preview button is clicked. */
   onPreview: () => void;
   /** Toggle this table as the model's date table (only one allowed). */
@@ -115,7 +113,7 @@ export default function TableCard(props: {
         </button>
       </div>
 
-      <div className={styles.cardColumns} data-card-columns onScroll={() => props.onColumnsScroll?.()}>
+      <div className={styles.cardColumns}>
         {columns.map((col) => (
           <div
             key={col.Name}
@@ -162,8 +160,6 @@ export default function TableCard(props: {
             </span>
             <div
               className={styles.colDot}
-              data-dot-table={props.tableName}
-              data-dot-col={col.Name}
               title="Drag to create relationship"
               onMouseDown={(e) => {
                 e.stopPropagation();

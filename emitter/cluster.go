@@ -270,7 +270,7 @@ func regularTableClusterCount(clusters []*measureCluster) int {
 }
 
 // clusterKey canonicalises a table list: schema-resolved, lower-cased, sorted,
-// '\x00'-joined. "Sales" and "bev.Sales" resolve to the same key when the
+// '\x00'-joined. "Sales" and "analytics.Sales" resolve to the same key when the
 // schema stores the qualified name.
 func (e *Emitter) clusterKey(tables []string) string {
 	if len(tables) == 0 {

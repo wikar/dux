@@ -1,17 +1,15 @@
 // Average discounted order value alongside order count by venue.
-// Demonstrates: DEFINE MEASURE, VAR, SUMMARIZECOLUMNS with multiple aggregations.
+// The query-local measure sits next to the model's own OrderCount measure.
+// Demonstrates: DEFINE MEASURE, SUMMARIZECOLUMNS with a filter argument.
 
 DEFINE
     MEASURE Sales[Avg Order Value] =
         AVERAGE(Sales[_NetSalesAmount])
 
 EVALUATE
-    VAR discounted_sales = FILTER(
-        Sales,
-        Sales[_DiscountRate] > 0
-    )
-    RETURN SUMMARIZECOLUMNS(
-        discounted_sales[VenueKey],
-        "Orders",          COUNT(discounted_sales[OrderId]),
-        "Avg Order Value", AVERAGE(discounted_sales[_NetSalesAmount])
+    SUMMARIZECOLUMNS(
+        Venue[Venue],
+        FILTER(Sales, Sales[_DiscountRate] > 0),
+        "Orders",          Sales[OrderCount],
+        "Avg Order Value", Sales[Avg Order Value]
     )
