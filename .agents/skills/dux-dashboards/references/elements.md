@@ -158,6 +158,7 @@ rather than through the shared query pipeline, so the element carries
     "kind": "buttons",
     "multi": true,
     "limit": 20,
+    "sort": "asc",
     "default": { "kind": "values", "values": ["Water"] },
     "measure": { "table": "Sales", "name": "_NetSalesAmount", "kind": "column", "dataType": "DECIMAL(14,4)", "aggregate": "SUM" }
   }
@@ -169,6 +170,8 @@ rather than through the shared query pipeline, so the element carries
 - `dataType` should be the column's DuckDB type — it types the filter
   values (numeric columns get numeric filters) and drives the range kinds.
 - `limit`: max pills for the buttons kind (default 20; "+n more" chip).
+- `sort`: option list order by column value, `asc` (default) or `desc`.
+  Ignored by the range kinds, which have no option list.
 - `measure` (optional "Trim by"): hides values where the metric is NULL —
   a measure, or a numeric column as
   `{"kind": "column", "dataType": "...", "aggregate": "SUM"}`.
@@ -196,6 +199,31 @@ Heights are a layout concern, not a slicer one — `dropdown` is 68px,
 ## text
 
 `"text": { "markdown": "## Title\n\nBody with **GFM** support." }`
+
+CommonMark plus GitHub Flavored Markdown: headings, emphasis, `~~strike~~`,
+inline and fenced code, ordered/unordered lists, task lists (`- [x]`), tables
+with `:---:` alignment, blockquotes, `---`, footnotes, bare-URL autolinks, and
+two-space hard breaks. A fenced block keeps its `language-*` class but is not
+syntax-highlighted, and there is no math support.
+
+**Raw HTML is escaped, not rendered.** `<br>`, `<span style="…">` and friends
+show up as literal text. Dashboard JSON is tool- and agent-authored, so
+enabling raw HTML would make every document a script-injection vector; style
+through markdown and the theme instead.
+
+Images need a rooted path. Markdown is not resolved against the dashboards
+root the way `image.url` is, so a bare `assets/logo.png` resolves against
+`/dash/{path}` and 404s — write `/api/dash/assets/assets/logo.png` (the
+doubled segment is the route plus the root-relative path). An image is capped
+to the text column and scales down keeping its aspect ratio, so an oversized
+one shrinks rather than overflowing; markdown has no width syntax, so that cap
+is the only sizing control. Use an `image` element when the picture is the
+point.
+
+The markdown carries its own heading, so `text` has no title bar. Body text is
+13px; `h1` renders at 26px and `h5`/`h6` fall *below* body size, so in a narrow
+element prefer `h3`/`h4` or plain `**bold**`. Content taller than the element
+scrolls rather than clipping.
 
 ## image
 

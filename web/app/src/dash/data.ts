@@ -402,7 +402,7 @@ export function useSlicerOptions(el: DashElement): SlicerOptionsState {
         aggregate: (m.kind === "column" ? (m.aggregate as DropField["aggregate"]) ?? "SUM" : undefined),
       });
     }
-    return generateQuery(fields, [], { sort: [{ field: s.column, dir: "asc" }] });
+    return generateQuery(fields, [], { sort: [{ field: s.column, dir: s.sort ?? "asc" }] });
   }, [s]);
 
   const q = useQuery({

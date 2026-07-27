@@ -858,6 +858,22 @@ func TestEmitErrors(t *testing.T) {
 			`EVALUATE DIVIDE(sales[amount])`,
 			"DIVIDE requires at least 2 arguments",
 		},
+		{
+			// A table argument in the group position used to be emitted into
+			// the SELECT list, handing DuckDB "SELECT region, SELECT * FROM …".
+			"SUMMARIZECOLUMNS_nested_table_filter_arg",
+			`EVALUATE SUMMARIZECOLUMNS(
+				sales[region],
+				TOPN(3, SUMMARIZECOLUMNS(sales[region], "Q", SUM(sales[qty])), [Q]),
+				"Total", SUM(sales[amount])
+			)`,
+			"TOPN(...) returns a table",
+		},
+		{
+			"SUMMARIZECOLUMNS_ALL_filter_arg",
+			`EVALUATE SUMMARIZECOLUMNS(sales[region], ALL(products), "Total", SUM(sales[amount]))`,
+			"ALL(...) returns a table",
+		},
 	}
 
 	for _, tt := range tests {

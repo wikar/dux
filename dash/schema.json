@@ -92,7 +92,10 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "markdown": { "type": "string" }
+            "markdown": {
+              "description": "CommonMark plus GitHub Flavored Markdown: tables with alignment, task lists, footnotes, strikethrough, bare-URL autolinks, fenced code (no syntax highlighting). Raw HTML is escaped rather than rendered. An image here needs a rooted path such as /api/dash/assets/assets/logo.png — the dashboards-root-relative short form that image.url accepts is not resolved in markdown.",
+              "type": "string"
+            }
           }
         },
         "image": {
@@ -178,6 +181,7 @@
         "kind":     { "enum": ["buttons", "list", "dropdown", "range", "daterange"] },
         "multi":    { "type": "boolean" },
         "limit":    { "type": "integer", "minimum": 1, "description": "Max value pills shown by the buttons kind (default 20)." },
+        "sort":     { "enum": ["asc", "desc"], "description": "Option list order by column value (default asc)." },
         "default": {
           "description": "Preset selection applied when the dashboard opens. A ?f= selection for this slicer wins over it, and values that no longer exist in the data are dropped on load (the preset itself is kept).",
           "oneOf": [

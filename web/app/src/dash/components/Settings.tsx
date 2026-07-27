@@ -539,6 +539,20 @@ function SlicerSection({ el }: { el: DashElement }) {
         </label>
       )}
 
+      {!rangeKind && (
+        <>
+          <label className={styles.label}>Sort</label>
+          <select
+            className={styles.input}
+            value={s?.sort ?? "asc"}
+            onChange={(e) => setSlicer({ sort: e.target.value as "asc" | "desc" })}
+          >
+            <option value="asc">Ascending</option>
+            <option value="desc">Descending</option>
+          </select>
+        </>
+      )}
+
       {(s?.kind ?? "buttons") === "buttons" && (
         <label className={styles.numField}>
           <span style={{ minWidth: 56 }}>Max pills</span>

@@ -7,9 +7,22 @@ import { useMemo } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { duxClient, generateQuery, isMetricField } from "@dux/core";
 import type { QueryResponse } from "@dux/core";
-import { elementFields, elementFilters, useExternalFilters, useRefreshInterval } from "./data";
+import {
+  elementFields,
+  elementFilters,
+  splitElementFields,
+  useExternalFilters,
+  useRefreshInterval,
+} from "./data";
 import type { DashElement } from "./types";
 import { VISUALS } from "./visuals";
+
+/** The dim an element fans out into one series per value, when the visual
+ *  supports a series split and the chosen dim is actually in the query. */
+export function elementSeriesSplit(el: DashElement): string | undefined {
+  if (el.query?.mode === "raw" || !VISUALS[el.type]?.data?.seriesSplit) return undefined;
+  return splitElementFields(el).dims.find((f) => f.name === el.viz?.series)?.name;
+}
 
 /** The DUX query an element executes ("" = nothing to run yet). */
 export function buildElementDux(el: DashElement): string {
@@ -24,10 +37,11 @@ export function buildElementDux(el: DashElement): string {
       .filter((f) => !isMetricField(f))
       .map((f) => ({ field: f.name, dir: "asc" as const }));
   }
-  return generateQuery(elementFields(el), elementFilters(el), {
-    sort,
-    topN: q.topN ?? undefined,
-  });
+  // A split query groups by the series dim too, so TOPN would keep the top n
+  // single segments instead of the top n stacks. Fetch every group and trim
+  // by stack total after the pivot instead.
+  const topN = elementSeriesSplit(el) ? undefined : q.topN ?? undefined;
+  return generateQuery(elementFields(el), elementFilters(el), { sort, topN });
 }
 
 export interface ElementDataState {

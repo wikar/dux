@@ -79,6 +79,11 @@ an external URL or a path relative to the server's dashboards root
 (`assets/logo.png`), served read-only from disk —
 [references/api.md](references/api.md) covers deploying them.
 
+`text` renders CommonMark plus GFM — tables, task lists, footnotes,
+autolinks. **Raw HTML is escaped, not rendered**, and an image inside markdown
+needs a rooted `/api/dash/assets/…` path rather than the short form `image`
+accepts: [references/elements.md](references/elements.md).
+
 A query-backed element in builder mode:
 
 ```json

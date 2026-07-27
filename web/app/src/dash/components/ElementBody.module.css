@@ -79,6 +79,14 @@
   margin: 0.6em 0;
 }
 
+/* Markdown carries no width syntax, so an image renders at its natural size
+   and would overflow a narrow element. Cap it to the text column; height:auto
+   keeps the aspect ratio once the width is constrained. */
+.markdown img {
+  max-width: 100%;
+  height: auto;
+}
+
 /* ── Image element ── */
 
 .image {

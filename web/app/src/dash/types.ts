@@ -104,6 +104,8 @@ export interface SlicerConfig {
   multi?: boolean;
   /** Max value pills shown by the buttons kind (default 20). */
   limit?: number;
+  /** Option list order by column value (default "asc"). */
+  sort?: "asc" | "desc";
   /** Preset selection applied on open (a ?f= selection wins over it). It is
    *  configuration, not session state: values missing from the data are
    *  dropped from the live selection on load, never from the preset. */

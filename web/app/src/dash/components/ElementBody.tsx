@@ -14,7 +14,7 @@ import {
   useRefreshInterval,
   useResolvedTheme,
 } from "../data";
-import { useElementData } from "../elementQuery";
+import { elementSeriesSplit, useElementData } from "../elementQuery";
 import { markKey, useDocStore, useUiStore } from "../store";
 import type { DashElement, ElementType, VizSettings } from "../types";
 import { QueryFailedError } from "@dux/core";
@@ -348,9 +348,10 @@ function DataViz({ el, def, data: rawData, formats, palette, textColor }: VizPro
 
   // Series split (the "Series by" well): the first Values measure fans out
   // into one series per value of the chosen dim.
-  const splitBy = spec.seriesSplit && !raw ? dims.find((f) => f.name === viz.series)?.name : undefined;
+  const splitBy = elementSeriesSplit(el);
   const dimKey = dimCols.join("\u0000");
   const metricKey = metricCols.join("\u0000");
+  const sortKey = (el.query?.sort ?? []).map((s) => `${s.field}:${s.dir ?? "asc"}`).join("|");
   const pivot = useMemo(() => {
     const none = { rows: [] as ChartRow[], keys: [] as string[], fmts: formats, seriesDim: undefined };
     if (!spec.chart) return none;
@@ -363,11 +364,26 @@ function DataViz({ el, def, data: rawData, formats, palette, textColor }: VizPro
         metric,
         dimTables
       );
+      // The query ran at (x, series) grain, so ORDER BY sorted single cells
+      // and TOPN would have kept single segments. Both belong to the stack:
+      // redo them here over the series totals (buildElementDux drops TOPN
+      // from a split query so every group is available to trim).
+      const total = (r: ChartRow) => series.reduce((t, s) => t + (Number(r[s]) || 0), 0);
+      let rows = sData;
+      const topN = el.query?.topN ?? 0;
+      if (topN > 0 && rows.length > topN) {
+        const kept = new Set([...rows].sort((a, b) => total(b) - total(a)).slice(0, topN));
+        rows = rows.filter((r) => kept.has(r)); // trim, but keep the query's order
+      }
+      const sort = el.query?.sort?.[0];
+      if (sort?.field === metric) {
+        rows = [...rows].sort((a, b) => (sort.dir === "desc" ? total(b) - total(a) : total(a) - total(b)));
+      }
       // Every series carries the split measure — its format applies to all.
       const sFormats: Record<string, MeasureFormat> = {};
       if (formats[metric]) for (const s of series) sFormats[s] = formats[metric];
       return {
-        rows: sData,
+        rows,
         keys: series,
         fmts: sFormats,
         seriesDim: { table: dimTables[splitBy] ?? "", column: splitBy },
@@ -375,7 +391,7 @@ function DataViz({ el, def, data: rawData, formats, palette, textColor }: VizPro
     }
     return { rows: toChartData(data, dimCols, metricCols, dimTables), keys: metricCols, fmts: formats, seriesDim: undefined };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spec.chart, data, splitBy, dimKey, metricKey, dimTables, formats]);
+  }, [spec.chart, data, splitBy, dimKey, metricKey, sortKey, el.query?.topN, dimTables, formats]);
 
   const interaction: Interaction = { onMarkClick, selectedKeys, seriesDim: pivot.seriesDim };
   const Body = def.Body as ComponentType<DataBodyProps>;

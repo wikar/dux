@@ -997,6 +997,16 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 			wherePreds = append(wherePreds, taggedPred{table: predTable, col: predCol, sql: pred})
 			continue
 		}
+		// Any other table-valued argument would be emitted into the SELECT
+		// list as a group column, producing invalid SQL. TREATAS and FILTER
+		// (handled above) are the filter-argument forms DUX supports.
+		if arg.Left != nil && arg.Left.FuncCall != nil && len(arg.Right) == 0 &&
+			isTableFunc(arg.Left.FuncCall.Name) {
+			return "", fmt.Errorf(
+				"SUMMARIZECOLUMNS: %s(...) returns a table; a filter argument must be "+
+					"TREATAS(values, table[column]) or FILTER(table, predicate)",
+				strings.ToUpper(arg.Left.FuncCall.Name))
+		}
 		if e.isMeasureColRef(arg) {
 			measureArgs = append(measureArgs, arg)
 		} else {
@@ -1593,6 +1603,22 @@ func hasMatchingOuterParens(s string) bool {
 
 // ─── Scalar VAR support ───────────────────────────────────────────────────────
 
+// isTableFunc reports whether a DUX function name returns a table.
+func isTableFunc(name string) bool {
+	switch strings.ToUpper(name) {
+	case "FILTER", "SUMMARIZECOLUMNS", "ADDCOLUMNS", "SELECTCOLUMNS",
+		"UNION", "INTERSECT", "EXCEPT", "TOPN", "DISTINCT", "VALUES",
+		"ALL", "ALLEXCEPT", "CROSSJOIN", "GENERATE", "GENERATEALL",
+		"DATESYTD", "DATESQTD", "DATESMTD", "SAMEPERIODLASTYEAR", "DATEADD",
+		"PREVIOUSYEAR", "PREVIOUSQUARTER", "PREVIOUSMONTH", "PREVIOUSDAY",
+		"NEXTYEAR", "NEXTQUARTER", "NEXTMONTH", "NEXTDAY",
+		"DATESBETWEEN", "DATESINPERIOD", "CALENDAR", "CALENDARAUTO",
+		"RELATEDTABLE":
+		return true
+	}
+	return false
+}
+
 // IsTableExpr reports whether expr evaluates to a table result set (true) or a
 // scalar value (false). The classification is AST-first for known function
 // names, falling back to SQL normalisation for unknown/passthrough functions.
@@ -1619,17 +1645,10 @@ func (e *Emitter) IsTableExpr(expr *parser.Expr) (bool, error) {
 	case t.QuotedIdent != "":
 		return true, nil
 	case t.FuncCall != nil:
-		switch strings.ToUpper(t.FuncCall.Name) {
-		// Known table-returning functions.
-		case "FILTER", "SUMMARIZECOLUMNS", "ADDCOLUMNS", "SELECTCOLUMNS",
-			"UNION", "INTERSECT", "EXCEPT", "TOPN", "DISTINCT", "VALUES",
-			"ALL", "ALLEXCEPT", "CROSSJOIN", "GENERATE", "GENERATEALL",
-			"DATESYTD", "DATESQTD", "DATESMTD", "SAMEPERIODLASTYEAR", "DATEADD",
-			"PREVIOUSYEAR", "PREVIOUSQUARTER", "PREVIOUSMONTH", "PREVIOUSDAY",
-			"NEXTYEAR", "NEXTQUARTER", "NEXTMONTH", "NEXTDAY",
-			"DATESBETWEEN", "DATESINPERIOD", "CALENDAR", "CALENDARAUTO",
-			"RELATEDTABLE":
+		if isTableFunc(t.FuncCall.Name) {
 			return true, nil
+		}
+		switch strings.ToUpper(t.FuncCall.Name) {
 		// Known scalar / aggregation functions.
 		case "SUM", "AVERAGE", "COUNT", "COUNTA", "COUNTBLANK", "COUNTROWS",
 			"DISTINCTCOUNT", "MIN", "MAX", "MEDIAN",
