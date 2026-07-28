@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"testing"
+	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 
@@ -572,4 +573,88 @@ func TestExecute_Errors(t *testing.T) {
 			t.Fatal("expected error for odd-count SUMMARIZECOLUMNS pairs")
 		}
 	})
+}
+
+// ─── admission control ────────────────────────────────────────────────────────
+
+// holdOnlyConn caps the pool at one connection and takes it, so the next
+// query has to queue. The returned func releases it.
+func holdOnlyConn(t *testing.T, db *sql.DB) func() {
+	t.Helper()
+	db.SetMaxOpenConns(1)
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("pin connection: %v", err)
+	}
+	return func() { conn.Close() }
+}
+
+func TestExecute_ServerBusyWhenPoolExhausted(t *testing.T) {
+	db, schema := setupTestDB(t)
+	defer holdOnlyConn(t, db)()
+
+	defer func(d time.Duration) { executor.AdmissionTimeout = d }(executor.AdmissionTimeout)
+	executor.AdmissionTimeout = 100 * time.Millisecond
+
+	start := time.Now()
+	_, _, err := executor.ExecuteContext(context.Background(), db, schema, `EVALUATE sales`)
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, executor.ErrServerBusy) {
+		t.Fatalf("expected ErrServerBusy, got %v", err)
+	}
+	// Shedding must be bounded by AdmissionTimeout, not QueryTimeout.
+	if elapsed > time.Second {
+		t.Errorf("shed after %v, want close to the 100ms admission timeout", elapsed)
+	}
+}
+
+// A caller that gives up while queued gets its own context error, not the
+// server-busy signal: nothing was shed, the client left.
+func TestExecute_CallerCancellationBeatsServerBusy(t *testing.T) {
+	db, schema := setupTestDB(t)
+	defer holdOnlyConn(t, db)()
+
+	defer func(d time.Duration) { executor.AdmissionTimeout = d }(executor.AdmissionTimeout)
+	executor.AdmissionTimeout = 10 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, _, err := executor.ExecuteContext(ctx, db, schema, `EVALUATE sales`)
+
+	if errors.Is(err, executor.ErrServerBusy) {
+		t.Fatalf("caller cancellation reported as server-busy: %v", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected the caller's deadline, got %v", err)
+	}
+}
+
+// Queue wait must not consume the execution budget: a query that waits longer
+// than QueryTimeout for a connection still gets its full budget once it holds
+// one. Before admission and execution were split this returned a deadline
+// error without ever running.
+func TestExecute_QueueWaitDoesNotConsumeQueryBudget(t *testing.T) {
+	db, schema := setupTestDB(t)
+	release := holdOnlyConn(t, db)
+
+	defer func(a, q time.Duration) {
+		executor.AdmissionTimeout, executor.QueryTimeout = a, q
+	}(executor.AdmissionTimeout, executor.QueryTimeout)
+	executor.AdmissionTimeout = 10 * time.Second
+	executor.QueryTimeout = time.Second
+
+	// Held for twice the query budget, well inside the admission budget.
+	go func() {
+		time.Sleep(2 * time.Second)
+		release()
+	}()
+
+	cols, rows, err := executor.ExecuteContext(context.Background(), db, schema, `EVALUATE sales`)
+	if err != nil {
+		t.Fatalf("query after a long queue wait: %v", err)
+	}
+	if len(cols) == 0 || len(rows) != 6 {
+		t.Fatalf("got %d columns and %d rows, want 6 rows", len(cols), len(rows))
+	}
 }

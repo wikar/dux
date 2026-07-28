@@ -37,6 +37,43 @@ export interface ExternalFilter {
   tuples?: (string | number)[][];
 }
 
+/** Load shedding: duxd answered 503 because no query connection was free.
+ *  Raised only after the client's own retries are exhausted. */
+export class ServerBusyError extends Error {}
+
+/** Retries for a 503 from POST /query. duxd sheds the request before running
+ *  any SQL, so replaying it is safe. Worst-case wait is roughly
+ *  (BUSY_RETRIES + 1) x the server's --admission-timeout plus these delays,
+ *  so keep both small if dashboard tiles should fail fast. */
+const BUSY_RETRIES = 2;
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(signal.reason);
+      },
+      { once: true }
+    );
+  });
+}
+
+/** Full jitter over an exponential backoff, floored by Retry-After. The jitter
+ *  matters more than the backoff here: every tile on a dashboard is shed at
+ *  once, and retrying them in lockstep would just rebuild the queue. */
+function busyRetryDelay(attempt: number, retryAfter: string | null): number {
+  const floorSeconds = Number(retryAfter);
+  const floor = Number.isFinite(floorSeconds) && floorSeconds > 0 ? floorSeconds * 1000 : 0;
+  return Math.max(floor, Math.random() * 250 * 2 ** attempt);
+}
+
 async function errorText(res: Response): Promise<string> {
   const text = await res.text();
   try {
@@ -95,14 +132,28 @@ export class DuxClient {
     return res.json() as Promise<string[]>;
   }
 
+  /** POST /query, retrying while duxd sheds load with 503. */
+  private async postQuery(
+    body: string,
+    contentType: string,
+    signal?: AbortSignal
+  ): Promise<QueryResponse> {
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetch("/query", {
+        method: "POST",
+        headers: { "Content-Type": contentType },
+        body,
+        signal,
+      });
+      if (res.status !== 503) return parseQueryResponse(res);
+      const message = await errorText(res);
+      if (attempt >= BUSY_RETRIES) throw new ServerBusyError(message);
+      await sleep(busyRetryDelay(attempt, res.headers.get("Retry-After")), signal);
+    }
+  }
+
   async executeQuery(query: string, opts?: { signal?: AbortSignal }): Promise<QueryResponse> {
-    const res = await fetch("/query", {
-      method: "POST",
-      headers: { "Content-Type": "text/plain" },
-      body: query,
-      signal: opts?.signal,
-    });
-    return parseQueryResponse(res);
+    return this.postQuery(query, "text/plain", opts?.signal);
   }
 
   /** Execute a query with external filters (dashboard slicers) applied to its
@@ -113,13 +164,7 @@ export class DuxClient {
     opts?: { signal?: AbortSignal }
   ): Promise<QueryResponse> {
     if (filters.length === 0) return this.executeQuery(query, opts);
-    const res = await fetch("/query", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, filters }),
-      signal: opts?.signal,
-    });
-    return parseQueryResponse(res);
+    return this.postQuery(JSON.stringify({ query, filters }), "application/json", opts?.signal);
   }
 
   async importToml(text: string): Promise<void> {

@@ -18,9 +18,44 @@ import (
 )
 
 // QueryTimeout is the maximum duration allowed for a single DUX query,
-// including VAR materialisation. Queries that exceed this are interrupted.
+// including VAR materialisation. The clock starts once the query holds a
+// DuckDB connection, so time spent queueing for one never shortens the
+// execution budget. Queries that exceed this are interrupted.
 // Overridable at startup via the --query-timeout flag (see bootstrap).
 var QueryTimeout = 60 * time.Second
+
+// AdmissionTimeout bounds how long a query waits for a free DuckDB connection
+// before the server sheds it. The connection pool is small (see
+// internal/ducklake), so under load this queue is where requests pile up:
+// shedding early keeps callers from holding a socket for a full QueryTimeout
+// only to learn no work was ever attempted.
+// Overridable at startup via the --admission-timeout flag (see bootstrap).
+var AdmissionTimeout = 5 * time.Second
+
+// ErrServerBusy reports that no DuckDB connection became available within
+// AdmissionTimeout. It is returned before any SQL runs, so the query had no
+// effect and the caller may retry it safely.
+var ErrServerBusy = errors.New("server busy: no query connection available")
+
+// Acquire borrows a DuckDB connection, bounding the wait by AdmissionTimeout.
+// It reports ErrServerBusy when the pool stays full for that long, and the
+// caller's own context error when the caller gave up first.
+//
+// The returned connection carries no deadline: start the execution budget
+// after this returns so queue time never shortens it.
+func Acquire(ctx context.Context, db *sql.DB) (*sql.Conn, error) {
+	acquireCtx, cancel := context.WithTimeout(ctx, AdmissionTimeout)
+	defer cancel()
+	conn, err := db.Conn(acquireCtx)
+	if err != nil {
+		if ctx.Err() != nil {
+			// The caller gave up (disconnect or their own deadline).
+			return nil, fmt.Errorf("acquire connection: %w", err)
+		}
+		return nil, ErrServerBusy
+	}
+	return conn, nil
+}
 
 // QueryError is a query-pipeline failure with its pipeline stage and, when
 // the underlying error carries one, a 1-based source position.
@@ -113,13 +148,20 @@ func ExecuteFilteredContext(ctx context.Context, db *sql.DB, schema *semantic.Sc
 
 	// Pin a single connection so that session temp tables created for VAR
 	// bindings are visible across all statements.
-	ctx, cancel := context.WithTimeout(ctx, QueryTimeout)
-	defer cancel()
-	conn, err := db.Conn(ctx)
+	//
+	// Admission and execution get separate budgets. A request that waited out
+	// a long queue would otherwise start executing with whatever remained of
+	// QueryTimeout and be interrupted mid-flight, spending a scarce connection
+	// on work it could never finish.
+	conn, err := Acquire(ctx, db)
 	if err != nil {
-		return nil, nil, fmt.Errorf("acquire connection: %w", err)
+		return nil, nil, err
 	}
 	defer conn.Close()
+
+	// Execution budget starts here, now that the connection is held.
+	ctx, cancel := context.WithTimeout(ctx, QueryTimeout)
+	defer cancel()
 
 	// Initialise scalar var map so the emitter can substitute values inline.
 	em.ScalarVars = make(map[string]any)

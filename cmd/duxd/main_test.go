@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielwikar/dux/executor"
 	"github.com/danielwikar/dux/internal/bootstrap"
 	"github.com/danielwikar/dux/internal/ducklake"
 	"github.com/danielwikar/dux/semantic"
@@ -27,7 +28,7 @@ func TestOpenAPISpecIsValidJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	paths := document["paths"].(map[string]any)
-	for _, path := range []string{"/api/ducklake/status", "/api/ducklake/imports", "/api/ducklake/imports/{id}", "/api/ducklake/maintenance", "/api/ducklake/maintenance/{id}"} {
+	for _, path := range []string{"/query", "/values", "/api/ducklake/status", "/api/ducklake/imports", "/api/ducklake/imports/{id}", "/api/ducklake/maintenance", "/api/ducklake/maintenance/{id}"} {
 		if _, ok := paths[path]; !ok {
 			t.Fatalf("OpenAPI path %s missing", path)
 		}
@@ -443,5 +444,95 @@ func TestRejectedRelationshipUpdatePreservesStoredValue(t *testing.T) {
 	}
 	if len(loaded.Relationships) != 3 || loaded.Relationships[2].Bidirectional {
 		t.Fatalf("stored relationship was not preserved: %#v", loaded.Relationships)
+	}
+}
+
+// A shed query must surface as 503 with Retry-After, not as a 400 alongside
+// genuine query errors: clients retry the former and report the latter.
+func TestQueryHandler_ServerBusyIs503(t *testing.T) {
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatalf("open duckdb: %v", err)
+	}
+	defer db.Close()
+
+	// Cap the pool at one connection and take it, so the handler must queue.
+	db.SetMaxOpenConns(1)
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("pin connection: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(context.Background(), `CREATE TABLE sales (id INTEGER)`); err != nil {
+		t.Fatalf("seed table: %v", err)
+	}
+
+	defer func(d time.Duration) { executor.AdmissionTimeout = d }(executor.AdmissionTimeout)
+	executor.AdmissionTimeout = 100 * time.Millisecond
+
+	schema := &semantic.Schema{Tables: map[string]*semantic.Table{
+		"sales": {Name: "sales", Columns: map[string]*semantic.Column{
+			"id": {Name: "id", DataType: "INTEGER"},
+		}},
+	}}
+	var mu sync.RWMutex
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(`EVALUATE sales`))
+	queryHandler(db, schema, &mu)(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body %s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Retry-After"); got == "" {
+		t.Error("missing Retry-After header on 503")
+	}
+	var body map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if !strings.Contains(body["error"], "server busy") {
+		t.Errorf("error = %q, want it to name the server-busy condition", body["error"])
+	}
+}
+
+// Value pickers share the query pool, so they must shed the same way rather
+// than blocking indefinitely on a full pool.
+func TestValuesHandler_ServerBusyIs503(t *testing.T) {
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatalf("open duckdb: %v", err)
+	}
+	defer db.Close()
+
+	db.SetMaxOpenConns(1)
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("pin connection: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(context.Background(), `CREATE TABLE sales (region VARCHAR)`); err != nil {
+		t.Fatalf("seed table: %v", err)
+	}
+
+	defer func(d time.Duration) { executor.AdmissionTimeout = d }(executor.AdmissionTimeout)
+	executor.AdmissionTimeout = 100 * time.Millisecond
+
+	schema := &semantic.Schema{Tables: map[string]*semantic.Table{
+		"sales": {Name: "sales", SQLName: "sales", Columns: map[string]*semantic.Column{
+			"region": {Name: "region", DataType: "VARCHAR"},
+		}},
+	}}
+	var mu sync.RWMutex
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/values?table=sales&column=region", nil)
+	valuesHandler(db, schema, &mu)(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Header().Get("Retry-After") == "" {
+		t.Error("missing Retry-After header on 503")
 	}
 }

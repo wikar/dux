@@ -231,7 +231,8 @@ func Startup(binName, version, usage string, exitAfterImport, owner bool) *Runti
 	deleteDelay := flag.Duration("file-delete-delay", 7*24*time.Hour, "delay before unreferenced Parquet files are deleted")
 	memoryLimit := flag.String("memory-limit", "", "DuckDB memory limit per instance (e.g. 4GB); empty for the DuckDB default of 80% of available RAM")
 	maxTempSize := flag.String("max-temp-size", "", "cap on the spill directory <db-dir>/tmp (e.g. 16GB); empty leaves spilling bounded only by free disk space")
-	queryTimeout := flag.Duration("query-timeout", executor.QueryTimeout, "maximum duration for a single DUX query before it is interrupted")
+	queryTimeout := flag.Duration("query-timeout", executor.QueryTimeout, "maximum duration for a single DUX query to execute, measured from when it acquires a connection, before it is interrupted")
+	admissionTimeout := flag.Duration("admission-timeout", executor.AdmissionTimeout, "maximum duration a query waits for a free DuckDB connection before it is shed as server-busy")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, usage)
@@ -272,7 +273,11 @@ func Startup(binName, version, usage string, exitAfterImport, owner bool) *Runti
 	if *queryTimeout <= 0 {
 		log.Fatalf("--query-timeout must be positive")
 	}
+	if *admissionTimeout <= 0 {
+		log.Fatalf("--admission-timeout must be positive")
+	}
 	executor.QueryTimeout = *queryTimeout
+	executor.AdmissionTimeout = *admissionTimeout
 	cfg := ducklake.Config{
 		CatalogPath:         r.CatalogPath,
 		DataPath:            r.DataPath,

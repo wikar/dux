@@ -151,7 +151,8 @@ const openAPISpec = `{
               }
             }
           },
-          "400": { "description": "Parse or execution error" }
+          "400": { "description": "Parse or execution error" },
+          "503": { "description": "Server busy: no query connection became available within the admission timeout. No SQL ran, so the request is safe to retry. Retry-After carries the retry floor in seconds." }
         }
       }
     },
@@ -184,6 +185,53 @@ const openAPISpec = `{
               }
             }
           }
+        }
+      }
+    },
+    "/values": {
+      "get": {
+        "summary": "Distinct values of a column",
+        "description": "Distinct non-null values of a column as strings, for slicer and filter pickers. Capped at 50, then sorted: two values that both parse as numbers compare by value, any other pair compares lexically. Main-schema tables use Table; other schemas use schema.Table.",
+        "parameters": [
+          {
+            "name": "table",
+            "in": "query",
+            "required": true,
+            "description": "Table key as it appears in the semantic model.",
+            "schema": { "type": "string" },
+            "example": "Venue"
+          },
+          {
+            "name": "column",
+            "in": "query",
+            "required": true,
+            "description": "Column name within the table.",
+            "schema": { "type": "string" },
+            "example": "VenueType"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Case-insensitive substring filter applied to the string form of each value.",
+            "schema": { "type": "string" },
+            "example": "bar"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Up to 50 distinct values",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "type": "string" } },
+                "example": ["Bar", "Biergarten", "Bistro"]
+              }
+            }
+          },
+          "400": { "description": "table or column query parameter missing" },
+          "404": { "description": "Unknown table, or unknown column in that table" },
+          "500": { "description": "Value lookup failed" },
+          "503": { "description": "Server busy: no query connection became available within the admission timeout. No SQL ran, so the request is safe to retry. Retry-After carries the retry floor in seconds." }
         }
       }
     },
@@ -857,6 +905,18 @@ func writeError(w http.ResponseWriter, msg string, status int) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
+// serveBusy reports load shedding as 503 and returns true when it handled err.
+// Shared by every handler that borrows a DuckDB connection: no SQL ran, so the
+// client can retry as-is, and Retry-After is the retry floor it honours.
+func serveBusy(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, executor.ErrServerBusy) {
+		return false
+	}
+	w.Header().Set("Retry-After", "1")
+	writeError(w, err.Error(), http.StatusServiceUnavailable)
+	return true
+}
+
 func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	return io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes))
 }
@@ -911,6 +971,9 @@ func queryHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.Ha
 		cols, rows, err := executor.ExecuteFilteredContext(r.Context(), db, schema, query, filters)
 		mu.RUnlock()
 		if err != nil {
+			if serveBusy(w, err) {
+				return
+			}
 			// Structured pipeline errors carry a stage and source position;
 			// serve them as JSON so the UI can mark the offending spot.
 			var qe *executor.QueryError
@@ -980,7 +1043,21 @@ func valuesHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.H
 		}
 		query += ") LIMIT 50"
 
-		rows, err := db.Query(query, args...)
+		// Value pickers compete for the same small pool as /query, so they get
+		// the same admission control and execution budget.
+		conn, err := executor.Acquire(r.Context(), db)
+		if err != nil {
+			if serveBusy(w, err) {
+				return
+			}
+			writeError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer conn.Close()
+		ctx, cancel := context.WithTimeout(r.Context(), executor.QueryTimeout)
+		defer cancel()
+
+		rows, err := conn.QueryContext(ctx, query, args...)
 		if err != nil {
 			writeError(w, err.Error(), http.StatusInternalServerError)
 			return
