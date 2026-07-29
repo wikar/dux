@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,7 +37,30 @@ type Config struct {
 	// only with TempDirectory set. Empty keeps the DuckDB default of 90% of
 	// available disk space, so spilling is bounded only by free disk.
 	MaxTempDirectorySize string
+	// MaxConnections caps the transient DuckDB instance's connection pool.
+	// One is pinned for ownership, so the query executor gets one fewer.
+	// This is how many queries may run at once. Zero uses
+	// DefaultMaxConnections.
+	MaxConnections int
+	// Threads is how many worker threads DuckDB may use *per query*. Zero
+	// leaves the DuckDB default, which is detected from host hardware and
+	// ignores cgroup CPU quotas — pass runtime.GOMAXPROCS(0) to inherit Go's
+	// container-aware value instead.
+	//
+	// Threads and MaxConnections multiply: worst-case worker demand is
+	// (MaxConnections-1) x Threads. Raising Threads makes one query faster;
+	// raising MaxConnections lets more run at once. Oversubscribing both
+	// costs throughput to context switching.
+	Threads int
 }
+
+// DefaultMaxConnections is the pool size used when Config.MaxConnections is
+// unset. One connection is pinned for ownership; the rest serve queries.
+const DefaultMaxConnections = 8
+
+// MinMaxConnections is the smallest usable pool: the pinned ownership
+// connection plus one for the executor to borrow.
+const MinMaxConnections = 2
 
 // Runtime is one transient DuckDB instance with DuckLake attached.
 type Runtime struct {
@@ -118,6 +142,14 @@ func validateConfig(cfg Config) error {
 	if cfg.FileDeleteDelay <= 0 {
 		return fmt.Errorf("file-delete delay must be positive")
 	}
+	// Below the minimum the pinned ownership connection would take the whole
+	// pool and every query would be shed.
+	if cfg.MaxConnections != 0 && cfg.MaxConnections < MinMaxConnections {
+		return fmt.Errorf("max connections must be at least %d, got %d", MinMaxConnections, cfg.MaxConnections)
+	}
+	if cfg.Threads < 0 {
+		return fmt.Errorf("threads must not be negative, got %d", cfg.Threads)
+	}
 	return nil
 }
 
@@ -128,7 +160,11 @@ func openDuckDB(ctx context.Context, cfg Config) (*sql.DB, *sql.Conn, error) {
 	}
 	// Keep one pinned ownership connection while allowing the query executor to
 	// borrow independent connections from the same transient DuckDB instance.
-	db.SetMaxOpenConns(8)
+	maxConns := cfg.MaxConnections
+	if maxConns == 0 {
+		maxConns = DefaultMaxConnections
+	}
+	db.SetMaxOpenConns(maxConns)
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		db.Close()
@@ -173,6 +209,12 @@ func openDuckDB(ctx context.Context, cfg Config) (*sql.DB, *sql.Conn, error) {
 		stmt := fmt.Sprintf("SET memory_limit = %s", sqlString(cfg.MemoryLimit))
 		if _, err := conn.ExecContext(ctx, stmt); err != nil {
 			return fail(fmt.Errorf("set DuckDB memory_limit %q: %w", cfg.MemoryLimit, err))
+		}
+	}
+	if cfg.Threads > 0 {
+		stmt := fmt.Sprintf("SET threads = %d", cfg.Threads)
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
+			return fail(fmt.Errorf("set DuckDB threads %d: %w", cfg.Threads, err))
 		}
 	}
 	return db, conn, nil
@@ -255,6 +297,24 @@ func (r *Runtime) verifySettings(ctx context.Context, cfg Config) error {
 		"expire_older_than":       settings["expire_older_than"],
 		"delete_older_than":       settings["delete_older_than"],
 	}
+	// Report the resource settings DuckDB actually applied, not the ones DUX
+	// asked for. Under a container CPU quota the difference is the whole
+	// question, and there may be no shell or DuckDB CLI in the image to check.
+	var threads, memoryLimit string
+	if err := r.conn.QueryRowContext(ctx,
+		`SELECT current_setting('threads'), current_setting('memory_limit')`).Scan(&threads, &memoryLimit); err != nil {
+		return fmt.Errorf("read DuckDB resource settings: %w", err)
+	}
+	r.settings["threads"] = threads
+	r.settings["memory_limit"] = memoryLimit
+	// Not a DuckDB setting, but it belongs beside them: threads and the pool
+	// size multiply, and an operator reading one without the other cannot tell
+	// how much concurrency the instance actually allows.
+	maxConns := cfg.MaxConnections
+	if maxConns == 0 {
+		maxConns = DefaultMaxConnections
+	}
+	r.settings["max_connections"] = strconv.Itoa(maxConns)
 	r.formatVersion = settings["version"]
 	return nil
 }

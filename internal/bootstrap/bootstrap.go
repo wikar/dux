@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -233,6 +234,8 @@ func Startup(binName, version, usage string, exitAfterImport, owner bool) *Runti
 	maxTempSize := flag.String("max-temp-size", "", "cap on the spill directory <db-dir>/tmp (e.g. 16GB); empty leaves spilling bounded only by free disk space")
 	queryTimeout := flag.Duration("query-timeout", executor.QueryTimeout, "maximum duration for a single DUX query to execute, measured from when it acquires a connection, before it is interrupted")
 	admissionTimeout := flag.Duration("admission-timeout", executor.AdmissionTimeout, "maximum duration a query waits for a free DuckDB connection before it is shed as server-busy")
+	maxConnections := flag.Int("max-connections", ducklake.DefaultMaxConnections, "DuckDB connection pool size: how many queries may run at once. One connection is pinned for ownership, so the query lanes are one fewer. Multiplies with --threads (see the startup log)")
+	threads := flag.Int("threads", runtime.GOMAXPROCS(0), "DuckDB worker threads per query. Defaults to Go's GOMAXPROCS, which honours cgroup CPU limits; DuckDB's own default reads host hardware and ignores them. Lower it and raise --max-connections for throughput; raise it for single-query latency")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, usage)
@@ -276,8 +279,29 @@ func Startup(binName, version, usage string, exitAfterImport, owner bool) *Runti
 	if *admissionTimeout <= 0 {
 		log.Fatalf("--admission-timeout must be positive")
 	}
+	if *threads < 1 {
+		log.Fatalf("--threads must be positive")
+	}
 	executor.QueryTimeout = *queryTimeout
 	executor.AdmissionTimeout = *admissionTimeout
+
+	// The two knobs multiply, and neither is meaningful alone: DuckDB gives
+	// every running query its own allowance of worker threads. State the
+	// product against the CPU budget so the cost of raising either is visible
+	// without having to know that.
+	//
+	// GOMAXPROCS is the budget actually available: under a cgroup CPU quota it
+	// is below NumCPU, which still reports host cores. Naming both makes a
+	// container's real limit visible without a shell in the container.
+	lanes := *maxConnections - 1
+	budget, hostCPUs := runtime.GOMAXPROCS(0), runtime.NumCPU()
+	hostNote := ""
+	if budget != hostCPUs {
+		hostNote = fmt.Sprintf(" (quota-limited; host reports %d)", hostCPUs)
+	}
+	log.Printf("query concurrency: %d lanes x %d threads/query = up to %d workers on a CPU budget of %d%s",
+		lanes, *threads, lanes**threads, budget, hostNote)
+
 	cfg := ducklake.Config{
 		CatalogPath:         r.CatalogPath,
 		DataPath:            r.DataPath,
@@ -288,6 +312,8 @@ func Startup(binName, version, usage string, exitAfterImport, owner bool) *Runti
 		// degrades to disk instead of failing outright; both bounds are opt-in.
 		TempDirectory:        filepath.Join(r.DBDir, "tmp"),
 		MaxTempDirectorySize: *maxTempSize,
+		MaxConnections:       *maxConnections,
+		Threads:              *threads,
 	}
 	if owner {
 		r.Owner, err = ducklake.OpenOwner(context.Background(), cfg)

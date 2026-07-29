@@ -2,6 +2,7 @@ package ducklake
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -198,4 +199,118 @@ func TestOwnerVerifiesPersistentSettingsAndDataPath(t *testing.T) {
 	if _, err := OpenOwner(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "--ducklake-data") {
 		t.Fatalf("mismatched data path error = %v", err)
 	}
+}
+
+func TestMaxConnectionsConfigurable(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("default when unset", func(t *testing.T) {
+		owner, err := OpenOwner(ctx, testConfig(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer owner.Close()
+		if got := owner.DB().Stats().MaxOpenConnections; got != DefaultMaxConnections {
+			t.Errorf("MaxOpenConnections = %d, want the default %d", got, DefaultMaxConnections)
+		}
+	})
+
+	t.Run("configured value reaches the pool", func(t *testing.T) {
+		cfg := testConfig(t)
+		cfg.MaxConnections = 3
+		owner, err := OpenOwner(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer owner.Close()
+		if got := owner.DB().Stats().MaxOpenConnections; got != 3 {
+			t.Errorf("MaxOpenConnections = %d, want 3", got)
+		}
+
+		// One is pinned for ownership, so the rest must still serve queries.
+		conns := make([]*sql.Conn, 0, 2)
+		for i := 0; i < 2; i++ {
+			c, err := owner.DB().Conn(ctx)
+			if err != nil {
+				t.Fatalf("borrow connection %d of 2: %v", i+1, err)
+			}
+			conns = append(conns, c)
+		}
+		for _, c := range conns {
+			c.Close()
+		}
+	})
+
+	t.Run("below the minimum is rejected", func(t *testing.T) {
+		cfg := testConfig(t)
+		cfg.MaxConnections = 1
+		if _, err := OpenOwner(ctx, cfg); err == nil {
+			t.Fatal("expected a pool of 1 to be rejected: the pinned owner would take it all")
+		} else if !strings.Contains(err.Error(), "max connections") {
+			t.Errorf("error = %v, want it to name the max-connections bound", err)
+		}
+	})
+}
+
+func TestThreadsConfigurable(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("configured value reaches DuckDB", func(t *testing.T) {
+		cfg := testConfig(t)
+		cfg.Threads = 3
+		owner, err := OpenOwner(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer owner.Close()
+
+		var got string
+		if err := owner.Conn().QueryRowContext(ctx, `SELECT current_setting('threads')`).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != "3" {
+			t.Errorf("threads = %q, want 3", got)
+		}
+	})
+
+	t.Run("applies to borrowed connections too", func(t *testing.T) {
+		// threads is instance-global in DuckDB, so setting it on the pinned
+		// ownership connection must cover every connection the executor
+		// borrows — otherwise the cap would silently apply to nothing.
+		cfg := testConfig(t)
+		cfg.Threads = 2
+		owner, err := OpenOwner(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer owner.Close()
+
+		conn, err := owner.DB().Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		var got string
+		if err := conn.QueryRowContext(ctx, `SELECT current_setting('threads')`).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != "2" {
+			t.Errorf("threads on a borrowed connection = %q, want 2", got)
+		}
+	})
+
+	t.Run("unset leaves the DuckDB default", func(t *testing.T) {
+		owner, err := OpenOwner(ctx, testConfig(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer owner.Close()
+		var got string
+		if err := owner.Conn().QueryRowContext(ctx, `SELECT current_setting('threads')`).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got == "" || got == "0" {
+			t.Errorf("threads = %q, want DuckDB's detected default", got)
+		}
+	})
 }
