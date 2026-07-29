@@ -28,6 +28,22 @@ Three clients sit on top: the embedded **web UI** (query builder, model Explorer
 
 ## Quick start with Docker
 
+The published image is the fastest way to a running instance — no Go toolchain, no C compiler, no UI build.
+
+**1. Run it.** One volume is all it needs:
+
+```sh
+docker run -d -p 8080:8080 -v dux-db:/app/db ghcr.io/wikar/dux:latest
+```
+
+**2. Open [http://localhost:8080](http://localhost:8080).** The query builder, model Explorer, and dashboard designer are all served from there.
+
+**3. Put something in it.** A fresh instance is empty — [install the sample data](#sample-data) for 3,000,000 rows, a semantic model, and a dashboard in one command.
+
+> **`duxd` has no authentication.** Every endpoint, including the mutating semantic-model, import, and maintenance ones, assumes a trusted network. Do not publish the port to an untrusted network.
+
+### Volumes
+
 ```sh
 docker run -d -p 8080:8080 \
   -v dux-db:/app/db \
@@ -35,6 +51,16 @@ docker run -d -p 8080:8080 \
   -v /local/dashboards:/app/dashboards \
   ghcr.io/wikar/dux:latest
 ```
+
+| Path | Required | Contents |
+|------|----------|----------|
+| `/app/db` | **yes** | DUX-owned state: the DuckLake catalog and Parquet data plus `dux.sqlite`. Use a Docker named volume or a native local Linux path |
+| `/app/inbox` | no | The controlled Parquet inbox — a *sibling* of `/app/db`, never a child, so the two mount separately. It may be a host bridge: pipelines publish completed files here and ask DUX to import them |
+| `/app/dashboards` | no | Dashboard JSON and `theme.json`; mount it to persist them |
+
+Version the mounted dashboards directory from the host or a dedicated Git sidecar — Git is not included in the DUX image. Set `DUX_DASH=0` if dashboards are not needed.
+
+### Flags and the CLI
 
 Flags append to the entrypoint, so any [`duxd` flag](#server-duxd) works directly:
 
@@ -46,9 +72,27 @@ A container's command is fixed at creation, so changing flags means recreating
 it (`docker rm -f` then `docker run`), not `docker restart`. The image also
 ships the `dux` CLI: reach it with `--entrypoint ./dux`.
 
-`/app/db` contains DUX-owned state and is the only required volume; use a Docker named volume or native local Linux path. `/app/inbox` is the default inbox — a sibling of `/app/db`, never a child, so the two can be mounted separately. It is an optional delivery mount and may be a host bridge: data pipelines publish completed Parquet files there and ask DUX to import them. Mount `/app/dashboards` to persist dashboard definitions. Version that mounted directory from the host or a dedicated Git sidecar; Git is not included in the DUX image. Set `DUX_DASH=0` if dashboards are not needed.
+## Sample data
 
-> **`duxd` has no authentication.** Every endpoint, including the mutating semantic-model, import, and maintenance ones, assumes a trusted network. Do not publish the port to an untrusted network.
+An empty instance is hard to explore. The **[sample data bundle](https://github.com/wikar/dux/releases/tag/dux-sample-v1)** fills one in a single command: 3,000,000 order lines of German beverage sales as a star schema, a semantic model of 23 formatted measures with time intelligence, and a 19-element demo dashboard.
+
+Download `dux-sample-v1.zip` from the release and extract it anywhere — the bundle has no required location. It ships `install.sh` and `install.ps1`, which take the server URL, the controlled import inbox, and the dashboards root; they need filesystem access to the latter two, so run them on the machine hosting `duxd`.
+
+**Against the Docker container above**, pointing at the host side of the mounts:
+
+```sh
+cd dux-sample && chmod +x install.sh && DUXD_URL=http://localhost:8080 DUX_IMPORT_DIR=/local/inbox DUX_DASH_DIR=/local/dashboards ./install.sh
+```
+
+**Against a source checkout**, extract into `samples/` and the defaults already resolve:
+
+```sh
+cd samples/dux-sample && chmod +x install.sh && ./install.sh
+```
+
+The installer imports the six Parquet tables through the [import API](#parquet-import-api), loads the model through `POST /import`, copies the dashboard asset into place, and restores the dashboard at [`/dash/sales/sales_test`](http://localhost:8080/dash/sales/sales_test). Install into an **empty** DuckLake instance — imports append, so a second run over existing tables duplicates every row.
+
+The bundle is versioned independently of DUX and records which versions it was verified against; the release page carries the current compatibility record.
 
 ## Requirements
 
@@ -119,7 +163,7 @@ inbox/               Inbox for controlled Parquet imports
 dashboards/          Dashboard documents (one JSON file each) + theme.json
 dux.toml             Portable export of the semantic model
 samples/             Example .dux queries
-  dux-sample/        Sample data: Parquet, dux.toml, dashboard, asset, installers
+  dux-sample/        Sample data bundle — extracted from a release, not tracked
 .agents/skills/      Agent skills (packaged per release)
 ```
 
