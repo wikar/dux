@@ -234,8 +234,8 @@ func Startup(binName, version, usage string, exitAfterImport, owner bool) *Runti
 	maxTempSize := flag.String("max-temp-size", "", "cap on the spill directory <db-dir>/tmp (e.g. 16GB); empty leaves spilling bounded only by free disk space")
 	queryTimeout := flag.Duration("query-timeout", executor.QueryTimeout, "maximum duration for a single DUX query to execute, measured from when it acquires a connection, before it is interrupted")
 	admissionTimeout := flag.Duration("admission-timeout", executor.AdmissionTimeout, "maximum duration a query waits for a free DuckDB connection before it is shed as server-busy")
-	maxConnections := flag.Int("max-connections", ducklake.DefaultMaxConnections, "DuckDB connection pool size: how many queries may run at once. One connection is pinned for ownership, so the query lanes are one fewer. Multiplies with --threads (see the startup log)")
-	threads := flag.Int("threads", runtime.GOMAXPROCS(0), "DuckDB worker threads per query. Defaults to Go's GOMAXPROCS, which honours cgroup CPU limits; DuckDB's own default reads host hardware and ignores them. Lower it and raise --max-connections for throughput; raise it for single-query latency")
+	maxConnections := flag.Int("max-connections", ducklake.DefaultMaxConnections, "DuckDB connection pool size: how many queries may run at once. One connection is pinned for ownership, so the query lanes are one fewer. Raising it does not add throughput and makes tail latency worse; raise it only if queries are being shed while the CPU sits idle")
+	threads := flag.Int("threads", runtime.GOMAXPROCS(0), "DuckDB worker threads per query. Defaults to Go's GOMAXPROCS, which honours cgroup CPU limits; DuckDB's own default reads host hardware and ignores them. The default suits most hosts — lowering it slows queries without raising throughput")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, usage)
@@ -285,10 +285,11 @@ func Startup(binName, version, usage string, exitAfterImport, owner bool) *Runti
 	executor.QueryTimeout = *queryTimeout
 	executor.AdmissionTimeout = *admissionTimeout
 
-	// The two knobs multiply, and neither is meaningful alone: DuckDB gives
-	// every running query its own allowance of worker threads. State the
-	// product against the CPU budget so the cost of raising either is visible
-	// without having to know that.
+	// Report the resolved configuration: DuckDB gives every running query its
+	// own allowance of worker threads, so neither number describes the
+	// instance alone. The worker total is worst-case demand, not a tuning
+	// target — measurement showed the two knobs behave very differently (see
+	// ducklake.Config.Threads).
 	//
 	// GOMAXPROCS is the budget actually available: under a cgroup CPU quota it
 	// is below NumCPU, which still reports host cores. Naming both makes a

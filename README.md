@@ -168,7 +168,8 @@ The CLI is a read-only DuckLake client. Start `duxd` once to initialize an empty
 | `--file-delete-delay` | `168h` (7d) | Expected unreferenced-file delay |
 | `--memory-limit` | — | DuckDB memory cap per instance (e.g. `4GB`); default is DuckDB's own 80% of available RAM. Work exceeding it spills to `<db-dir>/tmp` |
 | `--max-temp-size` | — | Cap on the spill directory (e.g. `16GB`); by default spilling is bounded only by free disk space |
-| `--query-timeout` | `60s` | Interrupt a single DUX query after this duration |
+| `--query-timeout` | `60s` | Interrupt a query after this much *execution*, timed from when it acquires a connection |
+| `--threads` | GOMAXPROCS | DuckDB worker threads per query. Honours container CPU limits |
 | `--toml` | `dux.toml` | Load measures and relationships from a `dux.toml` file |
 | `--export` | — | Write current schema to a `dux.toml` file and exit |
 | `--import` | — | Import a `dux.toml` into the metadata DB and exit |
@@ -205,7 +206,10 @@ Listens on `:8080` (`--listen`).
 | `--file-delete-delay` | `168h` (7d) | Delay deletion of unreferenced files |
 | `--memory-limit` | — | DuckDB memory cap per instance (e.g. `4GB`); default is DuckDB's own 80% of available RAM. Work exceeding it spills to `<db-dir>/tmp` |
 | `--max-temp-size` | — | Cap on the spill directory (e.g. `16GB`); by default spilling is bounded only by free disk space |
-| `--query-timeout` | `60s` | Interrupt a single DUX query after this duration |
+| `--query-timeout` | `60s` | Interrupt a query after this much *execution*, timed from when it acquires a connection — queueing does not count against it |
+| `--admission-timeout` | `5s` | How long a query waits for a free connection before it is shed with `503`. See [Concurrency](#concurrency) |
+| `--max-connections` | `5` | Connection pool size; one is pinned for ownership, so one fewer queries run at once. See [Concurrency](#concurrency) |
+| `--threads` | GOMAXPROCS | DuckDB worker threads per query. Honours container CPU limits. See [Concurrency](#concurrency) |
 | `--toml` | `dux.toml` | Load measures and relationships from a `dux.toml` file |
 | `--import` | — | Import a `dux.toml` into the metadata DB on startup |
 | `--export` | — | Export current schema to a `dux.toml` file and exit |
@@ -213,6 +217,56 @@ Listens on `:8080` (`--listen`).
 | `--version` | — | Print version and exit |
 
 Set `DUX_DASH=0` to disable the dashboards module (`/dash/` and `/api/dash/` return 404).
+
+### Concurrency
+
+Two flags control how much work runs at once, and they are **not**
+interchangeable:
+
+- `--max-connections` is how many queries run **at the same time** (minus the
+  one pinned for ownership, so the default of 5 gives four query lanes).
+- `--threads` is how many worker threads DuckDB may use **within one query**.
+
+duxd states the resolved configuration at startup, so you never have to infer
+it:
+
+```text
+query concurrency: 4 lanes x 20 threads/query = up to 80 workers on a CPU budget of 20
+```
+
+**Leave both alone unless you have measured a reason not to.** Parallelism
+inside a query is cheap; concurrency between queries is not, because every
+admitted query holds a lane and its memory until it finishes. Measured on a
+3M-row instance on a 20-thread host:
+
+| Change | Throughput | p99 latency |
+|--------|------------|-------------|
+| Lanes 2 → 11 | unchanged | **3.2x worse** |
+| Threads 2 → 20 | unchanged | 17% better |
+
+Throughput did not move in either direction. Extra lanes only convert fast
+`503` shedding into slow in-server queueing, so the tail collapses while the
+server does no more work. Do not tune these against a combined worker budget —
+the worker total in the startup line is worst-case demand, not a target, and
+the product does not predict behaviour.
+
+Raise `--max-connections` only if queries are being shed while the CPU sits
+idle. Lower it if the tail is bad and the shed rate is acceptable.
+
+**Under load, duxd sheds rather than queues.** A query that waits longer than
+`--admission-timeout` for a connection is rejected with `503` and a
+`Retry-After` header, before any SQL runs, so it is always safe to retry — the
+bundled UI does so automatically with jittered backoff. `--query-timeout` is
+separate and starts only once a query holds a connection, so a busy queue never
+eats into execution time.
+
+**In containers**, `--threads` defaults to Go's `GOMAXPROCS`, which honours
+cgroup CPU quotas; DuckDB's own default reads host hardware and would ignore
+them. Confirm what the engine actually applied — no shell or DuckDB CLI needed:
+
+```sh
+curl -s localhost:8080/api/ducklake/status | grep -o '"threads":"[0-9]*"'
+```
 
 ## Dashboards (Dash)
 

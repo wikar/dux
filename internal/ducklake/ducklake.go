@@ -47,16 +47,24 @@ type Config struct {
 	// ignores cgroup CPU quotas — pass runtime.GOMAXPROCS(0) to inherit Go's
 	// container-aware value instead.
 	//
-	// Threads and MaxConnections multiply: worst-case worker demand is
-	// (MaxConnections-1) x Threads. Raising Threads makes one query faster;
-	// raising MaxConnections lets more run at once. Oversubscribing both
-	// costs throughput to context switching.
+	// The two knobs are not interchangeable, despite both looking like
+	// "concurrency". Measured: raising Threads held throughput flat and
+	// improved p99 slightly, while raising MaxConnections held throughput flat
+	// and made p99 far worse. Parallelism inside a query is cheap; concurrency
+	// between queries is not, because each admitted query holds a lane and its
+	// memory for longer. Do not tune these against a combined worker budget —
+	// the product does not predict behaviour.
 	Threads int
 }
 
 // DefaultMaxConnections is the pool size used when Config.MaxConnections is
 // unset. One connection is pinned for ownership; the rest serve queries.
-const DefaultMaxConnections = 8
+//
+// Four query lanes. Measured against a 3M-row DuckLake instance on a 20-thread
+// host: throughput was flat from 2 to 11 lanes, while p99 latency rose 3.2x
+// across that range. Lanes past the point where throughput stops improving buy
+// nothing and cost tail latency.
+const DefaultMaxConnections = 5
 
 // MinMaxConnections is the smallest usable pool: the pinned ownership
 // connection plus one for the executor to borrow.
