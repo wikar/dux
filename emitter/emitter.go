@@ -336,6 +336,8 @@ func (e *Emitter) emitFuncCall(fc *parser.FuncCall) (string, error) {
 	// Table constructors / operations
 	case "SUMMARIZECOLUMNS":
 		return e.emitSummarizeColumns(fc)
+	case "ROW":
+		return e.emitRow(fc)
 	case "ADDCOLUMNS":
 		return e.emitProjectColumns(fc, "SELECT *, ")
 	case "SELECTCOLUMNS":
@@ -451,6 +453,11 @@ func (e *Emitter) emitIterAgg(agg string, fc *parser.FuncCall) (string, error) {
 	if len(fc.Args) != 2 {
 		return "", fmt.Errorf("%s requires exactly 2 arguments", fc.Name)
 	}
+	// The iterated expression evaluates per row: an inline aggregate inside it
+	// would nest as agg(agg(...)).
+	if err := e.requireNoInlineAgg(strings.ToUpper(fc.Name), fc.Args[1]); err != nil {
+		return "", err
+	}
 
 	if e.groupedIterInline(fc.Args[0]) {
 		inner, err := e.emitExpr(fc.Args[1])
@@ -564,6 +571,9 @@ func (e *Emitter) emitConcatenateX(fc *parser.FuncCall) (string, error) {
 // concatenateXArgs emits CONCATENATEX's expression and (optional) delimiter
 // arguments; the delimiter defaults to ", ".
 func (e *Emitter) concatenateXArgs(fc *parser.FuncCall) (inner, delim string, err error) {
+	if err = e.requireNoInlineAgg("CONCATENATEX", fc.Args[1]); err != nil {
+		return "", "", err
+	}
 	inner, err = e.emitExpr(fc.Args[1])
 	if err != nil {
 		return "", "", err
@@ -622,11 +632,11 @@ func (e *Emitter) emitCalculate(fc *parser.FuncCall) (string, error) {
 			allTables = append(allTables, t)
 		}
 	}
-	for _, t := range collectTables(fc.Args[0]) {
+	for _, t := range e.measureExprTables(fc.Args[0]) {
 		addTbl(t)
 	}
 	for _, arg := range preds {
-		for _, t := range collectTables(arg) {
+		for _, t := range e.measureExprTables(arg) {
 			addTbl(t)
 		}
 	}
@@ -815,6 +825,9 @@ func (e *Emitter) emitFilter(fc *parser.FuncCall) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("FILTER: first argument must be a table expression: %w", err)
 	}
+	if err := e.requireNoInlineAgg("FILTER", fc.Args[1]); err != nil {
+		return "", err
+	}
 	pred, err := e.emitExpr(fc.Args[1])
 	if err != nil {
 		return "", err
@@ -877,7 +890,7 @@ func (e *Emitter) emitValuesOrDistinct(name string, fc *parser.FuncCall) (string
 	if err != nil {
 		return "", err
 	}
-	table := primaryTableFromExpr(fc.Args[0])
+	table := e.primaryTableFromExpr(fc.Args[0])
 	if table == "" {
 		return "", fmt.Errorf("%s: cannot determine source table from argument", name)
 	}
@@ -1092,12 +1105,12 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 		}
 	}
 	for _, arg := range groupArgs {
-		for _, t := range collectTables(arg) {
+		for _, t := range e.measureExprTables(arg) {
 			addTbl(t)
 		}
 	}
 	for i := 1; i < len(pairArgs); i += 2 {
-		for _, t := range collectTables(pairArgs[i]) {
+		for _, t := range e.measureExprTables(pairArgs[i]) {
 			addTbl(t)
 		}
 	}
@@ -1140,6 +1153,26 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	return sb.String(), nil
 }
 
+// emitRow emits ROW("Name", Expr, ...), the single-row table constructor.
+//
+// A ROW is a SUMMARIZECOLUMNS with no group columns: the same name/expression
+// pairs, evaluated over the same inferred join tree, producing exactly one row.
+// Emission is delegated so that measure expansion, table collection, join
+// inference and measure clustering behave identically in both.
+func (e *Emitter) emitRow(fc *parser.FuncCall) (string, error) {
+	if len(fc.Args) < 2 || len(fc.Args)%2 != 0 {
+		return "", fmt.Errorf(
+			"ROW: expected name/expression pairs, but got %d argument(s) — each column must have a quoted name followed by its expression",
+			len(fc.Args))
+	}
+	for i := 0; i < len(fc.Args); i += 2 {
+		if !isStringLiteral(fc.Args[i]) {
+			return "", fmt.Errorf("ROW: column name at argument %d must be a quoted string", i+1)
+		}
+	}
+	return e.emitSummarizeColumns(fc)
+}
+
 // emitProjectColumns emits ADDCOLUMNS / SELECTCOLUMNS:
 //
 //	<selectPrefix>(expr1) AS "name1", ... FROM table
@@ -1161,6 +1194,9 @@ func (e *Emitter) emitProjectColumns(fc *parser.FuncCall, selectPrefix string) (
 	for i := 1; i < len(fc.Args); i += 2 {
 		nameExpr, err := e.emitExpr(fc.Args[i])
 		if err != nil {
+			return "", err
+		}
+		if err := e.requireNoInlineAgg(name, fc.Args[i+1]); err != nil {
 			return "", err
 		}
 		valExpr, err := e.emitExpr(fc.Args[i+1])
@@ -1457,32 +1493,49 @@ func walkTerms(expr *parser.Expr, visit func(*parser.Term) bool) {
 	}
 }
 
-// collectTables returns the distinct table names (in encounter order) that are
-// directly referenced via ColRef nodes within expr. Nested function call
-// arguments are traversed recursively.
-func collectTables(expr *parser.Expr) []string {
-	seen := map[string]bool{}
-	var result []string
-	add := func(tableName string) {
-		if !seen[tableName] {
-			seen[tableName] = true
-			result = append(result, tableName)
+// requireNoInlineAgg rejects an expression that aggregates inline — a bare
+// SUM/COUNTROWS/… or a measure reference expanding to one — in a position that
+// provides no grouping context: an ADDCOLUMNS/SELECTCOLUMNS value, a FILTER
+// predicate, or an iterator body. Such an aggregate emits with no FROM and no
+// GROUP BY of its own, so it would reach DuckDB as invalid SQL.
+//
+// DUX does not perform context transition (see TDD-INTERNAL.md), so the
+// aggregate needs an explicit context: CALCULATE, or an iterator, both of which
+// emit a self-contained subquery and are accepted here.
+func (e *Emitter) requireNoInlineAgg(fnName string, expr *parser.Expr) error {
+	for _, fc := range e.aggSubtrees(expr) {
+		name := strings.ToUpper(fc.Name)
+		if !emitsInline(fc) {
+			continue
 		}
+		return fmt.Errorf(
+			"%s: %s aggregates over its whole table and has no row context here; "+
+				"DUX does not perform context transition — give the aggregate its own "+
+				"context, e.g. CALCULATE(%s(...), <correlation predicate>)",
+			fnName, name, name)
 	}
-	walkTerms(expr, func(t *parser.Term) bool {
-		if t.ColRef != nil && t.ColRef.Table != "" {
-			add(semantic.StripSingleQuotes(t.ColRef.Table))
-		}
-		// An iterator's bare-table source joins the enclosing FROM so the
-		// inline aggregate (see emitIterAgg) has rows to aggregate over.
-		if t.FuncCall != nil {
-			if tbl := iterBareTable(t.FuncCall); tbl != "" {
-				add(tbl)
-			}
-		}
+	return nil
+}
+
+// emitsInline reports whether an aggregate call emits inline into the
+// enclosing SELECT — relying on the caller's FROM and GROUP BY — rather than as
+// a self-contained subquery. CALCULATE, the iterators and the time-intelligence
+// totals carry their own context and are never inline.
+func emitsInline(fc *parser.FuncCall) bool {
+	name := strings.ToUpper(fc.Name)
+	if _, ok := simpleAggs[name]; ok {
 		return true
-	})
-	return result
+	}
+	switch name {
+	case "DISTINCTCOUNT", "COUNTBLANK":
+		return true
+	case "COUNTROWS":
+		// COUNTROWS over a table expression — RELATEDTABLE(...), FILTER(...) —
+		// counts that table in its own subquery (see emitCountRows); only the
+		// bare-table form emits COUNT(*) against the caller's FROM.
+		return len(fc.Args) != 1 || fc.Args[0].Left == nil || fc.Args[0].Left.FuncCall == nil
+	}
+	return false
 }
 
 // iterBareTable returns the bare-table first argument of an iterator
@@ -1606,7 +1659,7 @@ func hasMatchingOuterParens(s string) bool {
 // isTableFunc reports whether a DUX function name returns a table.
 func isTableFunc(name string) bool {
 	switch strings.ToUpper(name) {
-	case "FILTER", "SUMMARIZECOLUMNS", "ADDCOLUMNS", "SELECTCOLUMNS",
+	case "FILTER", "SUMMARIZECOLUMNS", "ROW", "ADDCOLUMNS", "SELECTCOLUMNS",
 		"UNION", "INTERSECT", "EXCEPT", "TOPN", "DISTINCT", "VALUES",
 		"ALL", "ALLEXCEPT", "CROSSJOIN", "GENERATE", "GENERATEALL",
 		"DATESYTD", "DATESQTD", "DATESMTD", "SAMEPERIODLASTYEAR", "DATEADD",
@@ -1701,7 +1754,7 @@ func (e *Emitter) EmitScalarQuery(expr *parser.Expr) (string, error) {
 	}
 
 	// Derive a FROM clause from tables referenced in the expression.
-	table := primaryTableFromExpr(expr)
+	table := e.primaryTableFromExpr(expr)
 	if table == "" {
 		return "SELECT " + sql, nil
 	}
@@ -1724,8 +1777,8 @@ func (e *Emitter) emitCountRowsScalar(fc *parser.FuncCall) (string, error) {
 // primaryTableFromExpr returns the first table name found in the expression,
 // by scanning ColRef table qualifiers and, as a fallback, the first Ident
 // inside aggregation function arguments (for COUNTROWS(Table) patterns).
-func primaryTableFromExpr(expr *parser.Expr) string {
-	if tables := collectTables(expr); len(tables) > 0 {
+func (e *Emitter) primaryTableFromExpr(expr *parser.Expr) string {
+	if tables := e.measureExprTables(expr); len(tables) > 0 {
 		return tables[0]
 	}
 	return firstIdentInFuncArgs(expr)

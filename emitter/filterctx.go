@@ -306,16 +306,16 @@ func (e *Emitter) emitCalculateGrouped(fc *parser.FuncCall) (string, error) {
 			tables = append(tables, t)
 		}
 	}
-	for _, t := range collectTables(fc.Args[0]) {
+	for _, t := range e.measureExprTables(fc.Args[0]) {
 		add(t)
 	}
 	for _, p := range cm.preds {
-		for _, t := range collectTables(p) {
+		for _, t := range e.measureExprTables(p) {
 			add(t)
 		}
 	}
 	for _, p := range cm.keepPreds {
-		for _, t := range collectTables(p) {
+		for _, t := range e.measureExprTables(p) {
 			add(t)
 		}
 	}

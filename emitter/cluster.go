@@ -297,6 +297,12 @@ func (e *Emitter) canonTable(name string) string {
 // references (Table[Measure] and bare [Measure]) through the effective measure
 // store so a stored measure's underlying tables are attributed to the
 // referencing expression. Cycles between stored measures are guarded.
+//
+// This is the single table-collection walk behind every FROM clause the emitter
+// builds — clustering, SUMMARIZECOLUMNS, CALCULATE, and scalar queries. A plain
+// AST walk would miss a bare [Measure]'s home table entirely (the ColRef
+// carries no table name) and emit its aggregate over a FROM that never joins
+// the table the aggregate reads.
 func (e *Emitter) measureExprTables(expr *parser.Expr) []string {
 	seen := map[string]bool{}
 	var result []string
