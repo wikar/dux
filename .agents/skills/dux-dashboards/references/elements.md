@@ -166,7 +166,7 @@ rather than through the shared query pipeline, so the element carries
 ```
 
 - `kind`: `buttons` (value pills) | `dropdown` (searchable multi-select) |
-  `range` | `daterange`. (`list` is accepted and renders as buttons.)
+  `range` | `daterange`.
 - `dataType` should be the column's DuckDB type — it types the filter
   values (numeric columns get numeric filters) and drives the range kinds.
 - `limit`: max pills for the buttons kind (default 20; "+n more" chip).
