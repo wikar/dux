@@ -36,6 +36,16 @@ docker run -d -p 8080:8080 \
   ghcr.io/wikar/dux:latest
 ```
 
+Flags append to the entrypoint, so any [`duxd` flag](#server-duxd) works directly:
+
+```sh
+docker run -d -p 8080:8080 -v dux-db:/app/db ghcr.io/wikar/dux:latest --max-connections 5
+```
+
+A container's command is fixed at creation, so changing flags means recreating
+it (`docker rm -f` then `docker run`), not `docker restart`. The image also
+ships the `dux` CLI: reach it with `--entrypoint ./dux`.
+
 `/app/db` contains DUX-owned state and is the only required volume; use a Docker named volume or native local Linux path. `/app/inbox` is the default inbox — a sibling of `/app/db`, never a child, so the two can be mounted separately. It is an optional delivery mount and may be a host bridge: data pipelines publish completed Parquet files there and ask DUX to import them. Mount `/app/dashboards` to persist dashboard definitions. Version that mounted directory from the host or a dedicated Git sidecar; Git is not included in the DUX image. Set `DUX_DASH=0` if dashboards are not needed.
 
 > **`duxd` has no authentication.** Every endpoint, including the mutating semantic-model, import, and maintenance ones, assumes a trusted network. Do not publish the port to an untrusted network.
