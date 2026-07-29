@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { duxClient as client, generateQuery, isMetricField, isNumeric } from "@dux/core";
 import type { QueryFailedError, DropField, FilterField, DragPayload, Aggregate, FilterOp } from "@dux/core";
 import SchemaTree from "./components/SchemaTree";
@@ -30,6 +30,7 @@ const DashActions = lazy(() => import("./dash/components/DashActions"));
 // (isMetricField from @dux/core). Non-metric (group-by) columns sort first.
 
 export default function App() {
+  const queryClient = useQueryClient();
   const pathname = usePathname();
   const tab = tabFromPathname(pathname);
   const dashPath = dashPathFromPathname(pathname);
@@ -38,7 +39,6 @@ export default function App() {
 
   const dashFullscreen = useUiStore((s) => s.fullscreen);
   const importInputRef = useRef<HTMLInputElement>(null);
-  const [refreshCount, setRefreshCount] = useState(0);
   const [showHidden, setShowHidden] = useState(false);
   const [includeEmpty, setIncludeEmpty] = useState(false);
   const [queryError, setQueryError] = useState<QueryFailedError | null>(null);
@@ -195,7 +195,10 @@ export default function App() {
 
   async function handleRefresh() {
     await client.refresh();
-    setRefreshCount((c) => c + 1);
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["schema"] }),
+      queryClient.invalidateQueries({ queryKey: ["measures"] }),
+    ]);
   }
 
   function handleTabChange(id: string) {
@@ -255,7 +258,7 @@ export default function App() {
       >
         {/* Column 1 — Schema tree */}
         <div className={styles.col1}>
-          <SchemaTree refreshCount={refreshCount} showHidden={showHidden} />
+          <SchemaTree showHidden={showHidden} />
         </div>
 
         {/* Column 2 — Drop zones */}
@@ -287,7 +290,6 @@ export default function App() {
         <div className={styles.col3}>
           <QueryPreview
             query={activeQuery}
-            refreshCount={refreshCount}
             isDirty={isDirty}
             onQueryChange={handleQueryChange}
             onRun={commitQuery}
@@ -306,13 +308,13 @@ export default function App() {
       </div>
       {tab === "explorer" && (
         <Suspense fallback={<div className={styles.chunkLoading}>Loading…</div>}>
-          <Explorer refreshCount={refreshCount} showHidden={showHidden} />
+          <Explorer showHidden={showHidden} />
         </Suspense>
       )}
       {tab === "dash" &&
         (dashEnabled || version === undefined ? (
           <Suspense fallback={<div className={styles.chunkLoading}>Loading…</div>}>
-            <DashApp path={dashPath} refreshCount={refreshCount} showHidden={showHidden} />
+            <DashApp path={dashPath} showHidden={showHidden} />
           </Suspense>
         ) : (
           <div className={styles.dashDisabled}>

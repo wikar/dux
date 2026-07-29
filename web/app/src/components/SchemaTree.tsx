@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { DragEvent } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Schema, DragPayload, Relationship, MeasureFormat } from "@dux/core";
 import { isMetaTable, resolveTable, duxClient as client } from "@dux/core";
 import TypeIcon from "./TypeIcon";
@@ -447,13 +447,13 @@ function MeasuresSection(props: {
 type ModalMode = "measure-add" | "measure-edit" | "relationship-add" | "relationship-edit";
 
 export default function SchemaTree(props: {
-  refreshCount?: number;
   showHidden?: boolean;
   /** Render without the panel chrome (host provides header/border, e.g. a CollapsiblePanel). */
   bare?: boolean;
 }) {
+  const queryClient = useQueryClient();
   const { data: schema, error: schemaError, isFetching: loading, refetch } = useQuery({
-    queryKey: ["schema", props.refreshCount ?? 0],
+    queryKey: ["schema"],
     queryFn: () => client.fetchSchema(),
   });
 
@@ -518,7 +518,7 @@ export default function SchemaTree(props: {
     try {
       await client.deleteMeasure(table, name);
       setDeleteError("");
-      refetch();
+      await Promise.all([refetch(), queryClient.invalidateQueries({ queryKey: ["measures"] })]);
     } catch (e) {
       setDeleteError(`Failed to delete measure: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -545,7 +545,10 @@ export default function SchemaTree(props: {
   }
   function openRelEdit(r: Relationship) { setRelEditTarget(r); setModal("relationship-edit"); }
   function closeModal() { setModal(null); }
-  function saved() { closeModal(); refetch(); }
+  function saved() {
+    closeModal();
+    void Promise.all([refetch(), queryClient.invalidateQueries({ queryKey: ["measures"] })]);
+  }
 
   return (
     <div className={props.bare ? styles.panelBare : styles.panel}>

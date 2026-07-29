@@ -6,9 +6,10 @@
 // matter of adding a second Vite entry over src/dash + src/components.
 import { useEffect, useRef, useState } from "react";
 import styles from "./DashApp.module.css";
-import { fullscreenFromUrl, openDashboard, redo, save, setFullscreen, undo } from "./actions";
+import { fullscreenFromUrl, openDashboard, redo, save, seedSlicerSelections, setFullscreen, undo } from "./actions";
 import { nudgeElement, removeElement } from "./docOps";
-import { useDocStore, useUiStore } from "./store";
+import { useDirty, useDocStore, useUiStore } from "./store";
+import { setNavigationBlocker, useSearch } from "../router";
 import CollapsiblePanel from "../components/CollapsiblePanel";
 import SchemaTree from "../components/SchemaTree";
 import Canvas from "./components/Canvas";
@@ -19,17 +20,18 @@ import Home from "./components/Home";
 interface Props {
   /** Dashboard identity from the URL ("" = landing list). */
   path: string;
-  refreshCount: number;
   showHidden: boolean;
 }
 
-export default function DashApp({ path, refreshCount, showHidden }: Props) {
+export default function DashApp({ path, showHidden }: Props) {
+  const search = useSearch();
   const loadedPath = useUiStore((s) => s.loadedPath);
   const loadError = useUiStore((s) => s.loadError);
   const mode = useUiStore((s) => s.mode);
   const fullscreen = useUiStore((s) => s.fullscreen);
   const conflict = useUiStore((s) => s.conflict);
   const doc = useDocStore((s) => s.doc);
+  const dirty = useDirty();
   const setPath = useUiStore((s) => s.setPath);
   const [exitVisible, setExitVisible] = useState(false);
   const exitTimer = useRef<number | null>(null);
@@ -52,10 +54,29 @@ export default function DashApp({ path, refreshCount, showHidden }: Props) {
     setPath(path);
   }, [path, setPath]);
 
-  // ?fullscreen deep link → chrome-less view.
+  // Keep query-string deep links synchronized on browser back/forward.
   useEffect(() => {
-    if (fullscreenFromUrl()) setFullscreen(true);
-  }, [path]);
+    useUiStore.getState().setFullscreen(fullscreenFromUrl());
+    const currentDoc = useDocStore.getState().doc;
+    const ui = useUiStore.getState();
+    if (currentDoc && path === ui.loadedPath) seedSlicerSelections(currentDoc);
+  }, [path, search]);
+
+  // One shared guard covers tabs, dashboard links, browser history and unload.
+  useEffect(() => {
+    if (!dirty) return;
+    const confirmLeave = () => window.confirm("Discard unsaved dashboard changes?");
+    const beforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    setNavigationBlocker(confirmLeave);
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => {
+      setNavigationBlocker(null);
+      window.removeEventListener("beforeunload", beforeUnload);
+    };
+  }, [dirty]);
 
   // Load the dashboard whenever the URL points somewhere new. A freshly
   // created (unsaved) dashboard already has loadedPath set, so no fetch.
@@ -123,7 +144,7 @@ export default function DashApp({ path, refreshCount, showHidden }: Props) {
     <div className={styles.main} onPointerMove={fullscreen ? revealExit : undefined}>
       {mode === "edit" && doc && (
         <CollapsiblePanel title="Schema" side="left" width={260} storageKey="dux.dash.schema">
-          <SchemaTree bare refreshCount={refreshCount} showHidden={showHidden} />
+          <SchemaTree bare showHidden={showHidden} />
         </CollapsiblePanel>
       )}
       {mode === "edit" && doc && (

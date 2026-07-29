@@ -1,13 +1,13 @@
 // Cross-component actions: navigation, load, save, and conflict resolution.
 import { DashConflictError, encodePath, getDashboard, putDashboard } from "./api";
-import { navigate } from "../router";
+import { navigate, replaceLocation } from "../router";
 import { loadDoc, updateElement, useDocStore, useUiStore } from "./store";
 import { newDashboard } from "./types";
 import type { Dashboard, SlicerSelection } from "./types";
 
 /** Navigate to a dashboard by identity (updates the /dash/<path> URL). */
-export function gotoDashboard(path: string) {
-  navigate(`/dash/${encodePath(path)}`);
+export function gotoDashboard(path: string): boolean {
+  return navigate(`/dash/${encodePath(path)}`);
 }
 
 // ─── Slicer selections ↔ ?f= deep link ───────────────────────────────────────
@@ -48,7 +48,7 @@ function selectionsToUrl(selections: Record<string, SlicerSelection>) {
   const url = new URL(window.location.href);
   if (Object.keys(obj).length > 0) url.searchParams.set("f", JSON.stringify(obj));
   else url.searchParams.delete("f");
-  window.history.replaceState({}, "", url);
+  replaceLocation(url.toString());
 }
 
 /** Set (or clear) one slicer's selection: session state plus the deep link. */
@@ -166,7 +166,7 @@ export function setFullscreen(on: boolean) {
   else url.searchParams.delete("fullscreen");
   // searchParams serializes "fullscreen=" — trim the dangling "=" for a
   // cleaner shareable link.
-  window.history.replaceState({}, "", url.toString().replace(/\?fullscreen=(&|$)/, "?fullscreen$1").replace(/&fullscreen=(&|$)/, "&fullscreen$1"));
+  replaceLocation(url.toString().replace(/\?fullscreen=(&|$)/, "?fullscreen$1").replace(/&fullscreen=(&|$)/, "&fullscreen$1"));
 }
 
 // ─── Load / create ───────────────────────────────────────────────────────────
@@ -195,24 +195,27 @@ export async function openDashboard(path: string) {
 
 /** Start a new, unsaved dashboard at path and navigate to it. */
 export function createDashboard(path: string) {
+  if (!gotoDashboard(path)) return;
   const doc = newDashboard();
   loadDoc(doc);
   useUiStore.getState().opened(path, null, null);
   useUiStore.getState().setSlicerSelections({});
-  gotoDashboard(path);
 }
 
 // ─── Save / conflicts ────────────────────────────────────────────────────────
 
 export async function save(): Promise<void> {
   const ui = useUiStore.getState();
+  const path = ui.path;
   const doc = useDocStore.getState().doc;
-  if (!ui.path || !doc || ui.saving) return;
+  if (!path || !doc || ui.saving) return;
   ui.setSaving(true);
   try {
-    const r = await putDashboard(ui.path, doc, ui.etag);
+    const r = await putDashboard(path, doc, ui.etag);
+    if (useUiStore.getState().path !== path) return;
     ui.markSaved(r.etag, JSON.stringify(doc));
   } catch (e) {
+    if (useUiStore.getState().path !== path) return;
     if (e instanceof DashConflictError) {
       ui.setConflict({ message: e.message, currentEtag: e.currentEtag, modified: e.modified });
     } else {
@@ -226,13 +229,16 @@ export async function save(): Promise<void> {
 /** Conflict dialog: force-save over the version currently on disk. */
 export async function overwriteConflict(): Promise<void> {
   const ui = useUiStore.getState();
+  const path = ui.path;
   const doc = useDocStore.getState().doc;
   const conflict = ui.conflict;
-  if (!ui.path || !doc || !conflict) return;
+  if (!path || !doc || !conflict) return;
   try {
-    const r = await putDashboard(ui.path, doc, conflict.currentEtag);
+    const r = await putDashboard(path, doc, conflict.currentEtag);
+    if (useUiStore.getState().path !== path) return;
     ui.markSaved(r.etag, JSON.stringify(doc));
   } catch (e) {
+    if (useUiStore.getState().path !== path) return;
     ui.setConflict(null);
     if (e instanceof DashConflictError) {
       // Changed again since the dialog opened — surface the fresh conflict.

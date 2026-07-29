@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { reorderFieldsInElement } from "../src/dash/docOps";
+import { buildElementDux } from "../src/dash/elementQuery";
 import { loadDoc, useDocStore } from "../src/dash/store";
 import type { BuilderFieldRef, DashElement } from "../src/dash/types";
 
@@ -24,4 +25,20 @@ test("reorders table columns and pivot rows", () => {
   const [updatedTable, updatedPivot] = useDocStore.getState().doc!.elements;
   expect(updatedTable.query!.fields!.map((f) => f.name)).toEqual(["Venue", "Sales", "Region"]);
   expect(updatedPivot.query!.fields!.map((f) => f.name)).toEqual(["Venue", "Year", "Region", "Sales"]);
+});
+
+test("visual query follows type and series settings", () => {
+  const fields: BuilderFieldRef[] = [
+    { ...field("Region"), aggregate: "VALUES" },
+    { table: "analytics.Sales", name: "Revenue", kind: "measure" },
+  ];
+  const bar: DashElement = {
+    ...element("chart", "table", fields),
+    type: "bar",
+    query: { mode: "builder", fields, topN: 5 },
+  };
+
+  expect(buildElementDux(bar)).toContain("TOPN");
+  expect(buildElementDux({ ...bar, viz: { series: "Region" } })).not.toContain("TOPN");
+  expect(buildElementDux({ ...bar, type: "line", query: { mode: "builder", fields } })).toContain("ORDER BY");
 });

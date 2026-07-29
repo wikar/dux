@@ -16,11 +16,9 @@ export default function QueryPreview(props: {
   onCopyResults: () => Promise<boolean>;
   /** Current query failure, marked at its source position in the editor. */
   error?: QueryFailedError | null;
-  /** Shares the schema cache entry with the schema tree. */
-  refreshCount?: number;
 }) {
   const { data: schema } = useQuery({
-    queryKey: ["schema", props.refreshCount ?? 0],
+    queryKey: ["schema"],
     queryFn: () => client.fetchSchema(),
   });
   const [copied, setCopied] = useState(false);

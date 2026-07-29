@@ -3,7 +3,6 @@
 // Kept out of data.ts on purpose: the sort default is a per-visual fact, so
 // this module reads the visual registry — and the registry's bodies read
 // data.ts. Splitting the two keeps that graph acyclic.
-import { useMemo } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { duxClient, generateQuery, isMetricField } from "@dux/core";
 import type { QueryResponse } from "@dux/core";
@@ -53,7 +52,7 @@ export interface ElementDataState {
 
 /** Run an element's query with the active slicer filters applied. */
 export function useElementData(el: DashElement): ElementDataState {
-  const dux = useMemo(() => buildElementDux(el), [el.query]);
+  const dux = buildElementDux(el);
   const filters = useExternalFilters(el);
   const filterKey = JSON.stringify(filters);
   const refetchInterval = useRefreshInterval(el.id);

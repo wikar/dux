@@ -340,7 +340,7 @@ export interface PivotTotalsState {
 
 /** Fetch a pivot's subtotal/grand-total queries alongside the main fetch. */
 export function usePivotTotals(el: DashElement): PivotTotalsState {
-  const specs = useMemo(() => buildPivotTotalQueries(el), [el.query, el.viz]);
+  const specs = useMemo(() => buildPivotTotalQueries(el), [el]);
   const filters = useExternalFilters(el);
   const filterKey = JSON.stringify(filters);
   const refetchInterval = useRefreshInterval(el.id);

@@ -176,6 +176,14 @@ function TableBody({
                 // mode (same guard the pivot caret uses).
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => handleHeaderClick(ci)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    handleHeaderClick(ci);
+                  }
+                }}
+                tabIndex={0}
+                aria-sort={active?.col === ci ? (active.dir === "asc" ? "ascending" : "descending") : "none"}
                 title="Sort"
               >
                 {c}
@@ -199,6 +207,14 @@ function TableBody({
                 style={{ height: TABLE_ROW_H, cursor: canCross ? "pointer" : undefined }}
                 className={selected ? styles.rowSelected : undefined}
                 onClick={canCross ? (e) => toggleCrossMark(el.id, { dims: rowDims(r) }, e.ctrlKey || e.metaKey) : undefined}
+                onKeyDown={canCross ? (e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    toggleCrossMark(el.id, { dims: rowDims(r) }, e.ctrlKey || e.metaKey);
+                  }
+                } : undefined}
+                tabIndex={canCross ? 0 : undefined}
+                aria-selected={canCross ? selected : undefined}
               >
                 {r.map((v, j) => {
                   const col = data.columns[j];

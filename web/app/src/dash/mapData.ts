@@ -81,7 +81,7 @@ export function useMapLayerData(el: DashElement): {
   error: Error | null;
 } {
   const layers = el.viz?.layers ?? [];
-  const specs = useMemo(() => layers.map((layer) => ({ id: layer.id, dux: layerDux(el, layer) })), [el.query, el.viz]);
+  const specs = layers.map((layer) => ({ id: layer.id, dux: layerDux(el, layer) }));
   const filters = useExternalFilters(el);
   const filterKey = JSON.stringify(filters);
   const refetchInterval = useRefreshInterval(el.id);

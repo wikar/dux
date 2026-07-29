@@ -304,20 +304,17 @@ export default function MapBody({ el }: { el: DashElement }) {
       syncLayers();
       syncData();
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [styleUrl]);
 
   useEffect(() => {
     syncLayers();
     syncData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layers, palette, theme.text, theme.elementBackground, theme.border]);
   useEffect(() => {
     syncLayers();
     syncData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [byLayer]);
-  useEffect(() => { syncData(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [selectedKeys]);
+  useEffect(() => { syncData(); }, [selectedKeys]);
 
   const renderable = layers.some((layer) => layer.lng && layer.lat);
   const legendGroups = layers.flatMap((layer) => {

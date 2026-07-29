@@ -185,6 +185,14 @@ export default function ResultTable(props: {
                       numericCols.has(ci) ? styles.numeric : "",
                     ].filter(Boolean).join(" ")}
                     onClick={() => handleHeaderClick(ci)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        handleHeaderClick(ci);
+                      }
+                    }}
+                    tabIndex={0}
+                    aria-sort={sortCol === ci ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
                   >
                     <span className={styles.thInner}>
                       {col}

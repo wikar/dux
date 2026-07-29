@@ -1,7 +1,7 @@
 // Visual registry contracts. Everything a visual declares about itself —
 // icon, label, default size, field wells, display options, header controls —
-// lives in one VisualMeta entry (see meta.ts); the React body that renders it
-// is attached in index.tsx.
+// lives in one VisualDef exported by that visual's module; index.ts only rolls
+// those definitions up into the registry.
 //
 // This module is a leaf on purpose: it must stay importable from docOps, data
 // and the settings pane without dragging in body components.

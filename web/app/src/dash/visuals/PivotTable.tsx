@@ -347,6 +347,15 @@ function PivotBody({ el, data, formats }: Props) {
                 className={`${styles.pvRow} ${rowClass[dr.kind]} ${clickable ? styles.pvClickable : ""} ${selected ? styles.rowSelected : ""}`}
                 style={{ position: "absolute", top: 0, left: 0, right: 0, height: ROW_H, transform: `translateY(${vi.start}px)`, cursor: clickable ? "pointer" : undefined }}
                 onClick={clickable ? (e) => toggleCrossMark(el.id, { dims: leafDims(dr) }, e.ctrlKey || e.metaKey) : undefined}
+                onKeyDown={clickable ? (e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    toggleCrossMark(el.id, { dims: leafDims(dr) }, e.ctrlKey || e.metaKey);
+                  }
+                } : undefined}
+                role={clickable ? "button" : undefined}
+                tabIndex={clickable ? 0 : undefined}
+                aria-pressed={clickable ? selected : undefined}
               >
                 <div
                   className={styles.pvRowHead}

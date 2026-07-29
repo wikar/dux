@@ -66,9 +66,9 @@ function sideToward(rect: Rect, other: Rect): Side {
 }
 type CardDrag = { table: string; startMouseX: number; startMouseY: number; startCardX: number; startCardY: number };
 
-export default function Explorer(props: { refreshCount?: number; showHidden?: boolean }) {
+export default function Explorer(props: { showHidden?: boolean }) {
   const { data: schema, error: schemaError, isFetching: loading, refetch } = useQuery({
-    queryKey: ["schema", props.refreshCount ?? 0],
+    queryKey: ["schema"],
     queryFn: () => client.fetchSchema(),
   });
 
