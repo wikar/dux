@@ -39,7 +39,8 @@ db/*.sql
 
 # Reference data
 reference/
-docs/*
+docs/
+plans/
 TDD*
 
 # Controlled Parquet inbox — the directory is committed, its payload is not

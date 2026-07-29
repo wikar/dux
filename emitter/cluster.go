@@ -278,7 +278,7 @@ func (e *Emitter) clusterKey(tables []string) string {
 	}
 	canon := make([]string, len(tables))
 	for i, t := range tables {
-		canon[i] = strings.ToLower(e.canonTable(t))
+		canon[i] = e.tableKey(t)
 	}
 	sort.Strings(canon)
 	return strings.Join(canon, "\x00")
@@ -291,6 +291,12 @@ func (e *Emitter) canonTable(name string) string {
 		return semantic.ResolveTable(e.Schema, name)
 	}
 	return name
+}
+
+// tableKey returns the canonical, case-insensitive identity used for emitter
+// maps and comparisons. SQL rendering remains the job of sqlTable.
+func (e *Emitter) tableKey(name string) string {
+	return strings.ToLower(e.canonTable(name))
 }
 
 // measureExprTables returns every table referenced by expr, expanding measure
@@ -309,7 +315,7 @@ func (e *Emitter) measureExprTables(expr *parser.Expr) []string {
 	visiting := map[*parser.MeasureDefinition]bool{}
 
 	add := func(t string) {
-		key := strings.ToLower(e.canonTable(t))
+		key := e.tableKey(t)
 		if !seen[key] {
 			seen[key] = true
 			result = append(result, t)
@@ -334,6 +340,54 @@ func (e *Emitter) measureExprTables(expr *parser.Expr) []string {
 			// the table lands in the measure's cluster (see emitIterAgg).
 			if tbl := iterBareTable(t.FuncCall); tbl != "" {
 				add(tbl)
+			}
+		}
+		return true
+	}
+
+	walkTerms(expr, visit)
+	return result
+}
+
+// measureValueTables is the table set read by a measure value, excluding the
+// filter arguments of nested CALCULATE calls. Those arguments establish the
+// nested context; they are not value reads that require their tables to remain
+// in the enclosing context CTE's FROM clause.
+func (e *Emitter) measureValueTables(expr *parser.Expr) []string {
+	seen := map[string]bool{}
+	var result []string
+	visiting := map[*parser.MeasureDefinition]bool{}
+
+	add := func(t string) {
+		key := e.tableKey(t)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, t)
+		}
+	}
+
+	var visit func(*parser.Term) bool
+	visit = func(t *parser.Term) bool {
+		if t.ColRef != nil {
+			if def := e.resolveMeasureDef(t.ColRef); def != nil && def.Expr != nil {
+				if !visiting[def] {
+					visiting[def] = true
+					walkTerms(def.Expr, visit)
+					delete(visiting, def)
+				}
+			} else if t.ColRef.Table != "" {
+				add(semantic.StripSingleQuotes(t.ColRef.Table))
+			}
+		}
+		if t.FuncCall != nil {
+			if tbl := iterBareTable(t.FuncCall); tbl != "" {
+				add(tbl)
+			}
+			if strings.EqualFold(t.FuncCall.Name, "CALCULATE") {
+				if len(t.FuncCall.Args) > 0 {
+					walkTerms(t.FuncCall.Args[0], visit)
+				}
+				return false
 			}
 		}
 		return true

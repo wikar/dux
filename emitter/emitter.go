@@ -872,7 +872,7 @@ func (e *Emitter) emitAll(fc *parser.FuncCall) (string, error) {
 		switch {
 		case table == "":
 			table = tbl
-		case !strings.EqualFold(tbl, table):
+		case e.tableKey(tbl) != e.tableKey(table):
 			return "", fmt.Errorf("%s: all column references must belong to the same table", name)
 		}
 		cols = append(cols, e.resolveColName(tbl, semantic.StripBrackets(t.ColRef.Column)))
@@ -969,7 +969,7 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 			if len(treatasFC.Args) >= 2 && treatasFC.Args[1].Left != nil && treatasFC.Args[1].Left.ColRef != nil {
 				cr := treatasFC.Args[1].Left.ColRef
 				tbl := semantic.StripSingleQuotes(cr.Table)
-				predTable = strings.ToLower(tbl)
+				predTable = e.tableKey(tbl)
 				predCol = strings.ToLower(e.resolveColName(tbl, semantic.StripBrackets(cr.Column)))
 			}
 			pred, err := e.emitTreatas(treatasFC)
@@ -996,13 +996,13 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			predTable := strings.ToLower(semantic.StripSingleQuotes(tbl))
+			predTable := e.tableKey(semantic.StripSingleQuotes(tbl))
 			// The first predicate column on the filtered table identifies the
 			// filter for CALCULATE modifier checks (ALL(t[c]) removal).
 			var predCol string
 			for _, cr := range collectColRefs(filterFC.Args[1]) {
 				crTable := semantic.StripSingleQuotes(cr.Table)
-				if strings.ToLower(crTable) == predTable {
+				if e.tableKey(crTable) == predTable {
 					predCol = strings.ToLower(e.resolveColName(crTable, semantic.StripBrackets(cr.Column)))
 					break
 				}
@@ -1032,9 +1032,11 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 			// can remove; computed group expressions are not removable.
 			if arg.Left != nil && arg.Left.ColRef != nil && arg.Left.ColRef.Table != "" && len(arg.Right) == 0 {
 				tbl := semantic.StripSingleQuotes(arg.Left.ColRef.Table)
+				col := e.resolveColName(tbl, semantic.StripBrackets(arg.Left.ColRef.Column))
 				plainKeys = append(plainKeys, groupKey{
 					table: tbl,
-					col:   e.resolveColName(tbl, semantic.StripBrackets(arg.Left.ColRef.Column)),
+					col:   col,
+					expr:  e.sqlTable(tbl) + "." + col,
 				})
 			}
 		}

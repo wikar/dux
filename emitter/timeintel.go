@@ -86,11 +86,14 @@ func (e *Emitter) isDesignatedDateTable(table string) bool {
 // the correlated scalar subquery (uncorrelated with no group context).
 func (e *Emitter) timeAnchor(agg, table, col string) string {
 	if e.anchorScans != nil {
-		return e.anchorScans.ref(agg, table, col)
+		return e.anchorScans.ref(agg, e.canonTable(table), e.tableKey(table), col)
 	}
 	if e.groupCtx != nil {
 		for _, gk := range e.groupCtx.keys {
-			if strings.EqualFold(gk.table, table) && strings.EqualFold(gk.col, col) {
+			if e.tableKey(gk.table) == e.tableKey(table) && strings.EqualFold(gk.col, col) {
+				if gk.expr != "" {
+					return gk.expr
+				}
 				return e.sqlTable(table) + "." + col
 			}
 		}
@@ -99,13 +102,13 @@ func (e *Emitter) timeAnchor(agg, table, col string) string {
 	var conds []string
 	if e.groupCtx != nil {
 		for _, gk := range e.groupCtx.keys {
-			if strings.EqualFold(gk.table, table) {
+			if e.tableKey(gk.table) == e.tableKey(table) {
 				conds = append(conds, fmt.Sprintf("%s.%s = %s.%s",
 					alias, gk.col, e.sqlTable(gk.table), gk.col))
 			}
 		}
 		for _, p := range e.groupCtx.preds {
-			if p.table == strings.ToLower(table) {
+			if p.table == e.tableKey(table) {
 				conds = append(conds, p.sql)
 			}
 		}

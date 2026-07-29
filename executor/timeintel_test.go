@@ -16,6 +16,10 @@ import (
 //
 // Order amounts: 2023: Jan 10, Feb 20, Mar 30 — 2024: Jan 100, Feb 200, Mar 300.
 func setupTimeDB(t *testing.T) (*sql.DB, *semantic.Schema) {
+	return setupTimeDBWithDesignation(t, true)
+}
+
+func setupTimeDBWithDesignation(t *testing.T, designate bool) (*sql.DB, *semantic.Schema) {
 	t.Helper()
 
 	db, err := sql.Open("duckdb", "")
@@ -28,8 +32,11 @@ func setupTimeDB(t *testing.T) (*sql.DB, *semantic.Schema) {
 		`CREATE TABLE dates AS
 			SELECT CAST(generate_series AS DATE)          AS date,
 			       CAST(year(generate_series) AS INT)    AS year,
-			       CAST(month(generate_series) AS INT)   AS month
+			       CAST(month(generate_series) AS INT)   AS month,
+			       dayofweek(generate_series) BETWEEN 1 AND 5 AS is_workday
 			FROM generate_series(DATE '2023-01-01', DATE '2024-12-31', INTERVAL 1 DAY)`,
+		`CREATE TABLE fiscal (year INTEGER)`,
+		`INSERT INTO fiscal VALUES (2023), (2024)`,
 		`CREATE TABLE orders (
 			id         INTEGER,
 			order_date DATE,
@@ -59,7 +66,15 @@ func setupTimeDB(t *testing.T) (*sql.DB, *semantic.Schema) {
 		ToTable:    "dates",
 		ToColumn:   "date",
 	})
-	schema.SetDateTable("dates", "date")
+	schema.Relationships = append(schema.Relationships, &semantic.Relationship{
+		FromTable:  "dates",
+		FromColumn: "year",
+		ToTable:    "fiscal",
+		ToColumn:   "year",
+	})
+	if designate {
+		schema.SetDateTable("dates", "date")
+	}
 
 	return db, schema
 }
@@ -235,6 +250,33 @@ func TestExecute_TimeIntelligence(t *testing.T) {
 		}
 	})
 
+	t.Run("nested_time_intelligence_uses_the_outer_cell_anchor", func(t *testing.T) {
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[date],
+			"Nested", CALCULATE(
+				CALCULATE(SUM(orders[amount]), DATESINPERIOD(dates[date], MAX(dates[date]), -7, DAY)),
+				DATESYTD(dates[date]))
+		)`)
+		dayRow := func(day string) map[string]any {
+			for _, row := range rows {
+				if v, ok := row["date"]; ok && strings.HasPrefix(fmt.Sprint(v), day) {
+					return row
+				}
+			}
+			t.Fatalf("no row for %s", day)
+			return nil
+		}
+		if v := toFloat(cell(t, dayRow("2023-01-15"), "Nested")); v != 10 {
+			t.Errorf("nested window on 2023-01-15: expected 10, got %v", v)
+		}
+		if v := toFloat(cell(t, dayRow("2023-01-21"), "Nested")); v != 10 {
+			t.Errorf("nested window on 2023-01-21: expected 10, got %v", v)
+		}
+		if v := dayRow("2023-01-22")["Nested"]; v != nil {
+			t.Errorf("nested window on 2023-01-22: expected NULL, got %v", v)
+		}
+	})
+
 	t.Run("DATESINPERIOD_inside_DIVIDE", func(t *testing.T) {
 		// A context-modifying subtree composed in outer arithmetic: the
 		// rolling aggregate and the plain aggregate evaluate in separate
@@ -283,6 +325,129 @@ func TestExecute_TimeIntelligence(t *testing.T) {
 			if toFloat(v) != 600 {
 				t.Errorf("expected 600, got %v", v)
 			}
+		}
+	})
+}
+
+func TestExecute_TimeIntelligenceContextCTECharacterization(t *testing.T) {
+	t.Run("grand_total_no_group_keys", func(t *testing.T) {
+		db, schema := setupTimeDB(t)
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date])))`)
+		if got := toFloat(cell(t, rows[0], "YTD")); got != 600 {
+			t.Fatalf("YTD = %v, want 600", got)
+		}
+	})
+
+	t.Run("undesignated_date_table_keeps_kept_key_equality", func(t *testing.T) {
+		db, schema := setupTimeDBWithDesignation(t, false)
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year],
+			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date])))`)
+		for _, c := range []struct{ year, want float64 }{{2023, 60}, {2024, 600}} {
+			var found map[string]any
+			for _, row := range rows {
+				if toFloat(row["year"]) == c.year {
+					found = row
+					break
+				}
+			}
+			if found == nil || toFloat(cell(t, found, "YTD")) != c.want {
+				t.Fatalf("year %v row = %v, want YTD %v", c.year, found, c.want)
+			}
+		}
+	})
+
+	t.Run("time_intel_with_TREATAS_on_the_date_table", func(t *testing.T) {
+		db, schema := setupTimeDB(t)
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year], dates[month], TREATAS({2024}, dates[year]),
+			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date])))`)
+		if got := toFloat(cell(t, monthRow(t, rows, 2024, 2), "YTD")); got != 300 {
+			t.Fatalf("YTD = %v, want 300", got)
+		}
+	})
+
+	t.Run("time_intel_with_FILTER_on_the_fact_table", func(t *testing.T) {
+		db, schema := setupTimeDB(t)
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year], dates[month], FILTER(orders, orders[id] = 5),
+			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date])))`)
+		if got := toFloat(cell(t, monthRow(t, rows, 2024, 2), "YTD")); got != 200 {
+			t.Fatalf("YTD = %v, want 200", got)
+		}
+	})
+
+	t.Run("time_intel_with_CALCULATE_pred_on_the_date_table", func(t *testing.T) {
+		db, schema := setupTimeDB(t)
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year], dates[month],
+			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date]), dates[is_workday] = TRUE()))`)
+		if got := toFloat(cell(t, monthRow(t, rows, 2024, 2), "YTD")); got != 200 {
+			t.Fatalf("YTD = %v, want 200", got)
+		}
+	})
+
+	t.Run("time_intel_with_CALCULATE_pred_as_KEEPFILTERS", func(t *testing.T) {
+		db, schema := setupTimeDB(t)
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year], dates[month],
+			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date]), KEEPFILTERS(dates[is_workday] = TRUE())))`)
+		if got := toFloat(cell(t, monthRow(t, rows, 2024, 2), "YTD")); got != 200 {
+			t.Fatalf("YTD = %v, want 200", got)
+		}
+	})
+
+	t.Run("two_time_intel_measures_one_query", func(t *testing.T) {
+		db, schema := setupTimeDB(t)
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year], dates[month],
+			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date])),
+			"PY", CALCULATE(SUM(orders[amount]), SAMEPERIODLASTYEAR(dates[date])))`)
+		row := monthRow(t, rows, 2024, 2)
+		if ytd, py := toFloat(cell(t, row, "YTD")), toFloat(cell(t, row, "PY")); ytd != 300 || py != 20 {
+			t.Fatalf("YTD/PY = %v/%v, want 300/20", ytd, py)
+		}
+	})
+
+	t.Run("identical_time_contexts_share_one_fact_scan", func(t *testing.T) {
+		db, schema := setupTimeDB(t)
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year], dates[month],
+			"YTD Amount", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date])),
+			"YTD Count", CALCULATE(COUNT(orders[id]), DATESYTD(dates[date])))`)
+		row := monthRow(t, rows, 2024, 2)
+		if amount, count := toFloat(cell(t, row, "YTD Amount")), toFloat(cell(t, row, "YTD Count")); amount != 300 || count != 2 {
+			t.Fatalf("YTD amount/count = %v/%v, want 300/2", amount, count)
+		}
+
+		_, grand := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			"YTD Amount", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date])),
+			"YTD Count", CALCULATE(COUNT(orders[id]), DATESYTD(dates[date])))`)
+		if amount, count := toFloat(cell(t, grand[0], "YTD Amount")), toFloat(cell(t, grand[0], "YTD Count")); amount != 600 || count != 3 {
+			t.Fatalf("grand YTD amount/count = %v/%v, want 600/3", amount, count)
+		}
+	})
+
+	t.Run("time_intelligence_combined_with_ALL", func(t *testing.T) {
+		db, schema := setupTimeDB(t)
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year], dates[month],
+			"Combined",
+				CALCULATE(SUM(orders[amount]), DATESYTD(dates[date]))
+				+ CALCULATE(SUM(orders[amount]), ALL(dates)))`)
+		if got := toFloat(cell(t, monthRow(t, rows, 2024, 2), "Combined")); got != 960 {
+			t.Fatalf("combined YTD + grand total = %v, want 960", got)
+		}
+	})
+
+	t.Run("time_intel_through_a_non_leaf_date_table", func(t *testing.T) {
+		db, schema := setupTimeDB(t)
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			fiscal[year],
+			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date])))`)
+		if len(rows) != 2 {
+			t.Fatalf("rows = %d, want 2", len(rows))
 		}
 	})
 }

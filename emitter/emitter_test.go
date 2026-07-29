@@ -634,8 +634,8 @@ func TestTimeIntelligence(t *testing.T) {
 		// required extreme; the range predicate joins it to the cleared copy.
 		assertContains(t, sql,
 			"date_trunc('year'",
-			"(SELECT year, month, MAX(date) AS a0 FROM dates GROUP BY year, month) AS __anch0",
-			"GROUP BY __anch0.year, __anch0.month")
+			"(SELECT year AS g0, month AS g1, MAX(date) AS a0 FROM dates GROUP BY year, month) AS __anch0",
+			"GROUP BY __brdg0.b0, __brdg0.b1")
 		// The designated date table's own filters are cleared: the cleared
 		// copy is not pinned to the anchor cell, and no correlated anchor
 		// subquery remains anywhere.
@@ -650,7 +650,7 @@ func TestTimeIntelligence(t *testing.T) {
 			dates[year],
 			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date]))
 		)`)
-		assertContains(t, sql, "dates.year = __anch0.year")
+		assertContains(t, sql, "dates.year = __anch0.g0")
 	})
 
 	t.Run("rolling_window_at_date_grain_has_no_correlation", func(t *testing.T) {
@@ -663,10 +663,10 @@ func TestTimeIntelligence(t *testing.T) {
 			"R7D", CALCULATE(SUM(orders[amount]), DATESINPERIOD(dates[date], MAX(dates[date]), -7, DAY))
 		)`)
 		assertContains(t, sql,
-			"(SELECT date, MAX(date) AS a0 FROM dates GROUP BY date) AS __anch0",
+			"(SELECT date AS g0, MAX(date) AS a0 FROM dates GROUP BY date) AS __anch0",
 			"dates.date > __anch0.a0 + (-7) * INTERVAL 1 DAY",
 			"dates.date <= __anch0.a0",
-			"GROUP BY __anch0.date",
+			"GROUP BY __brdg0.b0",
 			"LEFT JOIN _cc0 ON _cc0.k0 IS NOT DISTINCT FROM")
 		assertNotContains(t, sql, "__ti_dates", "__cal_")
 	})
@@ -699,6 +699,123 @@ func TestTimeIntelligence(t *testing.T) {
 			"PY", CALCULATE(SUM(orders[amount]), DATEADD(dates[date], -1, YEAR))
 		)`)
 		assertContains(t, sql, "* INTERVAL 1 YEAR", "-(1)")
+	})
+
+	t.Run("bridge_detaches_the_date_table_from_the_fact_scan", func(t *testing.T) {
+		sql := emitTime(t, true, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year], dates[month],
+			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date])))`)
+		start := strings.Index(sql, "JOIN (SELECT dates.date AS bk")
+		end := strings.Index(sql, ") AS __brdg0")
+		if start < 0 || end <= start {
+			t.Fatalf("bridge body not found:\n%s", sql)
+		}
+		if body := sql[start:end]; strings.Contains(body, "orders") {
+			t.Fatalf("bridge body contains fact table:\n%s", body)
+		}
+	})
+
+	t.Run("identical_context_scans_are_fused", func(t *testing.T) {
+		sql := emitTime(t, true, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year], dates[month],
+			"YTD Amount", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date])),
+			"YTD Count", CALCULATE(COUNT(orders[id]), DATESYTD(dates[date])))`)
+		assertContains(t, sql, "AS v,", "AS v1", "_cc0.v", "_cc0.v1")
+		assertNotContains(t, sql, "_cc1 AS")
+		if got := strings.Count(sql, ") AS __brdg0 ON"); got != 1 {
+			t.Fatalf("expected one fused bridge, got %d:\n%s", got, sql)
+		}
+	})
+
+	t.Run("bridge_declined_when_date_table_is_not_a_leaf", func(t *testing.T) {
+		s := timeSchema(true)
+		s.Tables["fiscal"] = &semantic.Table{Name: "fiscal", Columns: map[string]*semantic.Column{
+			"year": {Name: "year", DataType: "INTEGER"},
+		}}
+		s.Relationships = append(s.Relationships, &semantic.Relationship{
+			FromTable: "dates", FromColumn: "year", ToTable: "fiscal", ToColumn: "year",
+		})
+		q := mustParse(t, `EVALUATE SUMMARIZECOLUMNS(
+			fiscal[year], "YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date])))`)
+		sql, err := (&emitter.Emitter{Schema: s}).Emit(q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertNotContains(t, sql, "__brdg0")
+	})
+
+	t.Run("bridge_declined_when_measure_reads_date_table", func(t *testing.T) {
+		sql := emitTime(t, true, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year],
+			"Mixed", CALCULATE(SUM(orders[amount]) + MAX(dates[year]), DATESYTD(dates[date])))`)
+		assertNotContains(t, sql, "__brdg0")
+	})
+
+	t.Run("bridge_declined_when_CALCULATE_predicate_reads_fact", func(t *testing.T) {
+		sql := emitTime(t, true, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year],
+			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date]), orders[amount] > 0))`)
+		assertNotContains(t, sql, "__brdg0")
+	})
+
+	t.Run("bridge_declined_when_group_filter_reaches_fact", func(t *testing.T) {
+		sql := emitTime(t, true, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year], FILTER(orders, orders[amount] > 0),
+			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date])))`)
+		assertNotContains(t, sql, "__brdg0")
+	})
+
+	t.Run("bridge_declined_when_dimension_filter_reaches_fact", func(t *testing.T) {
+		s := timeSchema(true)
+		s.Tables["products"] = &semantic.Table{Name: "products", Columns: map[string]*semantic.Column{
+			"id": {Name: "id", DataType: "INTEGER"}, "category": {Name: "category", DataType: "VARCHAR"},
+		}}
+		s.Tables["orders"].Columns["product_id"] = &semantic.Column{Name: "product_id", DataType: "INTEGER"}
+		s.Relationships = append(s.Relationships, &semantic.Relationship{
+			FromTable: "orders", FromColumn: "product_id", ToTable: "products", ToColumn: "id",
+		})
+		q := mustParse(t, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year], FILTER(products, products[category] = "A"),
+			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date])))`)
+		sql, err := (&emitter.Emitter{Schema: s}).Emit(q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertNotContains(t, sql, "__brdg0")
+	})
+
+	t.Run("nested_time_anchor_uses_carried_bridge_key", func(t *testing.T) {
+		sql := emitTime(t, true, `EVALUATE SUMMARIZECOLUMNS(
+			dates[date],
+			"Nested", CALCULATE(
+				CALCULATE(SUM(orders[amount]), DATESINPERIOD(dates[date], MAX(dates[date]), -7, DAY)),
+				DATESYTD(dates[date])))`)
+		assertContains(t, sql, "__cal_dates.date <= __brdg0.b0")
+	})
+
+	t.Run("canonical_table_identity_mixes_bare_and_qualified_names", func(t *testing.T) {
+		s := semantic.NewSchema()
+		s.Tables["analytics.dates"] = &semantic.Table{Name: "analytics.dates", Columns: map[string]*semantic.Column{
+			"date": {Name: "date", DataType: "DATE"}, "year": {Name: "year", DataType: "INTEGER"},
+		}}
+		s.Tables["analytics.orders"] = &semantic.Table{Name: "analytics.orders", Columns: map[string]*semantic.Column{
+			"order_date": {Name: "order_date", DataType: "DATE"}, "amount": {Name: "amount", DataType: "DOUBLE"},
+		}}
+		s.Relationships = append(s.Relationships, &semantic.Relationship{
+			FromTable: "analytics.orders", FromColumn: "order_date", ToTable: "analytics.dates", ToColumn: "date",
+		})
+		s.SetDateTable("analytics.dates", "date")
+		q := mustParse(t, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year], TREATAS({2024}, 'analytics.dates'[year]),
+			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD('analytics.dates'[date])))`)
+		sql, err := (&emitter.Emitter{Schema: s}).Emit(q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertContains(t, sql, "__brdg0", "analytics.dates")
+		if strings.Count(sql, "AS __anch") != 1 {
+			t.Fatalf("expected one canonical anchor scan:\n%s", sql)
+		}
 	})
 
 	t.Run("standalone_DATESYTD_is_a_table", func(t *testing.T) {

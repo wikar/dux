@@ -73,3 +73,28 @@ func TestInferJoinPathRejectsAmbiguousBareTable(t *testing.T) {
 		t.Fatalf("unexpected qualified path: %#v", path.Steps)
 	}
 }
+
+func TestJoinPathLeafEdge(t *testing.T) {
+	s := NewSchema()
+	for _, name := range []string{"analytics.orders", "analytics.dates", "analytics.fiscal"} {
+		s.Tables[name] = &Table{Name: name, Columns: map[string]*Column{}}
+	}
+	leaf := JoinStep{FromTable: "analytics.orders", Table: "analytics.dates", OnFromCol: "datekey", OnToCol: "datekey"}
+
+	if got, ok := (&JoinPath{Steps: []JoinStep{leaf}}).LeafEdge(s, "dates"); !ok || got != leaf {
+		t.Fatalf("qualified leaf = %#v, %v", got, ok)
+	}
+	if _, ok := (&JoinPath{Steps: []JoinStep{leaf}}).LeafEdge(s, "orders"); ok {
+		t.Fatal("primary table reported as leaf")
+	}
+	branched := &JoinPath{Steps: []JoinStep{
+		leaf,
+		{FromTable: "analytics.dates", Table: "analytics.fiscal", OnFromCol: "year", OnToCol: "year"},
+	}}
+	if _, ok := branched.LeafEdge(s, "dates"); ok {
+		t.Fatal("table with a child reported as leaf")
+	}
+	if _, ok := branched.LeafEdge(s, "missing"); ok {
+		t.Fatal("absent table reported as leaf")
+	}
+}

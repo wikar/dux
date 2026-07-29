@@ -34,6 +34,27 @@ type JoinStep struct {
 	Bidirectional bool
 }
 
+// LeafEdge returns the single step attaching table to the rest of this join
+// path. A table that is primary, absent, reached more than once, or itself the
+// source of another step cannot be detached without changing the path.
+func (p *JoinPath) LeafEdge(schema *Schema, table string) (JoinStep, bool) {
+	table = ResolveTable(schema, table)
+	var edge JoinStep
+	found := false
+	for _, step := range p.Steps {
+		if tableNamesMatch(step.FromTable, table) {
+			return JoinStep{}, false
+		}
+		if tableNamesMatch(step.Table, table) {
+			if found {
+				return JoinStep{}, false
+			}
+			edge, found = step, true
+		}
+	}
+	return edge, found
+}
+
 // InferJoinPath performs a BFS over the Relationship graph to find the minimum
 // set of LEFT JOINs that connects all supplied tables. tables[0] is the
 // primary (fact) table; all other tables are targets to be joined.

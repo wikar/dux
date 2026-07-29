@@ -45,7 +45,7 @@ func (e *Emitter) stitchForBidi(plan *measurePlan, groupKeys []groupKey, preds [
 	seen := map[string]bool{}
 	var tables []string
 	add := func(t string) {
-		key := strings.ToLower(e.canonTable(t))
+		key := e.tableKey(t)
 		if t != "" && !seen[key] {
 			seen[key] = true
 			tables = append(tables, t)
@@ -168,7 +168,7 @@ func (e *Emitter) emitStitched(
 		seen := map[string]bool{}
 		var tables []string
 		add := func(t string) {
-			key := strings.ToLower(e.canonTable(t))
+			key := e.tableKey(t)
 			if !seen[key] {
 				seen[key] = true
 				tables = append(tables, t)
@@ -197,7 +197,7 @@ func (e *Emitter) emitStitched(
 				return "", fmt.Errorf(
 					"SUMMARIZECOLUMNS: cannot route the filter %q to a measure context when measures span multiple tables", p.sql)
 			}
-			if seen[strings.ToLower(e.canonTable(p.table))] {
+			if seen[e.tableKey(p.table)] {
 				clusterTagged = append(clusterTagged, p)
 				predUsed[pi] = true
 				continue
@@ -285,6 +285,7 @@ func (e *Emitter) emitStitched(
 	// Emit the context clusters as private grouped CTEs (contextcte.go). Their
 	// value column substitutes for the lifted subtree in the outer arithmetic.
 	var cctes []*contextCTE
+	contextByShape := map[string]*contextCTE{}
 	for _, c := range calcClusters {
 		cf := calcForm(c.calc)
 		if cf == nil {
@@ -292,7 +293,7 @@ func (e *Emitter) emitStitched(
 		}
 		inCluster := map[string]bool{}
 		for _, t := range c.tables {
-			inCluster[strings.ToLower(e.canonTable(t))] = true
+			inCluster[e.tableKey(t)] = true
 		}
 		var routed []taggedPred
 		for pi, p := range preds {
@@ -300,7 +301,7 @@ func (e *Emitter) emitStitched(
 				return "", fmt.Errorf(
 					"SUMMARIZECOLUMNS: cannot route the filter %q to a measure context when measures span multiple tables", p.sql)
 			}
-			if inCluster[strings.ToLower(e.canonTable(p.table))] ||
+			if inCluster[e.tableKey(p.table)] ||
 				(e.Schema != nil && semantic.FilterReaches(e.Schema, p.table, c.tables)) {
 				routed = append(routed, p)
 				predUsed[pi] = true
@@ -308,13 +309,20 @@ func (e *Emitter) emitStitched(
 		}
 		prevCtx := e.groupCtx
 		e.groupCtx = &groupContext{keys: groupKeys, preds: routed}
-		cte, err := e.emitContextCTE(fmt.Sprintf("_cc%d", len(cctes)), cf, c.tables)
+		cte, err := e.emitContextCTE("", cf, c.tables)
 		e.groupCtx = prevCtx
 		if err != nil {
 			return "", err
 		}
-		subst[c.calc] = cte.name + ".v"
-		cctes = append(cctes, cte)
+		if existing := contextByShape[cte.fusionKey()]; existing != nil {
+			alias := existing.addValue(cte.values[0])
+			subst[c.calc] = existing.name + "." + alias
+		} else {
+			cte.name = fmt.Sprintf("_cc%d", len(cctes))
+			contextByShape[cte.fusionKey()] = cte
+			subst[c.calc] = cte.name + ".v"
+			cctes = append(cctes, cte)
+		}
 	}
 
 	for pi, used := range predUsed {
@@ -360,7 +368,7 @@ func (e *Emitter) emitStitched(
 		if i > 0 || len(ctes) > 0 {
 			sb.WriteString(", ")
 		}
-		fmt.Fprintf(&sb, "%s AS (\n%s\n)", cc.name, cc.body)
+		fmt.Fprintf(&sb, "%s AS (\n%s\n)", cc.name, cc.sqlBody())
 	}
 
 	var outItems []string
@@ -496,7 +504,7 @@ func (e *Emitter) stitchedClusterFrom(tables []string, needed map[string]bool, p
 		return "", nil, err
 	}
 
-	lower := func(t string) string { return strings.ToLower(e.canonTable(t)) }
+	lower := e.tableKey
 
 	// The join path is a tree; find, per table, whether its subtree reaches a
 	// table the SELECT list needs. A bidi step into a subtree with no needed

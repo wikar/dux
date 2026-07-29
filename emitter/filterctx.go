@@ -20,8 +20,9 @@ import (
 
 // groupKey identifies one group-by column of the enclosing SUMMARIZECOLUMNS.
 type groupKey struct {
-	table string // canonical table name (quotes stripped), original casing
+	table string // table reference (quotes stripped); compare through tableKey
 	col   string // resolved SQL column name
+	expr  string // SQL expression naming this key in the current query scope
 }
 
 // groupContext carries the enclosing SUMMARIZECOLUMNS grouping state.
@@ -48,13 +49,12 @@ func (cm *calcModifiers) hasRemovals() bool {
 
 // removed reports whether the filter on table.col (a resolved SQL column name;
 // empty when only the table is known) is cleared by the modifiers.
-func (cm *calcModifiers) removed(table, col string) bool {
-	tl := strings.ToLower(table)
-	ck := tl + "\x00" + strings.ToLower(col)
+func (cm *calcModifiers) removed(tableKey, col string) bool {
+	ck := tableKey + "\x00" + strings.ToLower(col)
 	if col != "" && cm.removeCols[ck] {
 		return true
 	}
-	if (cm.removeAll || cm.removeTables[tl]) && !(col != "" && cm.exceptCols[ck]) {
+	if (cm.removeAll || cm.removeTables[tableKey]) && !(col != "" && cm.exceptCols[ck]) {
 		return true
 	}
 	return false
@@ -63,7 +63,11 @@ func (cm *calcModifiers) removed(table, col string) bool {
 // colKey builds the lookup key for a (table, DAX column name) pair, resolving
 // the column through the schema so that it matches groupKey.col.
 func (e *Emitter) colKey(table, daxCol string) string {
-	return strings.ToLower(table) + "\x00" + strings.ToLower(e.resolveColName(table, daxCol))
+	return e.resolvedColKey(table, e.resolveColName(table, daxCol))
+}
+
+func (e *Emitter) resolvedColKey(table, col string) string {
+	return e.tableKey(table) + "\x00" + strings.ToLower(col)
 }
 
 // classifyCalcArgs partitions CALCULATE's filter arguments (everything after
@@ -122,9 +126,9 @@ func (e *Emitter) classifyCalcArg(arg *parser.Expr, cm *calcModifiers) error {
 			// all its filters are cleared. Otherwise only the date column's
 			// filter is replaced.
 			if e.isDesignatedDateTable(tf.table) {
-				cm.removeTables[strings.ToLower(tf.table)] = true
+				cm.removeTables[e.tableKey(tf.table)] = true
 			} else {
-				cm.removeCols[strings.ToLower(tf.table)+"\x00"+strings.ToLower(tf.col)] = true
+				cm.removeCols[e.resolvedColKey(tf.table, tf.col)] = true
 			}
 			cm.timeFilters = append(cm.timeFilters, tf)
 			return nil
@@ -152,11 +156,11 @@ func (e *Emitter) classifyAllArgs(fc *parser.FuncCall, cm *calcModifiers) error 
 			tbl := semantic.StripSingleQuotes(t.ColRef.Table)
 			cm.removeCols[e.colKey(tbl, semantic.StripBrackets(t.ColRef.Column))] = true
 		case t.Ident != "":
-			cm.removeTables[strings.ToLower(t.Ident)] = true
+			cm.removeTables[e.tableKey(t.Ident)] = true
 		case t.QuotedIdent != "":
-			cm.removeTables[strings.ToLower(semantic.StripSingleQuotes(t.QuotedIdent))] = true
+			cm.removeTables[e.tableKey(semantic.StripSingleQuotes(t.QuotedIdent))] = true
 		case t.QualifiedIdent != "":
-			cm.removeTables[strings.ToLower(t.QualifiedIdent)] = true
+			cm.removeTables[e.tableKey(t.QualifiedIdent)] = true
 		default:
 			return fmt.Errorf("%s: argument must be a table or a table-qualified column reference", strings.ToUpper(fc.Name))
 		}
@@ -174,7 +178,7 @@ func (e *Emitter) classifyAllExcept(fc *parser.FuncCall, cm *calcModifiers) erro
 	if err != nil {
 		return fmt.Errorf("ALLEXCEPT: first argument must be a table reference: %w", err)
 	}
-	cm.removeTables[strings.ToLower(tbl)] = true
+	cm.removeTables[e.tableKey(tbl)] = true
 	for _, a := range fc.Args[1:] {
 		t := a.Left
 		if t == nil || t.ColRef == nil || t.ColRef.Table == "" || len(a.Right) > 0 {
@@ -225,7 +229,7 @@ func (e *Emitter) anyPredTouchesGroupKey(preds []*parser.Expr) bool {
 	}
 	predKeys := e.predColKeys(preds)
 	for _, gk := range e.groupCtx.keys {
-		if predKeys[strings.ToLower(gk.table)+"\x00"+strings.ToLower(gk.col)] {
+		if predKeys[e.resolvedColKey(gk.table, gk.col)] {
 			return true
 		}
 	}
@@ -277,7 +281,7 @@ func (e *Emitter) emitCalculateGrouped(fc *parser.FuncCall) (string, error) {
 	// Group keys that survive the modifiers become correlation predicates.
 	var keptKeys []groupKey
 	for _, gk := range e.groupCtx.keys {
-		if cm.removed(gk.table, gk.col) || overridden[strings.ToLower(gk.table)+"\x00"+strings.ToLower(gk.col)] {
+		if cm.removed(e.tableKey(gk.table), gk.col) || overridden[e.resolvedColKey(gk.table, gk.col)] {
 			continue
 		}
 		keptKeys = append(keptKeys, gk)
