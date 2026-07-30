@@ -20,11 +20,12 @@ import (
 
 // groupKey identifies one group-by column of the enclosing SUMMARIZECOLUMNS.
 type groupKey struct {
-	table  string // table reference (quotes stripped); compare through tableKey
-	col    string // resolved SQL column name
-	expr   string // SQL expression naming this key in the current query scope
-	line   int
-	column int
+	table   string // table reference (quotes stripped); compare through tableKey
+	col     string // resolved SQL column name
+	expr    string // SQL expression naming this key in the current query scope
+	line    int
+	column  int
+	frameID uint64
 }
 
 func (e *Emitter) validateGroupKeys(keys []groupKey, measureTables []string) error {
@@ -243,6 +244,46 @@ func (e *Emitter) predColKeys(preds []*parser.Expr) map[string]bool {
 	return keys
 }
 
+func (e *Emitter) calcPredColKeys(preds []*parser.Expr, valueTables []string) map[string]bool {
+	values := map[string]bool{}
+	for _, table := range valueTables {
+		values[e.tableKey(table)] = true
+	}
+	keys := map[string]bool{}
+	for _, pred := range preds {
+		tables := e.measureExprTables(pred)
+		for _, cr := range collectColRefs(pred) {
+			table := semantic.StripSingleQuotes(cr.Table)
+			if len(tables) > 1 && e.rowTableBound(e.tableKey(table)) && !values[e.tableKey(table)] {
+				continue
+			}
+			keys[e.colKey(table, semantic.StripBrackets(cr.Column))] = true
+		}
+	}
+	return keys
+}
+
+func (e *Emitter) emitCalcPredicate(expr *parser.Expr, valueTables []string) (string, error) {
+	tables := e.measureExprTables(expr)
+	if len(tables) < 2 {
+		return e.emitExpr(expr)
+	}
+	values := map[string]bool{}
+	for _, table := range valueTables {
+		values[e.tableKey(table)] = true
+	}
+	previous := e.ctx.predicateOuter
+	e.ctx.predicateOuter = map[string]bool{}
+	for _, table := range tables {
+		key := e.tableKey(table)
+		if e.rowTableBound(key) && !values[key] {
+			e.ctx.predicateOuter[key] = true
+		}
+	}
+	defer func() { e.ctx.predicateOuter = previous }()
+	return e.emitExpr(expr)
+}
+
 // anyPredTouchesGroupKey reports whether any plain predicate references one of
 // the enclosing group-by columns (which forces the subquery path so the
 // override can take effect).
@@ -362,17 +403,27 @@ func (e *Emitter) emitCalculateGrouped(fc *parser.FuncCall) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if (e.ctx.transitionDepth > 0 || e.ctx.forceValueSubquery > 0) && e.ctx.valueDepth == 0 {
+		if sql, split, err := e.emitSplitContextValue(fc); split || err != nil {
+			return sql, err
+		}
+	}
 
-	if !cm.hasRemovals() && !e.anyPredTouchesGroupKey(cm.preds) {
+	if e.ctx.transitionDepth == 0 && e.ctx.forceValueSubquery == 0 && !cm.hasRemovals() && !e.anyPredTouchesGroupKey(cm.preds) {
 		return e.emitCalculateFastPath(fc.Args[0], cm)
 	}
 
-	overridden := e.predColKeys(cm.preds)
+	valueTables := e.measureValueTables(fc.Args[0])
+	overridden := e.calcPredColKeys(cm.preds, valueTables)
 
 	// Group keys that survive the modifiers become correlation predicates.
 	var keptKeys []groupKey
 	for _, gk := range e.groupCtx.keys {
 		if cm.removed(e.tableKey(gk.table), gk.col) || overridden[e.resolvedColKey(gk.table, gk.col)] {
+			continue
+		}
+		if gk.frameID != 0 && e.Schema != nil && len(valueTables) > 0 &&
+			!semantic.FilterReaches(e.Schema, gk.table, valueTables) {
 			continue
 		}
 		keptKeys = append(keptKeys, gk)
@@ -428,6 +479,9 @@ func (e *Emitter) emitCalculateGrouped(fc *parser.FuncCall) (string, error) {
 	if len(tables) == 0 {
 		return "", fmt.Errorf("CALCULATE: cannot determine a source table for the cleared filter context")
 	}
+	if e.transitionCrossesBidi(tables, keptKeys) {
+		return e.emitTransitionedBidiValue(fc.Args[0], tables, keptKeys, keptOuter, cm)
+	}
 
 	// FROM clause: every table aliased so correlation predicates can reference
 	// the outer query's tables by their unaliased names.
@@ -440,7 +494,7 @@ func (e *Emitter) emitCalculateGrouped(fc *parser.FuncCall) (string, error) {
 				return "", jpErr
 			}
 			for _, step := range jp.Steps {
-				fmt.Fprintf(&from, "\nLEFT JOIN %s AS %s ON %s.%s = %s.%s",
+				fmt.Fprintf(&from, "\nLEFT JOIN %s AS %s ON %s.%s IS NOT DISTINCT FROM %s.%s",
 					e.sqlTable(step.Table), calcAlias(step.Table),
 					calcAlias(step.FromTable), step.OnFromCol,
 					calcAlias(step.Table), step.OnToCol,
@@ -458,6 +512,8 @@ func (e *Emitter) emitCalculateGrouped(fc *parser.FuncCall) (string, error) {
 	}
 	popBindings := e.pushSQLBindings(bindings)
 	defer popBindings()
+	e.ctx.valueDepth++
+	defer func() { e.ctx.valueDepth-- }()
 
 	var conds []string
 	for _, p := range keptOuter {
@@ -472,18 +528,18 @@ func (e *Emitter) emitCalculateGrouped(fc *parser.FuncCall) (string, error) {
 		conds = append(conds, s)
 	}
 	for _, gk := range keptKeys {
-		conds = append(conds, fmt.Sprintf("%s.%s = %s.%s",
-			calcAlias(gk.table), gk.col, e.sqlTable(gk.table), gk.col))
+		conds = append(conds, fmt.Sprintf("%s.%s IS NOT DISTINCT FROM %s",
+			calcAlias(gk.table), gk.col, gk.expr))
 	}
 	for _, p := range cm.preds {
-		s, err := e.emitExpr(p)
+		s, err := e.emitCalcPredicate(p, valueTables)
 		if err != nil {
 			return "", err
 		}
 		conds = append(conds, s)
 	}
 	for _, p := range cm.keepPreds {
-		s, err := e.emitExpr(p)
+		s, err := e.emitCalcPredicate(p, valueTables)
 		if err != nil {
 			return "", err
 		}
@@ -509,6 +565,103 @@ func (e *Emitter) emitCalculateGrouped(fc *parser.FuncCall) (string, error) {
 	}
 	sb.WriteString(")")
 	return sb.String(), nil
+}
+
+func (e *Emitter) emitSplitContextValue(fc *parser.FuncCall) (string, bool, error) {
+	subtrees := e.aggSubtrees(fc.Args[0])
+	clusters := map[string]bool{}
+	for _, subtree := range subtrees {
+		clusters[e.clusterKey(e.measureExprTables(exprOfFunc(subtree)))] = true
+	}
+	if len(clusters) < 2 {
+		return "", false, nil
+	}
+	subst := map[*parser.FuncCall]string{}
+	for _, subtree := range subtrees {
+		args := append([]*parser.Expr{exprOfFunc(subtree)}, fc.Args[1:]...)
+		sql, err := e.emitCalculateGrouped(&parser.FuncCall{Name: "CALCULATE", Args: args})
+		if err != nil {
+			return "", true, err
+		}
+		subst[subtree] = sql
+	}
+	previous := e.stitchSubst
+	e.stitchSubst = subst
+	e.ctx.valueDepth++
+	sql, err := e.emitExpr(fc.Args[0])
+	e.ctx.valueDepth--
+	e.stitchSubst = previous
+	return sql, true, err
+}
+
+func (e *Emitter) transitionCrossesBidi(tables []string, keys []groupKey) bool {
+	hasTransition := false
+	for _, key := range keys {
+		hasTransition = hasTransition || key.frameID != 0
+	}
+	if !hasTransition || e.Schema == nil || len(tables) < 2 {
+		return false
+	}
+	path, err := semantic.InferJoinPath(e.Schema, tables)
+	if err != nil {
+		return false
+	}
+	for _, step := range path.Steps {
+		if step.Bidirectional {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Emitter) emitTransitionedBidiValue(value *parser.Expr, tables []string, keys []groupKey, outer []taggedPred, cm *calcModifiers) (string, error) {
+	filters := append([]taggedPred{}, outer...)
+	for _, key := range keys {
+		filters = append(filters, taggedPred{
+			table: e.tableKey(key.table), col: strings.ToLower(key.col),
+			sql: fmt.Sprintf("%s.%s IS NOT DISTINCT FROM %s", e.sqlTable(key.table), key.col, key.expr),
+		})
+	}
+	for _, pred := range append(append([]*parser.Expr{}, cm.preds...), cm.keepPreds...) {
+		sql, err := e.emitExpr(pred)
+		if err != nil {
+			return "", err
+		}
+		predTables := e.measureExprTables(pred)
+		table := ""
+		if len(predTables) == 1 {
+			table = e.tableKey(predTables[0])
+		}
+		filters = append(filters, taggedPred{table: table, sql: sql, expr: pred})
+	}
+	for _, tf := range cm.timeFilters {
+		pred, err := e.emitTimeIntelPred(tf, e.sqlTable(tf.table)+"."+tf.col)
+		if err != nil {
+			return "", err
+		}
+		filters = append(filters, taggedPred{table: e.tableKey(tf.table), col: strings.ToLower(tf.col), sql: pred})
+	}
+	needed := map[string]bool{}
+	valueTables := map[string]bool{}
+	for _, table := range e.measureValueTables(value) {
+		needed[e.tableKey(table)] = true
+		valueTables[e.tableKey(table)] = true
+	}
+	from, conds, _, err := e.stitchedClusterFrom(tables, needed, filters, valueTables)
+	if err != nil {
+		return "", err
+	}
+	e.ctx.valueDepth++
+	inner, err := e.emitExpr(value)
+	e.ctx.valueDepth--
+	if err != nil {
+		return "", err
+	}
+	result := fmt.Sprintf("(SELECT %s FROM %s", inner, from)
+	if len(conds) > 0 {
+		result += " WHERE " + strings.Join(conds, " AND ")
+	}
+	return result + ")", nil
 }
 
 // emitCalculateFastPath emits the aggregate FILTER (WHERE ...) form used when

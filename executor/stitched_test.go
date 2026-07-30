@@ -182,6 +182,18 @@ func TestStandaloneCalculateDoesNotFanOutAcrossBidirectionalBridge(t *testing.T)
 	}
 }
 
+func TestIteratorTransitionAcrossBidirectionalBridgeDoesNotFanOut(t *testing.T) {
+	db, schema := setupBidiBridgeDB(t)
+	_, rows := run(t, db, schema, `EVALUATE SELECTCOLUMNS(clubs, "Club", clubs[name], "Net", [Net])`)
+	want := map[string]float64{"A": 27, "B": 9, "C": 27}
+	for _, row := range rows {
+		name := cell(t, row, "Club").(string)
+		if got := toFloat(cell(t, row, "Net")); got != want[name] {
+			t.Errorf("%s Net = %v, want %v", name, got, want[name])
+		}
+	}
+}
+
 // rowByKey returns the row whose column k equals v.
 func rowByKey(t *testing.T, rows []map[string]any, k string, v int64) map[string]any {
 	t.Helper()

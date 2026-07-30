@@ -38,6 +38,7 @@ type Resolver struct {
 	// whose output columns are not part of the semantic model.
 	allowBareColumns bool
 	measureState     map[*parser.MeasureDefinition]uint8
+	result           *Resolution
 }
 
 // Resolve runs the full semantic pass: measure pre-resolution followed by the
@@ -51,6 +52,7 @@ func (r *Resolver) Resolve(q *parser.Query) error {
 	if err := PreResolveMeasures(q.Defines, r.localMeasures); err != nil {
 		return err
 	}
+	r.initResolution()
 	r.measureState = map[*parser.MeasureDefinition]uint8{}
 	if err := r.resolveMeasures(q.Defines); err != nil {
 		return err
@@ -63,9 +65,18 @@ func (r *Resolver) Resolve(q *parser.Query) error {
 		if err := r.resolveExpr(v.Expr); err != nil {
 			return err
 		}
+		shape, err := r.shapeExpr(v.Expr)
+		if err != nil {
+			return err
+		}
+		r.result.VarShapes[strings.ToLower(v.Name)] = shape
 		r.varNames[strings.ToLower(v.Name)] = true
 	}
-	return r.resolveTableExpr(q.Evaluate.Table)
+	if err := r.resolveTableExpr(q.Evaluate.Table); err != nil {
+		return err
+	}
+	_, err := r.shapeTableExpr(q.Evaluate.Table)
+	return err
 }
 
 // EffectiveMeasures returns the merged (global + per-query) measure map that
@@ -213,6 +224,9 @@ func (r *Resolver) resolveMeasureExpr(expr *parser.Expr, visit func(*parser.Meas
 					continue
 				}
 			}
+			if def != nil {
+				r.result.Refs[cr] = ResolvedRef{Kind: RefMeasure, Table: StripSingleQuotes(def.Table), Column: StripBrackets(def.Column), Measure: def}
+			}
 			if err := visit(def); err != nil {
 				var semanticErr *SemanticError
 				if errors.As(err, &semanticErr) && semanticErr.Line == 0 {
@@ -357,13 +371,7 @@ func (r *Resolver) resolveTerm(t *parser.Term) error {
 // validated by the emitter.
 func (r *Resolver) resolveFuncCall(fc *parser.FuncCall) error {
 	for i, arg := range fc.Args {
-		// TOPN order keys over computed tables name output columns, not model
-		// measures. The emitter validates their shape against the table result.
-		if strings.EqualFold(fc.Name, "TOPN") && i >= 2 && arg != nil && arg.Left != nil &&
-			arg.Left.ColRef != nil && arg.Left.ColRef.Table == "" && len(arg.Right) == 0 {
-			continue
-		}
-		if strings.EqualFold(fc.Name, "FILTER") && i == 1 {
+		if (strings.EqualFold(fc.Name, "FILTER") && i == 1) || (strings.EqualFold(fc.Name, "TOPN") && i >= 2) {
 			prev := r.allowBareColumns
 			r.allowBareColumns = true
 			err := r.resolveExpr(arg)
@@ -376,8 +384,12 @@ func (r *Resolver) resolveFuncCall(fc *parser.FuncCall) error {
 		if err := r.resolveExpr(arg); err != nil {
 			return err
 		}
+		if _, err := r.shapeExpr(arg); err != nil {
+			return err
+		}
 	}
-	return nil
+	_, err := r.shapeFunc(fc)
+	return err
 }
 
 // resolveColRef verifies that a column reference names a known table and column.
@@ -386,9 +398,6 @@ func (r *Resolver) resolveFuncCall(fc *parser.FuncCall) error {
 // measure it is treated as a plain column reference (deferred to runtime).
 func (r *Resolver) resolveColRef(cr *parser.ColRef) error {
 	if cr.Table == "" {
-		if r.allowBareColumns {
-			return nil
-		}
 		// Try bare measure lookup first.
 		name := StripBrackets(cr.Column)
 		def, err := FindMeasureByName(name, r.localMeasures)
@@ -401,8 +410,13 @@ func (r *Resolver) resolveColRef(cr *parser.ColRef) error {
 			return err
 		}
 		if def == nil {
+			if r.allowBareColumns {
+				r.result.Refs[cr] = ResolvedRef{Kind: RefOutput, Column: name}
+				return nil
+			}
 			return &SemanticError{Message: fmt.Sprintf("unknown measure %q", name), Line: cr.Pos.Line, Column: cr.Pos.Column}
 		}
+		r.result.Refs[cr] = ResolvedRef{Kind: RefMeasure, Table: StripSingleQuotes(def.Table), Column: StripBrackets(def.Column), Measure: def}
 		return r.resolveMeasures([]*parser.MeasureDefinition{def})
 	}
 	tableName := StripSingleQuotes(cr.Table)
@@ -414,6 +428,7 @@ func (r *Resolver) resolveColRef(cr *parser.ColRef) error {
 	// Check the measure store before the column list — Table[MeasureName] is
 	// valid when the name is a declared measure in that table.
 	if def := FindMeasure(tableName, col, r.localMeasures); def != nil {
+		r.result.Refs[cr] = ResolvedRef{Kind: RefMeasure, Table: StripSingleQuotes(def.Table), Column: StripBrackets(def.Column), Measure: def}
 		return r.resolveMeasures([]*parser.MeasureDefinition{def})
 	}
 	// Look up the table in the schema. Accept both the bare name and the
@@ -433,6 +448,8 @@ func (r *Resolver) resolveColRef(cr *parser.ColRef) error {
 			Column:  cr.Pos.Column,
 		}
 	}
+	canonicalTable := ResolveTable(r.Schema, tableName)
+	r.result.Refs[cr] = ResolvedRef{Kind: RefColumn, Table: canonicalTable, Column: canonicalCol}
 	return nil
 }
 

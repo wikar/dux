@@ -132,7 +132,7 @@ func (e *Emitter) timeAnchor(agg, table, col string) string {
 				fromAlias := aliases[e.tableKey(step.FromTable)]
 				toAlias := "__ti_" + sanitizeAliasSuffix(step.Table)
 				aliases[e.tableKey(step.Table)] = toAlias
-				fmt.Fprintf(&from, "\nLEFT JOIN %s AS %s ON %s.%s = %s.%s",
+				fmt.Fprintf(&from, "\nLEFT JOIN %s AS %s ON %s.%s IS NOT DISTINCT FROM %s.%s",
 					e.sqlTable(step.Table), toAlias, fromAlias, step.OnFromCol, toAlias, step.OnToCol)
 			}
 		}
@@ -361,7 +361,7 @@ func (e *Emitter) emitGroupedLastNonBlank(table, col string, expr *parser.Expr) 
 			return "", err
 		}
 		for _, step := range jp.Steps {
-			fmt.Fprintf(&from, "\nLEFT JOIN %s AS %s ON %s.%s = %s.%s",
+			fmt.Fprintf(&from, "\nLEFT JOIN %s AS %s ON %s.%s IS NOT DISTINCT FROM %s.%s",
 				e.sqlTable(step.Table), aliasFor(step.Table),
 				aliasFor(step.FromTable), step.OnFromCol, aliasFor(step.Table), step.OnToCol)
 		}

@@ -655,7 +655,7 @@ func (e *Emitter) stitchedClusterFrom(tables []string, needed map[string]bool, p
 			chains = append(chains, ch)
 			continue
 		}
-		fmt.Fprintf(&fromBuf, "\nLEFT JOIN %s ON %s.%s = %s.%s",
+		fmt.Fprintf(&fromBuf, "\nLEFT JOIN %s ON %s.%s IS NOT DISTINCT FROM %s.%s",
 			e.sqlTable(s.Table),
 			e.sqlTable(s.FromTable), s.OnFromCol,
 			e.sqlTable(s.Table), s.OnToCol,
@@ -682,7 +682,7 @@ func (e *Emitter) stitchedClusterFrom(tables []string, needed map[string]bool, p
 		fmt.Fprintf(&body, "SELECT DISTINCT %s FROM %s",
 			strings.Join(selected, ", "), e.sqlTable(ch.anchor.Table))
 		for _, s := range ch.steps {
-			fmt.Fprintf(&body, " LEFT JOIN %s ON %s.%s = %s.%s",
+			fmt.Fprintf(&body, " LEFT JOIN %s ON %s.%s IS NOT DISTINCT FROM %s.%s",
 				e.sqlTable(s.Table),
 				e.sqlTable(s.FromTable), s.OnFromCol,
 				e.sqlTable(s.Table), s.OnToCol)
@@ -707,14 +707,14 @@ func (e *Emitter) stitchedClusterFrom(tables []string, needed map[string]bool, p
 		var b strings.Builder
 		fmt.Fprintf(&b, "EXISTS (SELECT 1 FROM %s", e.sqlTable(ch.anchor.Table))
 		for _, s := range ch.steps {
-			fmt.Fprintf(&b, " JOIN %s ON %s.%s = %s.%s",
+			fmt.Fprintf(&b, " JOIN %s ON %s.%s IS NOT DISTINCT FROM %s.%s",
 				e.sqlTable(s.Table),
 				e.sqlTable(s.FromTable), s.OnFromCol,
 				e.sqlTable(s.Table), s.OnToCol,
 			)
 		}
 		// Correlate the chain's bridge key back to the outer FROM.
-		fmt.Fprintf(&b, " WHERE %s.%s = %s.%s",
+		fmt.Fprintf(&b, " WHERE %s.%s IS NOT DISTINCT FROM %s.%s",
 			e.sqlTable(ch.anchor.Table), ch.anchor.OnToCol,
 			e.sqlTable(ch.anchor.FromTable), ch.anchor.OnFromCol,
 		)

@@ -159,39 +159,6 @@
   cursor: pointer;
 }
 
-/* Alpha channel for the whole data palette. */
-.alpha {
-  flex: none;
-  width: 52px;
-  background: var(--base);
-  border: 1px solid var(--surface1);
-  border-radius: 4px;
-  color: var(--text);
-  font-size: 12px;
-  padding: 5px 4px 5px 6px;
-  outline: none;
-}
-
-.alpha:focus {
-  border-color: var(--blue);
-}
-
-/* One-line variant of .label + field, for the palette-wide alpha. */
-.alphaField {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-}
-
-.alphaField span {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--subtext0);
-}
-
 .btn {
   display: flex;
   align-items: center;
@@ -235,7 +202,7 @@
 
 .error {
   font-size: 12px;
-  color: var(--red);
+  color: var(--th-error);
   word-break: break-word;
 }
 
@@ -313,13 +280,6 @@
   flex-wrap: wrap;
   gap: 4px;
   align-items: center;
-}
-
-.swatch {
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  border: 1px solid var(--surface1);
 }
 
 .swatchEdit {

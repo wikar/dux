@@ -14,6 +14,7 @@ import CollapsiblePanel from "../components/CollapsiblePanel";
 import SchemaTree from "../components/SchemaTree";
 import Canvas from "./components/Canvas";
 import ConflictDialog from "./components/ConflictDialog";
+import { displayMessage } from "./message";
 import ElementsPane from "./components/ElementsPane";
 import Home from "./components/Home";
 
@@ -165,7 +166,7 @@ export default function DashApp({ path, showHidden }: Props) {
         {loadError ? (
           <div className={styles.loadError}>
             <h2>Can't open “{path}”</h2>
-            <p>{loadError}</p>
+            <p>{displayMessage(loadError)}</p>
           </div>
         ) : doc ? (
           <Canvas />

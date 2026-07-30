@@ -27,7 +27,7 @@
 }
 
 .loadError h2 {
-  color: var(--red);
+  color: var(--th-error);
   font-size: 13px;
   font-weight: 600;
   margin-bottom: 8px;

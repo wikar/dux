@@ -4,9 +4,7 @@ package emitter_test
 // itself: a bare [Measure] carries no table qualifier, so every FROM clause the
 // emitter builds must expand the measure to find the tables its body reads.
 //
-// Also covers ROW (emitted as a group-key-less SUMMARIZECOLUMNS) and the guard
-// that rejects an inline aggregate in a row-context position instead of
-// emitting SQL DuckDB cannot bind.
+// Also covers ROW and contextual value lowering in row-context positions.
 
 import (
 	"strings"
@@ -35,8 +33,14 @@ func measureSchema(t *testing.T) *semantic.Schema {
 
 func emitMeasure(t *testing.T, dux string) (string, error) {
 	t.Helper()
-	em := &emitter.Emitter{Schema: measureSchema(t)}
-	return em.Emit(mustParse(t, dux))
+	schema := measureSchema(t)
+	query := mustParse(t, dux)
+	resolver := &semantic.Resolver{Schema: schema}
+	if err := resolver.Resolve(query); err != nil {
+		return "", err
+	}
+	em := &emitter.Emitter{Schema: schema, Measures: resolver.EffectiveMeasures(), Resolution: resolver.Result()}
+	return em.Emit(query)
 }
 
 func emitMeasureOK(t *testing.T, dux string) string {
@@ -147,12 +151,10 @@ func TestRow(t *testing.T) {
 	})
 }
 
-// ─── Inline aggregates in row-context positions ──────────────────────────────
+// ─── Aggregates and measures in row-context positions ────────────────────────
 
-func TestInlineAggInRowContextRejected(t *testing.T) {
-	// DUX does not perform context transition: these must fail as DUX errors
-	// rather than reach DuckDB as unbindable SQL.
-	rejected := []struct {
+func TestValuesInRowContextEmitContextualQueries(t *testing.T) {
+	accepted := []struct {
 		name string
 		dux  string
 	}{
@@ -164,18 +166,6 @@ func TestInlineAggInRowContextRejected(t *testing.T) {
 		{"FilterPredicate", `EVALUATE FILTER(products, [NetSalesAmount] > 1)`},
 		{"IteratorBody", `EVALUATE SUMMARIZECOLUMNS("Net", SUMX(products, [NetSalesAmount]))`},
 		{"ConcatenateXBody", `EVALUATE SUMMARIZECOLUMNS("Net", CONCATENATEX(products, [NetSalesAmount]))`},
-	}
-	for _, tc := range rejected {
-		t.Run(tc.name, func(t *testing.T) {
-			emitMeasureErr(t, tc.dux, "context transition")
-		})
-	}
-
-	// Aggregates that carry their own context stay accepted.
-	accepted := []struct {
-		name string
-		dux  string
-	}{
 		{"AddColumnsCalculate", `EVALUATE ADDCOLUMNS(products, "Net", CALCULATE([NetSalesAmount], sales[product] = products[product]))`},
 		{"AddColumnsIterator", `EVALUATE ADDCOLUMNS(products, "Net", SUMX(sales, sales[amount]))`},
 		{"AddColumnsCountRowsTableExpr", `EVALUATE ADDCOLUMNS(products, "N", COUNTROWS(FILTER(sales, sales[qty] > 1)))`},

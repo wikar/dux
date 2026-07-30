@@ -35,6 +35,11 @@
   --th-border:     var(--surface1);
   --th-text:       var(--text);
   --th-accent:     var(--blue);
+  --th-positive:   var(--green);
+  --th-negative:   var(--red);
+  --th-neutral:    var(--text);
+  --th-error:      var(--red);
+  --th-warning:    var(--peach);
 
   /* Text tints mix toward the background, not toward transparent: an alpha
      color makes 10px axis labels wash out under antialiasing, and it drifts
@@ -49,9 +54,6 @@
   --th-tint-hi:    color-mix(in srgb, var(--th-text) 18%, transparent);
   /* Text drawn on an --th-accent fill. */
   --th-on-accent:  var(--th-bg);
-  /* ponytail: one fixed danger hue rather than a seventh configurable token —
-     readable on both light and dark. Make it a token when someone asks. */
-  --th-danger:     #e64553;
 }
 
 * {

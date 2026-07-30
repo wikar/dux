@@ -74,6 +74,15 @@ export interface VizSettings extends MapViz {
   grandTotal?: boolean;
   /** pivot: total column across the column dims (default true). */
   totalCol?: boolean;
+  /** kpi: drop the card surface and border. */
+  transparent?: boolean;
+  /** kpi: color the value from the semantic theme colors. */
+  colorByThreshold?: boolean;
+  /** kpi: which side of the neutral band uses the positive color. */
+  positiveDirection?: "higher" | "lower";
+  /** kpi: values inside this inclusive band are neutral. */
+  lowerThreshold?: number;
+  upperThreshold?: number;
 }
 
 export interface BuilderFilterRef {
@@ -193,6 +202,12 @@ export interface ThemeTokens {
   border?: string;
   /** Text color inside the canvas. */
   text?: string;
+  /** Semantic value/status colors. */
+  positive?: string;
+  negative?: string;
+  neutral?: string;
+  error?: string;
+  warning?: string;
   /** Font family for the canvas. */
   fontFamily?: string;
 }

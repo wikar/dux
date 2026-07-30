@@ -2,7 +2,7 @@ import { useState, type ComponentType } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import styles from "./ElementsPane.module.css";
 import ColorPicker from "./ColorPicker";
-import { normalizeColor, parseColor, withAlpha } from "./color";
+import { normalizeColor } from "./color";
 import Modal, { modalStyles } from "../../components/Modal";
 import DuxEditor from "../../components/DuxEditor";
 import FieldPill from "../../components/FieldPill";
@@ -47,6 +47,7 @@ import { asDropField, wellMembers } from "../visuals/wells";
 import { applySlicerSelection } from "../actions";
 import { isNumeric, QueryFailedError } from "@dux/core";
 import type { Aggregate, DragPayload, FilterField, FilterOp } from "@dux/core";
+import { displayMessage } from "../message";
 
 /** Settings for the selected element, or the dashboard when none selected.
  *  Text fields commit on blur (one undo step per edit); everything else
@@ -577,7 +578,8 @@ function SlicerSection({ el }: { el: DashElement }) {
 }
 
 function BuilderSection({ el }: { el: DashElement }) {
-  const wells = VISUALS[el.type].data?.wells ?? [];
+  const data = VISUALS[el.type].data;
+  const wells = data?.wells ?? [];
   const fieldNames = (el.query?.fields ?? []).map((f) => f.name);
   const sort = el.query?.sort?.[0];
 
@@ -600,45 +602,49 @@ function BuilderSection({ el }: { el: DashElement }) {
       ))}
       <FiltersWell el={el} />
 
-      <label className={styles.label}>Sort by</label>
-      <div className={styles.row}>
-        <select
-          className={styles.input}
-          value={sort?.field ?? ""}
-          onChange={(e) => setSort(e.target.value, sort?.dir ?? "desc")}
-        >
-          <option value="">None</option>
-          {fieldNames.map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
-          ))}
-        </select>
-        <select
-          className={styles.input}
-          style={{ width: 70 }}
-          value={sort?.dir ?? "desc"}
-          disabled={!sort?.field}
-          onChange={(e) => sort?.field && setSort(sort.field, e.target.value as "asc" | "desc")}
-        >
-          <option value="desc">desc</option>
-          <option value="asc">asc</option>
-        </select>
-      </div>
-      <label className={styles.numField}>
-        <span style={{ minWidth: 38 }}>Top N</span>
-        <input
-          type="number"
-          className={styles.input}
-          min={1}
-          value={el.query?.topN ?? ""}
-          placeholder="all"
-          onChange={(e) => {
-            const v = e.target.value === "" ? null : Number(e.target.value);
-            if (v === null || (Number.isFinite(v) && v >= 1)) setTopN(v);
-          }}
-        />
-      </label>
+      {data?.sortable !== false && (
+        <>
+          <label className={styles.label}>Sort by</label>
+          <div className={styles.row}>
+            <select
+              className={styles.input}
+              value={sort?.field ?? ""}
+              onChange={(e) => setSort(e.target.value, sort?.dir ?? "desc")}
+            >
+              <option value="">None</option>
+              {fieldNames.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+            <select
+              className={styles.input}
+              style={{ width: 70 }}
+              value={sort?.dir ?? "desc"}
+              disabled={!sort?.field}
+              onChange={(e) => sort?.field && setSort(sort.field, e.target.value as "asc" | "desc")}
+            >
+              <option value="desc">desc</option>
+              <option value="asc">asc</option>
+            </select>
+          </div>
+          <label className={styles.numField}>
+            <span style={{ minWidth: 38 }}>Top N</span>
+            <input
+              type="number"
+              className={styles.input}
+              min={1}
+              value={el.query?.topN ?? ""}
+              placeholder="all"
+              onChange={(e) => {
+                const v = e.target.value === "" ? null : Number(e.target.value);
+                if (v === null || (Number.isFinite(v) && v >= 1)) setTopN(v);
+              }}
+            />
+          </label>
+        </>
+      )}
     </>
   );
 }
@@ -753,7 +759,7 @@ function RawSection({ el }: { el: DashElement }) {
       />
       {error && (
         <div className={styles.error}>
-          {error.message}
+          {displayMessage(error)}
           {error instanceof QueryFailedError && error.line > 0 && ` (line ${error.line}, col ${error.column})`}
         </div>
       )}
@@ -821,6 +827,19 @@ function VizOption({
           ))}
         </select>
       </>
+    );
+  }
+  if (spec.kind === "number") {
+    return (
+      <label className={styles.numField}>
+        <span>{spec.label}</span>
+        <input
+          type="number"
+          className={styles.input}
+          value={(value as number | undefined) ?? spec.default}
+          onChange={(e) => onChange(Number(e.target.value))}
+        />
+      </label>
     );
   }
   // Tri-state: unset means the visual decides (e.g. legend on multi-series).
@@ -905,6 +924,7 @@ function DashboardSettings() {
             <input
               type="number"
               className={styles.input}
+              style={{ width: 70 }}
               min={5}
               value={doc.refresh.intervalSeconds}
               onChange={(e) => {
@@ -965,6 +985,14 @@ const COLOR_TOKENS: { key: keyof ThemeTokens; label: string }[] = [
   { key: "text", label: "Text color" },
 ];
 
+const STATUS_COLOR_TOKENS = [
+  { key: "positive", label: "Positive" },
+  { key: "negative", label: "Negative" },
+  { key: "neutral", label: "Neutral" },
+  { key: "error", label: "Error" },
+  { key: "warning", label: "Warning" },
+] as const;
+
 /** One themable color: the Sketch picker (hex field and alpha slider live
  *  inside it) plus a text field that also accepts any CSS color and, left
  *  empty, falls back to the inherited value. */
@@ -1020,6 +1048,24 @@ function ThemeEditor({ tokens, inherited, onToken }: ThemeEditorProps) {
         </div>
       ))}
 
+      <label className={styles.label}>Semantic colors (positive → warning)</label>
+      <div className={styles.swatchRow}>
+        {STATUS_COLOR_TOKENS.map(({ key, label }) => (
+          <ColorPicker
+            key={key}
+            className={styles.swatchInput}
+            value={tokens[key] ?? inherited[key]}
+            title={`${label}: ${tokens[key] ?? `inherited ${inherited[key]}`}`}
+            onChange={(v) => onToken(key, v)}
+          />
+        ))}
+      </div>
+      {STATUS_COLOR_TOKENS.some(({ key }) => tokens[key]) && (
+        <button className={styles.btn} onClick={() => STATUS_COLOR_TOKENS.forEach(({ key }) => onToken(key, undefined))}>
+          Reset semantic colors
+        </button>
+      )}
+
       <label className={styles.label}>Background image URL</label>
       <input
         className={styles.input}
@@ -1052,24 +1098,14 @@ function ThemeEditor({ tokens, inherited, onToken }: ThemeEditorProps) {
       />
 
       <label className={styles.label}>Data colors (left → right)</label>
-      {tokens.palette ? (
-        <>
-          <PaletteEditor colors={tokens.palette} onChange={(p) => onToken("palette", p.length ? p : undefined)} />
-          <button className={styles.btn} onClick={() => onToken("palette", undefined)}>
-            Reset to inherited
-          </button>
-        </>
-      ) : (
-        <>
-          <div className={styles.swatchRow}>
-            {inherited.palette.map((c, i) => (
-              <span key={i} className={styles.swatch} style={{ background: c }} title={c} />
-            ))}
-          </div>
-          <button className={styles.btn} onClick={() => onToken("palette", [...inherited.palette])}>
-            Customize
-          </button>
-        </>
+      <PaletteEditor
+        colors={tokens.palette ?? inherited.palette}
+        onChange={(p) => onToken("palette", p.length ? p : undefined)}
+      />
+      {tokens.palette && (
+        <button className={styles.btn} onClick={() => onToken("palette", undefined)}>
+          Reset to inherited
+        </button>
       )}
     </>
   );
@@ -1120,64 +1156,30 @@ function ThemeSection() {
   );
 }
 
-/** Series colors: a compact swatch grid, deliberately not a stack of full
- *  ColorField rows — a palette runs to a dozen-plus entries and rows tall
- *  enough to hold a hex box put the whole settings pane into a scrollbar.
- *
- *  Alpha is therefore one field for the whole palette rather than per entry:
- *  series translucency is a look you pick once, not per colour. */
+/** Series colors: a compact, wrapping swatch grid. */
 function PaletteEditor({ colors, onChange }: { colors: string[]; onChange: (c: string[]) => void }) {
-  const alpha = parseColor(colors[0] ?? "")?.a ?? 1;
   return (
-    <>
-      <div className={styles.swatchRow}>
-        {colors.map((c, i) => (
-          <span key={i} className={styles.swatchEdit}>
-            <ColorPicker
-              className={styles.swatchInput}
-              value={c}
-              // Alpha is the palette-wide field below, so a pick keeps this
-              // entry's channel rather than the one the panel returns.
-              onChange={(v) => onChange(colors.map((x, j) => (j === i ? withAlpha(v, alpha) : x)))}
-            />
-            <button
-              className={styles.swatchRemove}
-              title="Remove color"
-              onClick={() => onChange(colors.filter((_, j) => j !== i))}
-            >
-              ×
-            </button>
-          </span>
-        ))}
-        <button
-          className={styles.btn}
-          onClick={() => onChange([...colors, withAlpha("#89b4fa", alpha)])}
-          title="Add color"
-        >
-          +
-        </button>
-      </div>
-
-      {/* Label beside the box, not above it: the pane is tight enough that one
-          more stacked label + field is what tips it into a scrollbar. */}
-      <label className={styles.alphaField}>
-        <span>Data color alpha</span>
-        <input
-          className={styles.alpha}
-          type="number"
-          min={0}
-          max={1}
-          step={0.05}
-          title="Applies to every data color — 0 = fully transparent, 0.5 = 50% transparent, 1 = fully opaque"
-          key={`pa:${alpha}`}
-          defaultValue={Math.round(alpha * 100) / 100}
-          onBlur={(e) => {
-            const a = parseFloat(e.target.value);
-            if (!Number.isNaN(a)) onChange(colors.map((c) => withAlpha(c, a)));
-          }}
-        />
-      </label>
-    </>
+    <div className={styles.swatchRow}>
+      {colors.map((c, i) => (
+        <span key={i} className={styles.swatchEdit}>
+          <ColorPicker
+            className={styles.swatchInput}
+            value={c}
+            onChange={(v) => onChange(colors.map((x, j) => (j === i ? v : x)))}
+          />
+          <button
+            className={styles.swatchRemove}
+            title="Remove color"
+            onClick={() => onChange(colors.filter((_, j) => j !== i))}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      <button className={styles.btn} onClick={() => onChange([...colors, "#89b4fa"])} title="Add color">
+        +
+      </button>
+    </div>
   );
 }
 
@@ -1201,7 +1203,7 @@ function GlobalThemeModal({ onClose }: { onClose: () => void }) {
       await queryClient.invalidateQueries({ queryKey: ["dash-theme"] });
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(displayMessage(e));
     }
   };
 

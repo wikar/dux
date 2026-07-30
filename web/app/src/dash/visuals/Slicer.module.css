@@ -15,17 +15,17 @@
 
 .error {
   font-size: 11px;
-  color: var(--th-danger);
+  color: var(--th-error);
   padding: 2px 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 /* Preset values that are no longer in the source data — advisory, so it shares
-   the danger hue but not the weight of a query error. */
+   the warning hue but not the weight of a query error. */
 .stale {
   font-size: 10px;
-  color: var(--th-danger);
+  color: var(--th-warning);
   padding: 1px 0 3px;
   flex: none;
   overflow: hidden;

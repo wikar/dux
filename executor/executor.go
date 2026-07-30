@@ -144,7 +144,7 @@ func ExecuteFilteredContext(ctx context.Context, db *sql.DB, schema *semantic.Sc
 		return nil, nil, queryErr("resolve", err)
 	}
 
-	em := &emitter.Emitter{Schema: schema, Measures: r.EffectiveMeasures()}
+	em := &emitter.Emitter{Schema: schema, Measures: r.EffectiveMeasures(), Resolution: r.Result()}
 
 	// Pin a single connection so that session temp tables created for VAR
 	// bindings are visible across all statements.

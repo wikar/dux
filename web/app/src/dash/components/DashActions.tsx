@@ -6,6 +6,7 @@ import TreeCaret from "../../components/TreeCaret";
 import { listDashboards, type DashEntry } from "../api";
 import { createDashboard, gotoDashboard, redo, save, setFullscreen, undo } from "../actions";
 import { useDirty, useTemporal, useUiStore } from "../store";
+import { displayMessage } from "../message";
 
 /** Top-bar actions while the Dash tab is active: dashboard picker, new,
  *  save, undo/redo, edit/view mode. Rendered inside the shared TopBar. */
@@ -24,8 +25,8 @@ export default function DashActions() {
   return (
     <>
       {saveError && (
-        <span className={styles.error} title={saveError}>
-          save failed: {saveError}
+        <span className={styles.error} title={displayMessage(saveError)}>
+          Save failed: {displayMessage(saveError)}
           <button className={styles.dismiss} title="Dismiss" onClick={() => setSaveError(null)}>
             ✕
           </button>
@@ -203,7 +204,7 @@ function DashboardPicker() {
             />
           </div>
           {isLoading && <div className={styles.dim}>Loading…</div>}
-          {error != null && <div className={styles.dim}>failed to list: {String(error)}</div>}
+          {error != null && <div className={styles.dropdownError}>Failed to list: {displayMessage(error)}</div>}
           {entries && entries.length === 0 && <div className={styles.dim}>No dashboards yet</div>}
           {entries && entries.length > 0 && tree.length === 0 && (
             <div className={styles.dim}>No matches</div>
@@ -247,11 +248,11 @@ function TreeLevel({
               className={`${styles.item}${n.entry.path === current ? ` ${styles.itemActive}` : ""}`}
               style={{ paddingLeft: 12 + depth * 14 }}
               disabled={!n.entry.valid}
-              title={n.entry.valid ? n.entry.path : n.entry.error}
+              title={n.entry.valid ? n.entry.path : displayMessage(n.entry.error)}
               onClick={() => onPick(n.entry!.path)}
             >
               {n.name}
-              {!n.entry.valid && <span className={styles.invalid}> ⚠ invalid</span>}
+              {!n.entry.valid && <span className={styles.invalid}> ⚠ Invalid</span>}
             </button>
           );
         }
@@ -295,9 +296,9 @@ function NewDashboardModal({ onClose }: { onClose: () => void }) {
 
   const submit = () => {
     const p = path.trim().toLowerCase().replace(/^\/+|\/+$/g, "");
-    if (!p) return setError("path is required");
-    if (p.endsWith(".json")) return setError("leave out the .json extension — the path is the identity");
-    if (!PATH_RE.test(p)) return setError("use lower-case letters, digits, space, - and _; folders with /");
+    if (!p) return setError("Path is required");
+    if (p.endsWith(".json")) return setError("Leave out the .json extension — the path is the identity");
+    if (!PATH_RE.test(p)) return setError("Use lower-case letters, digits, space, - and _; folders with /");
     if (p === "theme") return setError('"theme" is reserved for the global theme');
     createDashboard(p);
     onClose();

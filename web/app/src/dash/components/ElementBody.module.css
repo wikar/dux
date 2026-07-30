@@ -179,8 +179,8 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  background: color-mix(in srgb, var(--th-bg) 88%, transparent);
-  color: var(--th-danger);
+  background: color-mix(in srgb, var(--th-error) 12%, var(--th-bg));
+  color: var(--th-error);
   padding: 10px;
   text-align: center;
 }

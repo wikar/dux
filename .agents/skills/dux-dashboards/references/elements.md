@@ -74,6 +74,13 @@ stretch the axis into empty space. Bound such elements with an explicit
 
 - Fields: 1 metric (first one renders). Shows the formatted value large,
   with the metric name as label.
+- `viz.transparent`: removes the card background and border.
+- `viz.colorByThreshold`: colors the value with the theme's `positive`,
+  `neutral`, or `negative` token. Values inside the inclusive
+  `lowerThreshold`/`upperThreshold` band are neutral; `positiveDirection`
+  chooses whether values above (`higher`, default) or below (`lower`) that
+  band are positive.
+- Sort and Top N do not apply to the single scalar cell.
 
 ## table
 

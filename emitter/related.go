@@ -35,7 +35,7 @@ func (e *Emitter) emitRelated(fc *parser.FuncCall) (string, error) {
 
 	outer := e.rowRef(rel.FromTable)
 	alias := e.nextAlias("__rel")
-	return fmt.Sprintf("(SELECT %s.%s FROM %s AS %s WHERE %s.%s = %s.%s)",
+	return fmt.Sprintf("(SELECT %s.%s FROM %s AS %s WHERE %s.%s IS NOT DISTINCT FROM %s.%s)",
 		alias, col, e.sqlTable(rel.ToTable), alias,
 		alias, rel.ToColumn, outer, rel.FromColumn), nil
 }
@@ -45,23 +45,10 @@ func (e *Emitter) emitRelatedTable(fc *parser.FuncCall) (string, error) {
 	if len(fc.Args) != 1 {
 		return "", fmt.Errorf("RELATEDTABLE requires exactly 1 argument")
 	}
-	fact, err := e.tableNameFromExpr(fc.Args[0])
-	if err != nil {
+	if _, err := e.tableNameFromExpr(fc.Args[0]); err != nil {
 		return "", fmt.Errorf("RELATEDTABLE: argument must be a table reference: %w", err)
 	}
-
-	rel, err := e.findRelationship(func(r *semantic.Relationship) bool {
-		return strings.EqualFold(r.FromTable, fact)
-	}, "RELATEDTABLE", fact)
-	if err != nil {
-		return "", err
-	}
-
-	outer := e.rowRef(rel.ToTable)
-	alias := e.nextAlias("__rel")
-	return fmt.Sprintf("(SELECT * FROM %s AS %s WHERE %s.%s = %s.%s)",
-		e.sqlTable(rel.FromTable), alias,
-		alias, rel.FromColumn, outer, rel.ToColumn), nil
+	return e.emitCalculateTable(&parser.FuncCall{Name: "CALCULATETABLE", Args: fc.Args})
 }
 
 // findRelationship returns the relationship matching the predicate. When
@@ -85,10 +72,10 @@ func (e *Emitter) findRelationship(match func(*semantic.Relationship) bool, fn, 
 	}
 	// Disambiguate using the active row context.
 	for _, r := range candidates {
-		if _, ok := e.rowCtx.ResolveAlias(e.tableKey(r.FromTable)); ok {
+		if _, ok := e.rowAliasForTable(e.tableKey(r.FromTable)); ok {
 			return r, nil
 		}
-		if _, ok := e.rowCtx.ResolveAlias(e.tableKey(r.ToTable)); ok {
+		if _, ok := e.rowAliasForTable(e.tableKey(r.ToTable)); ok {
 			return r, nil
 		}
 	}
@@ -99,7 +86,7 @@ func (e *Emitter) findRelationship(match func(*semantic.Relationship) bool, fn, 
 // row-context alias inside iterators, or the table identifier itself when the
 // enclosing FROM clause exposes it directly (FILTER, ADDCOLUMNS, GENERATE).
 func (e *Emitter) rowRef(table string) string {
-	if alias, ok := e.rowCtx.ResolveAlias(e.tableKey(table)); ok {
+	if alias, ok := e.rowAliasForTable(e.tableKey(table)); ok {
 		return alias
 	}
 	return e.sqlTable(table)

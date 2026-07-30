@@ -421,7 +421,7 @@ func (e *Emitter) emitContextCTE(name string, fc *parser.FuncCall, clusterTables
 		}
 		for _, ck := range carried {
 			if ck.scan != nil && ck.kept {
-				conds = append(conds, fmt.Sprintf("%s.%s = %s.%s",
+				conds = append(conds, fmt.Sprintf("%s.%s IS NOT DISTINCT FROM %s.%s",
 					e.sqlTable(ck.gk.table), ck.gk.col, ck.scan.alias, ck.scan.groups[ck.idx]))
 			}
 		}
@@ -467,7 +467,7 @@ func (e *Emitter) emitContextCTE(name string, fc *parser.FuncCall, clusterTables
 				bp.keyExprs[ck.idx] = bp.alias + "." + ba
 				bridgeKey++
 				if ck.kept {
-					bridgeConds = append(bridgeConds, fmt.Sprintf("%s.%s = %s.%s",
+					bridgeConds = append(bridgeConds, fmt.Sprintf("%s.%s IS NOT DISTINCT FROM %s.%s",
 						e.sqlTable(ck.gk.table), ck.gk.col, bp.scan.alias, ga))
 				}
 			}

@@ -18,6 +18,7 @@ import { elementSeriesSplit, useElementData } from "../elementQuery";
 import { markKey, useDocStore, useUiStore } from "../store";
 import type { DashElement, ElementType, VizSettings } from "../types";
 import { QueryFailedError } from "@dux/core";
+import { displayMessage } from "../message";
 import type { MeasureFormat, QueryResponse } from "@dux/core";
 import { toChartData, toSeriesData, type ChartDim, type ChartRow, type Interaction } from "../charts/ChartKit";
 import { downloadIcon, eraserIcon, funnelIcon } from "../glyphs";
@@ -213,7 +214,7 @@ export default function ElementBody({ el }: { el: DashElement }) {
   return (
     <ElementBoundary
       key={el.type}
-      fallback={(error) => <Placeholder type={el.type} note={error.message.split("\n")[0]} />}
+      fallback={(error) => <Placeholder type={el.type} note={displayMessage(error).split("\n")[0]} />}
     >
       <TypedBody el={el} />
     </ElementBoundary>
@@ -224,7 +225,7 @@ export default function ElementBody({ el }: { el: DashElement }) {
  *  pipeline, the rest render straight from the element. */
 function TypedBody({ el }: { el: DashElement }) {
   const def = VISUALS[el.type];
-  if (!def) return <Placeholder type={el.type} note="unknown type" />;
+  if (!def) return <Placeholder type={el.type} note="Unknown type" />;
   if (def.data) return <DataBody el={el} def={def} />;
 
   const Body = def.Body as ComponentType<StaticBodyProps>;
@@ -289,15 +290,16 @@ function DataBody({ el, def }: { el: DashElement; def: VisualDef }) {
 
 /** Query failure overlay; positioned duxd errors show their source location. */
 function ErrorOverlay({ error }: { error: Error }) {
+  const message = displayMessage(error);
   const pos =
     error instanceof QueryFailedError && error.line > 0
       ? ` (line ${error.line}, col ${error.column})`
       : "";
   return (
-    <div className={styles.overlayError} title={error.message}>
+    <div className={styles.overlayError} title={message}>
       <span>⚠</span>
       <span className={styles.overlayErrorText}>
-        {error.message}
+        {message}
         {pos}
       </span>
     </div>

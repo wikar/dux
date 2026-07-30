@@ -22,7 +22,7 @@
 }
 
 .error {
-  color: var(--red);
+  color: var(--th-error);
 }
 
 .card {
@@ -62,6 +62,6 @@
 
 .invalid {
   margin-left: auto;
-  color: var(--yellow);
+  color: var(--th-warning);
   font-size: 12px;
 }

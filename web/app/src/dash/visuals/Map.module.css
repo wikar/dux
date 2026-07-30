@@ -11,6 +11,7 @@
 }
 
 .message,
+.warning,
 .loading,
 .error {
   position: absolute;
@@ -140,6 +141,12 @@
   background: color-mix(in srgb, var(--th-el-bg) 75%, transparent);
 }
 
+.warning {
+  color: var(--th-warning);
+  background: color-mix(in srgb, var(--th-warning) 10%, var(--th-bg));
+  font-size: 11px;
+}
+
 .loading {
   inset: auto 8px 8px auto;
   width: 20px;
@@ -152,8 +159,8 @@
 }
 
 .error {
-  color: var(--th-danger);
-  background: color-mix(in srgb, var(--th-bg) 80%, transparent);
+  color: var(--th-error);
+  background: color-mix(in srgb, var(--th-error) 12%, var(--th-bg));
   font-size: 12px;
 }
 

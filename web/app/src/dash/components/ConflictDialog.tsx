@@ -1,6 +1,7 @@
 import Modal, { modalStyles } from "../../components/Modal";
 import { overwriteConflict, reloadConflict } from "../actions";
 import { useUiStore } from "../store";
+import { displayMessage } from "../message";
 
 /** Shown when a save hits a 409/428: the file on disk changed since it was
  *  loaded (another user, an agent, or a git pull). */
@@ -29,7 +30,7 @@ export default function ConflictDialog() {
       }
     >
       <p className={modalStyles.hint}>
-        {conflict.message}
+        {displayMessage(conflict.message)}
         <br />
         The file on disk changed (last modified {when}) since this dashboard was loaded. Overwrite
         it with your version, or discard your changes and reload the disk version.

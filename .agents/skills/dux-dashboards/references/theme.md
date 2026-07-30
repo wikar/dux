@@ -29,6 +29,11 @@ A dashboard overrides single tokens in its own `"theme"` object.
 | `titleBackground` | Element title-bar background |
 | `border` | Element border color |
 | `text` | Text color inside the canvas |
+| `positive` | Positive KPI/status color |
+| `negative` | Negative KPI/status color |
+| `neutral` | Neutral KPI/status color |
+| `error` | Error message color |
+| `warning` | Warning message color |
 | `fontFamily` | Font family for the canvas |
 
 Every color accepts alpha — `#rrggbbaa` or `rgba(r, g, b, a)`. Convention:
@@ -44,10 +49,15 @@ Global `dashboards/theme.json`:
   "backgroundFit": "cover",
   "border": "#45475a",
   "elementBackground": "rgba(24, 24, 37, 0.82)",
+  "error": "#f38ba8",
   "fontFamily": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+  "negative": "#f38ba8",
+  "neutral": "#cdd6f4",
   "palette": ["#89b4fa", "#cba6f7", "#a6e3a1", "#fab387", "#f38ba8", "#94e2d5", "#f9e2af", "#b4befe"],
+  "positive": "#a6e3a1",
   "text": "#cdd6f4",
-  "titleBackground": "transparent"
+  "titleBackground": "transparent",
+  "warning": "#fab387"
 }
 ```
 

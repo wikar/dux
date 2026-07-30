@@ -28,6 +28,7 @@ export interface WellSpec {
 export type OptionSpec =
   | { key: string; label: string; kind: "check"; default: boolean }
   | { key: string; label: string; kind: "select"; default: string; choices: { value: string; label: string }[] }
+  | { key: string; label: string; kind: "number"; default: number }
   | { key: string; label: string; kind: "tri"; autoLabel: string };
 
 export interface DataSpec {
@@ -41,6 +42,8 @@ export interface DataSpec {
   /** Hide axis items whose metrics are all null (default true; viz.showEmpty
    *  turns it off per element). */
   dropEmpty?: boolean;
+  /** Hide ordering controls when the visual consumes one scalar cell. */
+  sortable?: boolean;
 }
 
 /** Per-element header controls this visual supports; the dashboard's

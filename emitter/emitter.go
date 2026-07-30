@@ -20,8 +20,11 @@ import (
 type Emitter struct {
 	Schema     *semantic.Schema
 	Measures   map[string]map[string]*parser.MeasureDefinition
+	Resolution *semantic.Resolution
 	ScalarVars map[string]any
-	rowCtx     semantic.RowContext
+	// ctx owns row frames and scoped transition/value-query state. SQL aliases
+	// remain emitter-only; semantic lineage comes from Resolution.
+	ctx evalContext
 	// sqlScopes maps canonical table identities to aliases in nested FROM
 	// scopes. The innermost binding wins; unaliased tables need no entry because
 	// table-qualified references render with their canonical SQL table name.
@@ -187,25 +190,44 @@ func (e *Emitter) emitColRef(cr *parser.ColRef) (string, error) {
 	// Bare name used for lookups (row context, measure store) — strip quotes.
 	tableKey := semantic.StripSingleQuotes(cr.Table)
 
-	// Iterator row-context alias takes highest priority.
-	if alias, ok := e.rowCtx.ResolveAlias(e.tableKey(tableKey)); ok {
-		return alias + "." + e.resolveColName(tableKey, stripped), nil
+	if e.Resolution != nil {
+		if ref, ok := e.Resolution.Refs[cr]; ok {
+			if ref.Kind == semantic.RefMeasure {
+				return e.emitMeasureInContext(ref.Measure)
+			}
+			if e.ctx.valueDepth == 0 || e.ctx.predicateOuter[e.tableKey(ref.Table)] {
+				if col, ok := e.rowColumn(ref); ok {
+					return col, nil
+				}
+			}
+			tableKey, stripped = ref.Table, ref.Column
+		}
+	}
+	if e.Resolution == nil {
+		if def := e.resolveMeasureDef(cr); def != nil {
+			return e.emitMeasureInContext(def)
+		}
+		if alias, ok := e.rowAliasForTable(e.tableKey(tableKey)); ok {
+			return alias + "." + e.resolveColName(tableKey, stripped), nil
+		}
 	}
 
-	if measures := e.effectiveMeasures(); measures != nil {
-		if tableKey != "" {
-			// Table-qualified measure expansion.
-			if def := semantic.FindMeasure(tableKey, stripped, measures); def != nil && def.Expr != nil {
-				return e.emitExpr(def.Expr)
-			}
-		} else {
-			// Bare [MeasureName] — scan all tables; name must be unique.
-			def, err := semantic.FindMeasureByName(stripped, measures)
-			if err != nil {
-				return "", err
-			}
-			if def != nil && def.Expr != nil {
-				return e.emitExpr(def.Expr)
+	if e.Resolution == nil {
+		if measures := e.effectiveMeasures(); measures != nil {
+			if tableKey != "" {
+				// Table-qualified measure expansion.
+				if def := semantic.FindMeasure(tableKey, stripped, measures); def != nil && def.Expr != nil {
+					return e.emitExpr(def.Expr)
+				}
+			} else {
+				// Bare [MeasureName] — scan all tables; name must be unique.
+				def, err := semantic.FindMeasureByName(stripped, measures)
+				if err != nil {
+					return "", err
+				}
+				if def != nil && def.Expr != nil {
+					return e.emitExpr(def.Expr)
+				}
 			}
 		}
 	}
@@ -321,6 +343,8 @@ func (e *Emitter) emitFuncCall(fc *parser.FuncCall) (string, error) {
 	// Filter context
 	case "CALCULATE":
 		return e.emitCalculate(fc)
+	case "CALCULATETABLE":
+		return e.emitCalculateTable(fc)
 	case "TREATAS":
 		return e.emitTreatas(fc)
 	case "FILTER":
@@ -434,6 +458,10 @@ func (e *Emitter) emitSimpleAgg(duckName string, fc *parser.FuncCall) (string, e
 	if len(fc.Args) != 1 {
 		return "", fmt.Errorf("%s requires exactly 1 argument", fc.Name)
 	}
+	if len(e.ctx.rows) > 0 && e.ctx.valueDepth == 0 {
+		expr := &parser.Expr{Left: &parser.Term{FuncCall: fc}}
+		return e.emitAggregateValue(expr)
+	}
 	arg, err := e.emitExpr(fc.Args[0])
 	if err != nil {
 		return "", err
@@ -442,6 +470,9 @@ func (e *Emitter) emitSimpleAgg(duckName string, fc *parser.FuncCall) (string, e
 }
 
 func (e *Emitter) emitCountRows(fc *parser.FuncCall) (string, error) {
+	if len(e.ctx.rows) > 0 && e.ctx.valueDepth == 0 && len(fc.Args) == 1 && bareTableArg(fc.Args[0]) != "" {
+		return e.emitAggregateValue(&parser.Expr{Left: &parser.Term{FuncCall: fc}})
+	}
 	// COUNTROWS(<table function>) → count the computed table in a subquery.
 	if len(fc.Args) == 1 && fc.Args[0].Left != nil && fc.Args[0].Left.FuncCall != nil {
 		sub, err := e.emitExprAsTable(fc.Args[0])
@@ -459,6 +490,9 @@ func (e *Emitter) emitDistinctCount(fc *parser.FuncCall) (string, error) {
 	if len(fc.Args) != 1 {
 		return "", fmt.Errorf("DISTINCTCOUNT requires exactly 1 argument")
 	}
+	if len(e.ctx.rows) > 0 && e.ctx.valueDepth == 0 {
+		return e.emitAggregateValue(&parser.Expr{Left: &parser.Term{FuncCall: fc}})
+	}
 	arg, err := e.emitExpr(fc.Args[0])
 	if err != nil {
 		return "", err
@@ -472,6 +506,9 @@ func (e *Emitter) emitDistinctCount(fc *parser.FuncCall) (string, error) {
 func (e *Emitter) emitCountBlank(fc *parser.FuncCall) (string, error) {
 	if len(fc.Args) != 1 {
 		return "", fmt.Errorf("COUNTBLANK requires exactly 1 argument")
+	}
+	if len(e.ctx.rows) > 0 && e.ctx.valueDepth == 0 {
+		return e.emitAggregateValue(&parser.Expr{Left: &parser.Term{FuncCall: fc}})
 	}
 	arg, err := e.emitExpr(fc.Args[0])
 	if err != nil {
@@ -499,11 +536,7 @@ func (e *Emitter) emitIterAgg(agg string, fc *parser.FuncCall) (string, error) {
 	}
 	// The iterated expression evaluates per row: an inline aggregate inside it
 	// would nest as agg(agg(...)).
-	if err := e.requireNoInlineAgg(strings.ToUpper(fc.Name), fc.Args[1]); err != nil {
-		return "", err
-	}
-
-	if e.groupedIterInline(fc.Args[0]) {
+	if e.groupedIterInline(fc.Args[0], fc.Args[1]) {
 		inner, err := e.emitExpr(fc.Args[1])
 		if err != nil {
 			return "", err
@@ -534,8 +567,8 @@ func (e *Emitter) emitIterAgg(agg string, fc *parser.FuncCall) (string, error) {
 // context, at aggregate top level (no active row context), for a bare table
 // known to the schema — VAR temp tables and nested table expressions keep the
 // subquery form.
-func (e *Emitter) groupedIterInline(arg *parser.Expr) bool {
-	if e.groupCtx == nil || len(e.rowCtx.Bindings) > 0 || e.Schema == nil {
+func (e *Emitter) groupedIterInline(arg, value *parser.Expr) bool {
+	if e.groupCtx == nil || len(e.ctx.rows) > 0 || e.Schema == nil {
 		return false
 	}
 	name := bareTableArg(arg)
@@ -543,7 +576,26 @@ func (e *Emitter) groupedIterInline(arg *parser.Expr) bool {
 		return false
 	}
 	_, ok := e.Schema.Tables[semantic.ResolveTable(e.Schema, name)]
-	return ok
+	return ok && !e.exprNeedsValueQuery(value)
+}
+
+func (e *Emitter) exprNeedsValueQuery(expr *parser.Expr) bool {
+	needed := false
+	walkTerms(expr, func(term *parser.Term) bool {
+		if term.ColRef != nil && e.resolveMeasureDef(term.ColRef) != nil {
+			needed = true
+			return false
+		}
+		if term.FuncCall != nil {
+			name := strings.ToUpper(term.FuncCall.Name)
+			if name == "CALCULATE" || emitsInline(term.FuncCall) {
+				needed = true
+				return false
+			}
+		}
+		return !needed
+	})
+	return needed
 }
 
 // bareTableArg returns the table name when expr is a plain bare table
@@ -572,12 +624,8 @@ func (e *Emitter) iterSource(arg *parser.Expr) (*tableSource, string, func(), er
 	if err != nil {
 		return nil, "", nil, err
 	}
-	if src.name != "" {
-		alias := "__row_" + sanitizeAliasSuffix(src.name)
-		e.rowCtx.Push(semantic.RowBinding{Table: e.tableKey(src.name), Alias: alias})
-		return src, alias, func() { e.rowCtx.Pop() }, nil
-	}
-	return src, e.nextAlias("__row"), func() {}, nil
+	alias := e.nextAlias("__row")
+	return src, alias, e.pushRow(arg, alias), nil
 }
 
 // emitConcatenateX emits CONCATENATEX as string_agg. The same group-context
@@ -587,7 +635,7 @@ func (e *Emitter) emitConcatenateX(fc *parser.FuncCall) (string, error) {
 		return "", fmt.Errorf("CONCATENATEX requires 2 or 3 arguments")
 	}
 
-	if e.groupedIterInline(fc.Args[0]) {
+	if e.groupedIterInline(fc.Args[0], fc.Args[1]) {
 		inner, delim, err := e.concatenateXArgs(fc)
 		if err != nil {
 			return "", err
@@ -615,9 +663,6 @@ func (e *Emitter) emitConcatenateX(fc *parser.FuncCall) (string, error) {
 // concatenateXArgs emits CONCATENATEX's expression and (optional) delimiter
 // arguments; the delimiter defaults to ", ".
 func (e *Emitter) concatenateXArgs(fc *parser.FuncCall) (inner, delim string, err error) {
-	if err = e.requireNoInlineAgg("CONCATENATEX", fc.Args[1]); err != nil {
-		return "", "", err
-	}
 	inner, err = e.emitExpr(fc.Args[1])
 	if err != nil {
 		return "", "", err
@@ -644,6 +689,9 @@ func (e *Emitter) concatenateXArgs(fc *parser.FuncCall) (inner, delim string, er
 func (e *Emitter) emitCalculate(fc *parser.FuncCall) (string, error) {
 	if len(fc.Args) == 0 {
 		return "", fmt.Errorf("CALCULATE requires at least 1 argument")
+	}
+	if len(e.ctx.rows) > 0 && e.ctx.transitionDepth == 0 {
+		return e.withContextTransition(func() (string, error) { return e.emitCalculate(fc) })
 	}
 
 	if e.groupCtx != nil {
@@ -769,7 +817,7 @@ func (e *Emitter) emitFlatJoins(primary string, jp *semantic.JoinPath) string {
 	var fbuf strings.Builder
 	fbuf.WriteString(e.sqlTable(primary))
 	for _, step := range jp.Steps {
-		fmt.Fprintf(&fbuf, "\nLEFT JOIN %s ON %s.%s = %s.%s",
+		fmt.Fprintf(&fbuf, "\nLEFT JOIN %s ON %s.%s IS NOT DISTINCT FROM %s.%s",
 			e.sqlTable(step.Table),
 			e.sqlTable(step.FromTable), step.OnFromCol,
 			e.sqlTable(step.Table), step.OnToCol,
@@ -889,13 +937,10 @@ func (e *Emitter) emitFilter(fc *parser.FuncCall) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("FILTER: first argument must be a table expression: %w", err)
 	}
-	if err := e.requireNoInlineAgg("FILTER", fc.Args[1]); err != nil {
-		return "", err
-	}
 	from := src.sql
+	alias := e.nextAlias("__row")
 	var pop func()
 	if src.nested {
-		alias := e.nextAlias("__src")
 		from += " AS " + alias
 		bindings := map[string]string{}
 		if src.name != "" {
@@ -913,9 +958,14 @@ func (e *Emitter) emitFilter(fc *parser.FuncCall) (string, error) {
 			pop = e.pushSQLBindings(bindings)
 		}
 	}
+	if !src.nested {
+		from += " AS " + alias
+	}
 	if pop != nil {
 		defer pop()
 	}
+	popRow := e.pushRow(fc.Args[0], alias)
+	defer popRow()
 	pred, err := e.emitExpr(fc.Args[1])
 	if err != nil {
 		return "", err
@@ -997,6 +1047,14 @@ func (e *Emitter) emitValuesOrDistinct(name string, fc *parser.FuncCall) (string
 // Leading non-string arguments are group columns; once a string literal is
 // encountered all remaining arguments are treated as name/expr pairs.
 func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
+	outerContext := e.groupCtx
+	outerScopes := e.sqlScopes
+	e.sqlScopes = nil
+	defer func() { e.sqlScopes = outerScopes }()
+	if len(e.ctx.rows) > 0 {
+		e.ctx.valueDepth++
+		defer func() { e.ctx.valueDepth-- }()
+	}
 	if len(fc.Args) < 1 {
 		return "", fmt.Errorf("SUMMARIZECOLUMNS requires at least 1 argument")
 	}
@@ -1130,6 +1188,18 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 				})
 			}
 		}
+	}
+	if outerContext != nil {
+		for _, key := range outerContext.keys {
+			if key.frameID == 0 {
+				continue
+			}
+			wherePreds = append(wherePreds, taggedPred{
+				table: e.tableKey(key.table), col: strings.ToLower(key.col),
+				sql: fmt.Sprintf("%s.%s IS NOT DISTINCT FROM %s", e.sqlTable(key.table), key.col, key.expr),
+			})
+		}
+		wherePreds = append(wherePreds, outerContext.preds...)
 	}
 	groupKeys := append(append([]groupKey{}, plainKeys...), rollupKeys...)
 	// A group-only SUMMARIZECOLUMNS has no measure context for filters on
@@ -1314,18 +1384,13 @@ func (e *Emitter) emitProjectColumns(fc *parser.FuncCall, selectPrefix string) (
 	}
 
 	alias := e.nextAlias("__row")
-	if src.name != "" {
-		e.rowCtx.Push(semantic.RowBinding{Table: e.tableKey(src.name), Alias: alias})
-		defer e.rowCtx.Pop()
-	}
+	popRow := e.pushRow(fc.Args[0], alias)
+	defer popRow()
 
 	var cols []string
 	for i := 1; i < len(fc.Args); i += 2 {
 		nameExpr, err := e.emitExpr(fc.Args[i])
 		if err != nil {
-			return "", err
-		}
-		if err := e.requireNoInlineAgg(name, fc.Args[i+1]); err != nil {
 			return "", err
 		}
 		valExpr, err := e.emitExpr(fc.Args[i+1])
@@ -1383,6 +1448,9 @@ func (e *Emitter) emitTopN(fc *parser.FuncCall) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("TOPN: second argument must be a table expression: %w", err)
 	}
+	alias := e.nextAlias("__top")
+	popRow := e.pushRow(fc.Args[1], alias)
+	defer popRow()
 	var orders []string
 	for i := 2; i < len(fc.Args); i++ {
 		var orderExpr string
@@ -1401,8 +1469,8 @@ func (e *Emitter) emitTopN(fc *parser.FuncCall) (string, error) {
 		}
 		orders = append(orders, orderExpr+" "+dir)
 	}
-	return fmt.Sprintf("SELECT * FROM %s QUALIFY RANK() OVER (ORDER BY %s) <= %s",
-		e.fromClauseSQL(src), strings.Join(orders, ", "), n), nil
+	return fmt.Sprintf("SELECT * FROM %s AS %s QUALIFY RANK() OVER (ORDER BY %s) <= %s",
+		src.sql, alias, strings.Join(orders, ", "), n), nil
 }
 
 func isOrderDirection(expr *parser.Expr) bool {
@@ -1650,30 +1718,6 @@ func walkTerms(expr *parser.Expr, visit func(*parser.Term) bool) {
 			walkTerms(t.SubExpr, visit)
 		}
 	}
-}
-
-// requireNoInlineAgg rejects an expression that aggregates inline — a bare
-// SUM/COUNTROWS/… or a measure reference expanding to one — in a position that
-// provides no grouping context: an ADDCOLUMNS/SELECTCOLUMNS value, a FILTER
-// predicate, or an iterator body. Such an aggregate emits with no FROM and no
-// GROUP BY of its own, so it would reach DuckDB as invalid SQL.
-//
-// DUX does not perform context transition (see TDD-INTERNAL.md), so the
-// aggregate needs an explicit context: CALCULATE, or an iterator, both of which
-// emit a self-contained subquery and are accepted here.
-func (e *Emitter) requireNoInlineAgg(fnName string, expr *parser.Expr) error {
-	for _, fc := range e.aggSubtrees(expr) {
-		name := strings.ToUpper(fc.Name)
-		if !emitsInline(fc) {
-			continue
-		}
-		return fmt.Errorf(
-			"%s: %s aggregates over its whole table and has no row context here; "+
-				"DUX does not perform context transition — give the aggregate its own "+
-				"context, e.g. CALCULATE(%s(...), <correlation predicate>)",
-			fnName, name, name)
-	}
-	return nil
 }
 
 // emitsInline reports whether an aggregate call emits inline into the

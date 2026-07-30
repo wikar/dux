@@ -179,7 +179,7 @@ export async function openDashboard(path: string) {
     if (useUiStore.getState().path !== path) return;
     if (!d.valid || !d.document) {
       loadDoc(null);
-      ui.opened(path, d.etag, null, d.error || "this file is not a valid dashboard — fix it on disk and reload");
+      ui.opened(path, d.etag, null, d.error || "This file is not a valid dashboard — fix it on disk and reload");
       return;
     }
     loadDoc(d.document);

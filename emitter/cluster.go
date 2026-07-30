@@ -209,6 +209,12 @@ func (e *Emitter) aggSubtrees(expr *parser.Expr) []*parser.FuncCall {
 // resolveMeasureDef returns the stored measure definition a ColRef resolves
 // to, or nil when it is a plain column reference.
 func (e *Emitter) resolveMeasureDef(cr *parser.ColRef) *parser.MeasureDefinition {
+	if e.Resolution != nil {
+		if ref, ok := e.Resolution.Refs[cr]; ok && ref.Kind == semantic.RefMeasure {
+			return ref.Measure
+		}
+		return nil
+	}
 	measures := e.effectiveMeasures()
 	if measures == nil {
 		return nil
@@ -333,10 +339,21 @@ func (e *Emitter) measureExprTables(expr *parser.Expr) []string {
 			}
 		}
 		if t.FuncCall != nil {
+			if _, iterator := iterAggs[strings.ToUpper(t.FuncCall.Name)]; iterator && len(t.FuncCall.Args) == 2 && e.exprNeedsValueQuery(t.FuncCall.Args[1]) {
+				return false
+			}
+			if strings.EqualFold(t.FuncCall.Name, "CONCATENATEX") && len(t.FuncCall.Args) >= 2 && e.exprNeedsValueQuery(t.FuncCall.Args[1]) {
+				return false
+			}
 			// Attribute an iterator's bare-table source to the expression so
 			// the table lands in the measure's cluster (see emitIterAgg).
-			if tbl := iterBareTable(t.FuncCall); tbl != "" {
+			if tbl := iterBareTable(t.FuncCall); tbl != "" && e.isModelTable(tbl) {
 				add(tbl)
+			}
+			if strings.EqualFold(t.FuncCall.Name, "COUNTROWS") && len(t.FuncCall.Args) == 1 {
+				if tbl := bareTableArg(t.FuncCall.Args[0]); tbl != "" {
+					add(tbl)
+				}
 			}
 		}
 		return true
@@ -353,7 +370,7 @@ func (e *Emitter) measureExprTablesOutsideRowContext(expr *parser.Expr) []string
 	tables := e.measureExprTables(expr)
 	out := tables[:0]
 	for _, table := range tables {
-		if _, bound := e.rowCtx.ResolveAlias(e.tableKey(table)); !bound {
+		if !e.rowTableBound(e.tableKey(table)) {
 			out = append(out, table)
 		}
 	}
@@ -391,8 +408,19 @@ func (e *Emitter) measureValueTables(expr *parser.Expr) []string {
 			}
 		}
 		if t.FuncCall != nil {
-			if tbl := iterBareTable(t.FuncCall); tbl != "" {
+			if _, iterator := iterAggs[strings.ToUpper(t.FuncCall.Name)]; iterator && len(t.FuncCall.Args) == 2 && e.exprNeedsValueQuery(t.FuncCall.Args[1]) {
+				return false
+			}
+			if strings.EqualFold(t.FuncCall.Name, "CONCATENATEX") && len(t.FuncCall.Args) >= 2 && e.exprNeedsValueQuery(t.FuncCall.Args[1]) {
+				return false
+			}
+			if tbl := iterBareTable(t.FuncCall); tbl != "" && e.isModelTable(tbl) {
 				add(tbl)
+			}
+			if strings.EqualFold(t.FuncCall.Name, "COUNTROWS") && len(t.FuncCall.Args) == 1 {
+				if tbl := bareTableArg(t.FuncCall.Args[0]); tbl != "" {
+					add(tbl)
+				}
 			}
 			if strings.EqualFold(t.FuncCall.Name, "CALCULATE") {
 				if len(t.FuncCall.Args) > 0 {
@@ -406,4 +434,12 @@ func (e *Emitter) measureValueTables(expr *parser.Expr) []string {
 
 	walkTerms(expr, visit)
 	return result
+}
+
+func (e *Emitter) isModelTable(name string) bool {
+	if e.Schema == nil {
+		return true
+	}
+	table, _ := e.Schema.FindTable(name)
+	return table != nil
 }

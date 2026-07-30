@@ -790,6 +790,8 @@ These evaluate an expression row-by-row over a table.
 | `MAXX(T, expr)` | Maximum of `expr` |
 | `CONCATENATEX(T, expr [, delim])` | Concatenate `expr` values with optional delimiter |
 
+A named measure evaluated inside an iterator, `FILTER`, `TOPN`, `ADDCOLUMNS`, `SELECTCOLUMNS`, or `GENERATE` automatically transitions every active row context into filter context. `CALCULATE` performs the same transition explicitly; a naked aggregate does not. For example, `SUMX(Product, [Sales Quantity])` evaluates the measure per product, while `SUMX(Product, SUM(Sales[Quantity]))` repeats the ambient total once per product. Lineage is retained through `VALUES`, direct renamed projections, row-preserving table functions, set operations, and table variables.
+
 ### Table functions
 
 | Function | Description |
@@ -826,6 +828,7 @@ EVALUATE
 | Function | Description |
 |----------|-------------|
 | `CALCULATE(expr, filters...)` | Evaluate `expr` under a modified filter context |
+| `CALCULATETABLE(T, filters...)` | Table-valued form of `CALCULATE`, including row-to-filter context transition |
 | `TREATAS(source, T[C])` | Apply a set of values as a filter on `T[C]` |
 | `ALL(T)` / `ALL(T[C]...)` | Remove filters from a table or specific columns; as a table expression, the unfiltered table / distinct column values |
 | `ALLEXCEPT(T, T[C]...)` | Remove all filters on `T` except those on the listed columns |

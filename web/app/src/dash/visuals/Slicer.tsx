@@ -7,6 +7,7 @@ import { S, stroke } from "../glyphs";
 import { useUiStore } from "../store";
 import type { DashElement, SlicerSelection } from "../types";
 import type { StaticBodyProps, VisualDef } from "./types";
+import { displayMessage } from "../message";
 
 const slicer: VisualDef = {
   type: "slicer",
@@ -43,7 +44,7 @@ function SlicerBody({ el }: { el: DashElement }) {
     <div className={styles.root} onPointerDown={(e) => e.stopPropagation()}>
       {dropped && dropped.length > 0 && (
         <div className={styles.stale} title={`No longer in the data: ${dropped.join(", ")}`}>
-          {dropped.length} preset value{dropped.length === 1 ? "" : "s"} missing from the data
+          Warning: {dropped.length} preset value{dropped.length === 1 ? "" : "s"} missing from the data
         </div>
       )}
       {kind === "range" || kind === "daterange" ? (
@@ -132,7 +133,7 @@ function ButtonsSlicer({ el, sel }: { el: DashElement; sel: SlicerSelection | un
         )}
         {options.length === 0 && !loading && !error && <span className={styles.hint}>No values</span>}
       </div>
-      {error && <div className={styles.error}>{error.message}</div>}
+      {error && <div className={styles.error}>{displayMessage(error)}</div>}
       {/* Clearing lives on the title bar's eraser control — see ClearButton.
           The footer only reports the first load: a refresh keeps the pills on
           screen, and its in-flight state belongs to the header dot. */}
@@ -199,7 +200,7 @@ function DropdownSlicer({ el, sel }: { el: DashElement; sel: SlicerSelection | u
         )}
         <span className={styles.caret}>▾</span>
       </button>
-      {error && <div className={styles.error}>{error.message}</div>}
+      {error && <div className={styles.error}>{displayMessage(error)}</div>}
       {open &&
         popPos &&
         // Portal to <body>: the canvas ancestor is CSS-transformed (scale),
@@ -268,7 +269,7 @@ function RangeSlicer({
   return (
     <div className={styles.rangeWrap}>
       <label className={styles.rangeField}>
-        <span>from</span>
+        <span>From</span>
         <input
           type={type}
           className={styles.rangeInput}
@@ -278,7 +279,7 @@ function RangeSlicer({
         />
       </label>
       <label className={styles.rangeField}>
-        <span>to</span>
+        <span>To</span>
         <input
           type={type}
           className={styles.rangeInput}

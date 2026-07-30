@@ -19,6 +19,7 @@ var tableFuncs = map[string]bool{
 	"NEXTQUARTER": true, "NEXTMONTH": true, "NEXTDAY": true,
 	"DATESBETWEEN": true, "DATESINPERIOD": true, "CALENDAR": true,
 	"CALENDARAUTO": true, "RELATEDTABLE": true,
+	"CALCULATETABLE": true,
 }
 
 var coreFuncs = []string{

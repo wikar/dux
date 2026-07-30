@@ -143,7 +143,9 @@ func TestExecute_JoinCombinators(t *testing.T) {
 		// For each region, its single largest sale.
 		_, rows := run(t, db, schema, `EVALUATE GENERATE(
 			VALUES(sales[region]),
-			TOPN(1, FILTER(sales, sales[region] = sales[region]), sales[amount])
+			SELECTCOLUMNS(
+				TOPN(1, CALCULATETABLE(sales), sales[amount]),
+				"amount", sales[amount])
 		)`)
 		if len(rows) < 2 {
 			t.Fatalf("expected at least 2 rows, got %d", len(rows))

@@ -5,6 +5,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { formatValue } from "@dux/core";
 import styles from "./Map.module.css";
+import { displayMessage } from "../message";
 import { useFormats, usePalette, useResolvedTheme } from "../data";
 import { categoryColor, coordinateExtent, isDarkColor, layerCategories, layerGeoJSON, mapThemeColors, resolveMapStyle, useMapLayerData } from "../mapData";
 import { markKey, updateElement, useDocStore, useUiStore } from "../store";
@@ -346,12 +347,12 @@ export default function MapBody({ el }: { el: DashElement }) {
       }}
     >
       <div ref={containerRef} className={styles.canvas} />
-      {unavailable && <div className={styles.message}>This browser could not create a WebGL context, so the map cannot render</div>}
+      {unavailable && <div className={styles.warning}>Warning: This browser could not create a WebGL context, so the map cannot render</div>}
       {!unavailable && !renderable && <div className={styles.message}>Add longitude and latitude to a layer</div>}
       {/* First load only — a refresh leaves the drawn layers alone; the header
           dot carries its in-flight state. */}
       {loading && renderable && !Object.values(byLayer).some(Boolean) && <div className={styles.loading} />}
-      {error && <div className={styles.error}>{error.message}</div>}
+      {error && <div className={styles.error}>{displayMessage(error)}</div>}
       {legendGroups.length > 0 && (
         <div className={styles.legend}>
           {legendGroups.map((group) => (

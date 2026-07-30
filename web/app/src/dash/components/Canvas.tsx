@@ -72,6 +72,11 @@ export default function Canvas() {
       "--th-border": theme.border,
       "--th-text": theme.text,
       "--th-accent": theme.palette[0] ?? theme.text,
+      "--th-positive": theme.positive,
+      "--th-negative": theme.negative,
+      "--th-neutral": theme.neutral,
+      "--th-error": theme.error,
+      "--th-warning": theme.warning,
       // Native controls — date inputs, scrollbars, focus rings — follow the
       // theme's own lightness instead of the dark app shell's.
       "color-scheme": isLight(canvasBg) ? "light" : "dark",

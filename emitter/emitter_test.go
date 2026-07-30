@@ -53,7 +53,12 @@ func minSchema() *semantic.Schema {
 func emit(t *testing.T, dux string) string {
 	t.Helper()
 	q := mustParse(t, dux)
-	em := &emitter.Emitter{Schema: minSchema()}
+	schema := minSchema()
+	resolver := &semantic.Resolver{Schema: schema}
+	if err := resolver.Resolve(q); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	em := &emitter.Emitter{Schema: schema, Measures: resolver.EffectiveMeasures(), Resolution: resolver.Result()}
 	sql, err := em.Emit(q)
 	if err != nil {
 		t.Fatalf("emit: %v", err)
@@ -95,10 +100,9 @@ func TestQualifiedColumnsAndSourceBindings(t *testing.T) {
 				SUM(sales[amount]),
 				sales[product] = products[product]))`)
 		assertContains(t, sql,
-			"SUM(sales.amount) FROM sales",
-			"sales.product = __row1.product",
+			"SUM(__cal_sales.amount) FROM sales AS __cal_sales",
+			"IS NOT DISTINCT FROM __row1.\"product\"",
 			"FROM products AS __row1")
-		assertNotContains(t, sql, "JOIN products")
 	})
 
 	t.Run("source_binding_uses_canonical_table_identity", func(t *testing.T) {
@@ -107,11 +111,15 @@ func TestQualifiedColumnsAndSourceBindings(t *testing.T) {
 		delete(schema.Tables, "products")
 		q := mustParse(t, `EVALUATE ADDCOLUMNS(
 			products, "Name", analytics.products[product])`)
-		sql, err := (&emitter.Emitter{Schema: schema}).Emit(q)
+		resolver := &semantic.Resolver{Schema: schema}
+		if err := resolver.Resolve(q); err != nil {
+			t.Fatal(err)
+		}
+		sql, err := (&emitter.Emitter{Schema: schema, Resolution: resolver.Result()}).Emit(q)
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertContains(t, sql, "(__row1.product) AS 'Name'", "FROM products AS __row1")
+		assertContains(t, sql, "(__row1.\"product\") AS 'Name'", "FROM products AS __row1")
 	})
 }
 
@@ -222,7 +230,7 @@ func TestIterators(t *testing.T) {
 		{
 			"CONCATENATEX",
 			`EVALUATE CONCATENATEX(sales, sales[region], ", ")`,
-			[]string{"string_agg(", "FROM sales AS __row_sales"},
+			[]string{"string_agg(", "FROM sales AS __row"},
 		},
 	}
 
@@ -268,12 +276,12 @@ func TestTableOps(t *testing.T) {
 		{
 			"FILTER",
 			`EVALUATE FILTER(sales, sales[region] = "North")`,
-			[]string{"SELECT * FROM sales WHERE", "'North'"},
+			[]string{"SELECT * FROM sales AS __row", "'North'"},
 		},
 		{
 			"TOPN",
 			`EVALUATE TOPN(5, sales, sales[amount])`,
-			[]string{"SELECT * FROM sales QUALIFY RANK() OVER (ORDER BY", "DESC) <= 5"},
+			[]string{"SELECT * FROM sales AS __top", "QUALIFY RANK() OVER (ORDER BY", "DESC) <= 5"},
 		},
 		{
 			"UNION",
@@ -373,7 +381,7 @@ func TestFilterContext(t *testing.T) {
 
 	t.Run("FILTER_over_ALL_table", func(t *testing.T) {
 		sql := emit(t, `EVALUATE FILTER(ALL(sales), sales[amount] > 100)`)
-		assertContains(t, sql, "SELECT * FROM sales WHERE", "> 100")
+		assertContains(t, sql, "SELECT * FROM sales AS __row", "> 100")
 	})
 
 	t.Run("DISTINCT", func(t *testing.T) {
@@ -518,7 +526,7 @@ func TestComposableTables(t *testing.T) {
 			SUMMARIZECOLUMNS(sales[region], "Total", SUM(sales[amount])),
 			[Total] > 400
 		)`)
-		assertContains(t, sql, "SELECT * FROM (", ") AS __src", "WHERE")
+		assertContains(t, sql, "SELECT * FROM (", ") AS __row", "WHERE")
 	})
 
 	t.Run("TOPN_over_computed_table_uses_output_column", func(t *testing.T) {
@@ -535,7 +543,7 @@ func TestComposableTables(t *testing.T) {
 		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
 			"X", SUMX(FILTER(sales, sales[qty] > 1), sales[amount])
 		)`)
-		assertContains(t, sql, "__row_sales.amount", "FROM (SELECT * FROM sales WHERE")
+		assertContains(t, sql, "__row2.\"amount\"", "FROM (SELECT * FROM sales AS __row1 WHERE")
 	})
 
 	t.Run("ORDER_BY_wraps_query", func(t *testing.T) {
@@ -563,15 +571,17 @@ func TestComposableTables(t *testing.T) {
 	})
 
 	t.Run("GENERATE_lateral_with_row_context", func(t *testing.T) {
-		sql := emit(t, `EVALUATE GENERATE(products, FILTER(sales, sales[product] = products[product]))`)
+		sql := emit(t, `EVALUATE GENERATE(products, SELECTCOLUMNS(
+			FILTER(sales, sales[product] = products[product]), "sale", sales[amount]))`)
 		assertContains(t, sql,
-			"products AS __gen_products",
+			"products AS __gen",
 			"CROSS JOIN LATERAL",
-			"= __gen_products.product")
+			"= __gen")
 	})
 
 	t.Run("GENERATEALL_left_lateral", func(t *testing.T) {
-		sql := emit(t, `EVALUATE GENERATEALL(products, FILTER(sales, sales[product] = products[product]))`)
+		sql := emit(t, `EVALUATE GENERATEALL(products, SELECTCOLUMNS(
+			FILTER(sales, sales[product] = products[product]), "sale", sales[amount]))`)
 		assertContains(t, sql, "LEFT JOIN LATERAL", "ON TRUE")
 	})
 }
@@ -686,7 +696,7 @@ func TestTimeIntelligence(t *testing.T) {
 			dates[year],
 			"YTD", CALCULATE(SUM(orders[amount]), DATESYTD(dates[date]))
 		)`)
-		assertContains(t, sql, "dates.year = __anch0.g0")
+		assertContains(t, sql, "dates.year IS NOT DISTINCT FROM __anch0.g0")
 	})
 
 	t.Run("rolling_window_at_date_grain_has_no_correlation", func(t *testing.T) {

@@ -150,3 +150,24 @@ func TestInferJoinPathRejectsAmbiguousUnidirectionalPath(t *testing.T) {
 		t.Fatalf("expected ambiguous path error, got %v", err)
 	}
 }
+
+func TestInferJoinPathAttachesTargetsToExistingTree(t *testing.T) {
+	s := NewSchema()
+	for _, name := range []string{"product", "sales", "stock", "date"} {
+		s.Tables[name] = &Table{Name: name, Columns: map[string]*Column{}}
+	}
+	s.Relationships = []*Relationship{
+		{FromTable: "sales", ToTable: "product"},
+		{FromTable: "sales", ToTable: "date"},
+		{FromTable: "stock", ToTable: "product"},
+		{FromTable: "stock", ToTable: "date"},
+	}
+
+	path, err := InferJoinPath(s, []string{"product", "sales", "date"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(path.Steps) != 2 || path.Steps[1].FromTable != "sales" || path.Steps[1].Table != "date" {
+		t.Fatalf("expected date to attach through the selected sales fact, got %#v", path.Steps)
+	}
+}

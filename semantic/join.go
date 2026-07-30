@@ -95,6 +95,7 @@ func InferJoinPath(schema *Schema, tables []string) (*JoinPath, error) {
 	// intermediate tables introduced while finding a path to one target are
 	// not added again when they themselves are also direct targets.
 	joined := map[string]bool{strings.ToLower(primary): true}
+	joinedTables := []string{primary}
 
 	var steps []JoinStep
 	for _, target := range targets {
@@ -102,13 +103,14 @@ func InferJoinPath(schema *Schema, tables []string) (*JoinPath, error) {
 			// Already introduced as an intermediate step — nothing to emit.
 			continue
 		}
-		path, err := bfsJoin(schema, primary, target)
+		path, err := bfsJoin(schema, joinedTables, target)
 		if err != nil {
 			return nil, err
 		}
 		for _, step := range path {
 			if !joined[strings.ToLower(step.Table)] {
 				joined[strings.ToLower(step.Table)] = true
+				joinedTables = append(joinedTables, step.Table)
 				steps = append(steps, step)
 			}
 		}
@@ -116,15 +118,18 @@ func InferJoinPath(schema *Schema, tables []string) (*JoinPath, error) {
 	return &JoinPath{Steps: steps}, nil
 }
 
-// bfsJoin finds the shortest relationship path from 'from' to 'to' via BFS.
+// bfsJoin finds the shortest relationship path from the existing join tree to
+// 'to' via multi-source BFS.
 // Both FK directions (FromTable→ToTable and ToTable→FromTable) are traversed
 // so that fact→dimension and dimension→fact traversal both work.
 // Table name comparisons tolerate case differences and the presence or absence
 // of a database qualifier (e.g. "analytics.Sales" matches "Sales" stored in the
 // relationship).
-func bfsJoin(schema *Schema, from, to string) ([]JoinStep, error) {
-	if tableNamesMatch(from, to) {
-		return nil, nil
+func bfsJoin(schema *Schema, from []string, to string) ([]JoinStep, error) {
+	for _, table := range from {
+		if tableNamesMatch(table, to) {
+			return nil, nil
+		}
 	}
 
 	type state struct {
@@ -132,8 +137,12 @@ func bfsJoin(schema *Schema, from, to string) ([]JoinStep, error) {
 		steps []JoinStep
 	}
 
-	bestDepth := map[string]int{strings.ToLower(from): 0}
-	queue := []state{{table: from}}
+	bestDepth := make(map[string]int, len(from))
+	queue := make([]state, len(from))
+	for i, table := range from {
+		bestDepth[strings.ToLower(table)] = 0
+		queue[i] = state{table: table}
+	}
 	var found []JoinStep
 
 	for len(queue) > 0 {
@@ -179,7 +188,7 @@ func bfsJoin(schema *Schema, from, to string) ([]JoinStep, error) {
 
 			if tableNamesMatch(nextTable, to) {
 				if found != nil && len(found) == len(newSteps) {
-					return nil, &AmbiguousPathError{err: &SemanticError{Message: fmt.Sprintf("ambiguous relationship path between tables %q and %q; qualify the model with a single path", from, to)}}
+					return nil, &AmbiguousPathError{err: &SemanticError{Message: fmt.Sprintf("ambiguous relationship path between tables %q and %q; qualify the model with a single path", from[0], to)}}
 				}
 				found = newSteps
 				continue
@@ -199,7 +208,7 @@ func bfsJoin(schema *Schema, from, to string) ([]JoinStep, error) {
 	return nil, &SemanticError{
 		Message: fmt.Sprintf("no relationship path between tables %q and %q; "+
 			"declare the relationship in dux.toml or via the UI",
-			from, to),
+			from[0], to),
 	}
 }
 

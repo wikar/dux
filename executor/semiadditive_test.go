@@ -78,6 +78,7 @@ func setupSemiAdditiveDB(t *testing.T) (*sql.DB, *semantic.Schema) {
 	addMeasure(t, schema, "stock", "FactAnchoredStock", `CALCULATE(
 		SUM(stock[qty]),
 		DATESINPERIOD(stock[d], MAX(stock[d]), 1, DAY))`)
+	addMeasure(t, schema, "sales", "SalesAndStock", `[SalesAmount] + [StockQuantity]`)
 	return db, schema
 }
 
@@ -124,6 +125,30 @@ func TestDailySalesAndMonthlyClosingStockUseConformedDimensions(t *testing.T) {
 	}
 }
 
+func TestConformedDimensionFilterUsesEachMeasureFactPath(t *testing.T) {
+	db, schema := setupSemiAdditiveDB(t)
+	_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+		products[pname],
+		TREATAS({202401}, dates[ymon]),
+		"Sales", [SalesAmount],
+		"Stock", [StockQuantity]
+	)`)
+	if len(rows) != 2 {
+		t.Fatalf("want two product rows, got %d", len(rows))
+	}
+
+	wants := map[string][2]float64{"A": {93, 42}, "B": {217, 420}}
+	for _, row := range rows {
+		want := wants[fmt.Sprint(row["pname"])]
+		if got := toFloat(cell(t, row, "Sales")); got != want[0] {
+			t.Errorf("%v Sales: want %v, got %v", row["pname"], want[0], got)
+		}
+		if got := toFloat(cell(t, row, "Stock")); got != want[1] {
+			t.Errorf("%v Stock: want %v, got %v", row["pname"], want[1], got)
+		}
+	}
+}
+
 func TestDailySalesAndClosingStockGrandTotals(t *testing.T) {
 	db, schema := setupSemiAdditiveDB(t)
 	_, rows := run(t, db, schema, `EVALUATE ROW(
@@ -138,5 +163,49 @@ func TestDailySalesAndClosingStockGrandTotals(t *testing.T) {
 		if got := toFloat(cell(t, rows[0], measure)); got != 616 {
 			t.Errorf("%s: want 616, got %v", measure, got)
 		}
+	}
+}
+
+func TestFactRowTransitionFiltersSiblingFactThroughConformedDimensions(t *testing.T) {
+	db, schema := setupSemiAdditiveDB(t)
+	_, rows := run(t, db, schema, `EVALUATE SELECTCOLUMNS(
+		FILTER(sales, sales[d] = DATE(2024, 1, 7) && sales[pkey] = 1 && sales[vkey] = 1),
+		"Stock", [RawStockQuantity], "Closing", [StockQuantity], "Mix", [SalesAndStock])`)
+	if len(rows) != 1 {
+		t.Fatalf("want one sales row, got %d", len(rows))
+	}
+	if got := toFloat(cell(t, rows[0], "Stock")); got != 10 {
+		t.Fatalf("want sibling stock 10, got %v", got)
+	}
+	if got := toFloat(cell(t, rows[0], "Closing")); got != 10 {
+		t.Fatalf("want sibling closing stock 10, got %v", got)
+	}
+	if got := toFloat(cell(t, rows[0], "Mix")); got != 11 {
+		t.Fatalf("want row sales plus closing stock 11, got %v", got)
+	}
+}
+
+func TestIteratedConformedDimensionsKeepSalesAndStockInSeparateContexts(t *testing.T) {
+	db, schema := setupSemiAdditiveDB(t)
+	_, rows := run(t, db, schema, `EVALUATE ROW(
+		"By Product Sales", SUMX(VALUES(products[pname]), [SalesAmount]),
+		"By Product Stock", SUMX(VALUES(products[pname]), [StockQuantity]),
+		"By Venue Sales", SUMX(VALUES(venues[vname]), [SalesAmount]),
+		"By Venue Stock", SUMX(VALUES(venues[vname]), [StockQuantity]),
+		"Mixed", SUMX(
+			CROSSJOIN(VALUES(products[pname]), VALUES(venues[vname])),
+			[SalesAmount] + [StockQuantity]))`)
+	for _, column := range []string{"By Product Sales", "By Venue Sales"} {
+		if got := toFloat(cell(t, rows[0], column)); got != 596 {
+			t.Errorf("%s: want 596, got %v", column, got)
+		}
+	}
+	for _, column := range []string{"By Product Stock", "By Venue Stock"} {
+		if got := toFloat(cell(t, rows[0], column)); got != 616 {
+			t.Errorf("%s: want 616, got %v", column, got)
+		}
+	}
+	if got := toFloat(cell(t, rows[0], "Mixed")); got != 1212 {
+		t.Errorf("Mixed: want 1212, got %v", got)
 	}
 }

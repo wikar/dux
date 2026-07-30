@@ -124,14 +124,9 @@ func (e *Emitter) emitGenerate(fc *parser.FuncCall, leftJoin bool) (string, erro
 		return "", fmt.Errorf("%s: %w", name, err)
 	}
 
-	var alias string
-	if src.name != "" {
-		alias = "__gen_" + sanitizeAliasSuffix(src.name)
-		e.rowCtx.Push(semantic.RowBinding{Table: e.tableKey(src.name), Alias: alias})
-		defer e.rowCtx.Pop()
-	} else {
-		alias = e.nextAlias("__gen")
-	}
+	alias := e.nextAlias("__gen")
+	popRow := e.pushRow(fc.Args[0], alias)
+	defer popRow()
 
 	inner, err := e.emitExprAsTable(fc.Args[1])
 	if err != nil {

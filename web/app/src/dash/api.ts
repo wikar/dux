@@ -36,7 +36,7 @@ async function errText(res: Response): Promise<string> {
   } catch {
     /* not JSON */
   }
-  return text || `request failed: ${res.status}`;
+  return text || `Request failed: ${res.status}`;
 }
 
 /** Percent-encode a slash-separated dashboard/asset path for a URL. */
@@ -78,7 +78,7 @@ export async function putDashboard(
     // dialog can offer overwrite/reload like any other conflict.
     const cur = await getDashboard(path);
     throw new DashConflictError(
-      `a dashboard already exists at "${path}"`,
+      `A dashboard already exists at "${path}"`,
       cur.etag,
       cur.modified
     );

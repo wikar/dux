@@ -459,6 +459,11 @@ export const DEFAULT_THEME: Required<ThemeTokens> = {
   titleBackground: "transparent",
   border: "#45475a",
   text: "#cdd6f4",
+  positive: "#a6e3a1",
+  negative: "#f38ba8",
+  neutral: "#cdd6f4",
+  error: "#f38ba8",
+  warning: "#fab387",
   fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
 };
 

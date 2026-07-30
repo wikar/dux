@@ -35,7 +35,7 @@
   align-items: center;
   gap: 4px;
   font-size: 12px;
-  color: var(--red);
+  color: var(--th-error);
   max-width: 320px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -45,7 +45,7 @@
 .dismiss {
   background: none;
   border: none;
-  color: var(--red);
+  color: var(--th-error);
   cursor: pointer;
   padding: 0 2px;
 }
@@ -136,6 +136,11 @@
   font-size: 12px;
   color: var(--subtext0);
   padding: 8px 12px;
+}
+
+.dropdownError {
+  composes: dim;
+  color: var(--th-error);
 }
 
 /* Search row — sticks to the top while the tree scrolls under it. */
@@ -229,6 +234,6 @@
 }
 
 .invalid {
-  color: var(--yellow);
+  color: var(--th-warning);
   font-size: 11px;
 }
