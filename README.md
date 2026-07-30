@@ -74,9 +74,9 @@ ships the `dux` CLI: reach it with `--entrypoint ./dux`.
 
 ## Sample data
 
-An empty instance is hard to explore. The **[sample data bundle](https://github.com/wikar/dux/releases/tag/dux-sample-v1)** fills one in a single command: 3,000,000 order lines of German beverage sales as a star schema, a semantic model of 23 formatted measures with time intelligence, and a 19-element demo dashboard.
+An empty instance is hard to explore. The **[sample data bundle](https://github.com/wikar/dux/releases/tag/dux-sample-v2)** fills one in a single command: 3,000,000 order lines of German beverage sales plus monthly stock snapshots and customer clubs, a semantic model of 27 formatted measures, and a 20-element demo dashboard.
 
-Download `dux-sample-v1.zip` from the release and extract it anywhere — the bundle has no required location. It ships `install.sh` and `install.ps1`, which take the server URL, the controlled import inbox, and the dashboards root; they need filesystem access to the latter two, so run them on the machine hosting `duxd`.
+Download `dux-sample-v2.zip` from the release and extract it anywhere — the bundle has no required location. It ships `install.sh` and `install.ps1`, which take the server URL, the controlled import inbox, and the dashboards root; they need filesystem access to the latter two, so run them on the machine hosting `duxd`.
 
 **Against the Docker container above**, pointing at the host side of the mounts:
 
@@ -90,7 +90,7 @@ cd dux-sample && chmod +x install.sh && DUXD_URL=http://localhost:8080 DUX_IMPOR
 cd samples/dux-sample && chmod +x install.sh && ./install.sh
 ```
 
-The installer imports the six Parquet tables through the [import API](#parquet-import-api), loads the model through `POST /import`, copies the dashboard asset into place, and restores the dashboard at [`/dash/sales/sales_test`](http://localhost:8080/dash/sales/sales_test). Install into an **empty** DuckLake instance — imports append, so a second run over existing tables duplicates every row.
+The installer imports the nine Parquet tables through the [import API](#parquet-import-api), loads the model through `POST /import`, copies the dashboard asset into place, and restores the dashboard at [`/dash/sales/sales_test`](http://localhost:8080/dash/sales/sales_test). Install into an **empty** DuckLake instance — imports append, so a second run over existing tables duplicates every row.
 
 The bundle is versioned independently of DUX and records which versions it was verified against; the release page carries the current compatibility record.
 
