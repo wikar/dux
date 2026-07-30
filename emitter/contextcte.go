@@ -46,15 +46,38 @@ type anchorCollector struct {
 }
 
 type anchorScan struct {
-	table string      // canonical schema table used for SQL rendering
-	key   string      // canonical, case-insensitive table identity
-	alias string      // __anch0, __anch1, ...
-	aggs  []anchorAgg // requested aggregates in first-use order
+	table  string         // canonical schema table used for SQL rendering
+	key    string         // canonical, case-insensitive table identity
+	alias  string         // __anch0, __anch1, ...
+	aggs   []anchorAgg    // requested aggregates in first-use order
+	groups map[int]string // enclosing group-key index → projected gN alias
 }
 
 type anchorAgg struct {
-	agg string // MIN or MAX
-	col string // resolved SQL column name
+	agg  string // MIN, MAX, or LASTNONBLANK
+	col  string // resolved SQL column name
+	expr *parser.Expr
+}
+
+func (c *anchorCollector) refLastNonBlank(table, key, col string, expr *parser.Expr) string {
+	var scan *anchorScan
+	for _, s := range c.scans {
+		if s.key == key {
+			scan = s
+			break
+		}
+	}
+	if scan == nil {
+		scan = &anchorScan{table: table, key: key, alias: fmt.Sprintf("__anch%d", len(c.scans)), groups: map[int]string{}}
+		c.scans = append(c.scans, scan)
+	}
+	for i, agg := range scan.aggs {
+		if agg.agg == "LASTNONBLANK" && strings.EqualFold(agg.col, col) && agg.expr == expr {
+			return fmt.Sprintf("%s.a%d", scan.alias, i)
+		}
+	}
+	scan.aggs = append(scan.aggs, anchorAgg{agg: "LASTNONBLANK", col: col, expr: expr})
+	return fmt.Sprintf("%s.a%d", scan.alias, len(scan.aggs)-1)
 }
 
 // ref returns the anchor-scan column reference for agg(table.col), creating
@@ -68,7 +91,7 @@ func (c *anchorCollector) ref(agg, table, key, col string) string {
 		}
 	}
 	if scan == nil {
-		scan = &anchorScan{table: table, key: key, alias: fmt.Sprintf("__anch%d", len(c.scans))}
+		scan = &anchorScan{table: table, key: key, alias: fmt.Sprintf("__anch%d", len(c.scans)), groups: map[int]string{}}
 		c.scans = append(c.scans, scan)
 	}
 	for i, a := range scan.aggs {
@@ -139,6 +162,11 @@ func (e *Emitter) planBridge(
 		return nil, nil
 	}
 	scan := coll.scans[0]
+	for _, agg := range scan.aggs {
+		if agg.expr != nil {
+			return nil, nil
+		}
+	}
 	measureTables := e.measureValueTables(fc.Args[0])
 	for _, table := range measureTables {
 		if e.tableKey(table) == scan.key {
@@ -234,8 +262,26 @@ func (e *Emitter) emitContextCTE(name string, fc *parser.FuncCall, clusterTables
 	for i, gk := range e.groupCtx.keys {
 		removed := cm.removed(e.tableKey(gk.table), gk.col) ||
 			overridden[e.resolvedColKey(gk.table, gk.col)]
+		var groupScan *anchorScan
 		if s := anchored[e.tableKey(gk.table)]; s != nil {
-			carried = append(carried, carriedKey{idx: i, gk: gk, scan: s, kept: !removed})
+			groupScan = s
+		} else if e.Schema != nil {
+			for _, s := range coll.scans {
+				targets := []string{s.table}
+				for _, agg := range s.aggs {
+					if agg.expr != nil {
+						targets = append(targets, e.measureExprTables(agg.expr)...)
+					}
+				}
+				if semantic.GroupingReaches(e.Schema, gk.table, targets) {
+					groupScan = s
+					break
+				}
+			}
+		}
+		if groupScan != nil {
+			groupScan.groups[i] = fmt.Sprintf("g%d", len(groupScan.groups))
+			carried = append(carried, carriedKey{idx: i, gk: gk, scan: groupScan, kept: !removed})
 		} else if !removed {
 			carried = append(carried, carriedKey{idx: i, gk: gk, kept: true})
 		}
@@ -255,6 +301,28 @@ func (e *Emitter) emitContextCTE(name string, fc *parser.FuncCall, clusterTables
 		keptOuter = append(keptOuter, p)
 	}
 
+	// CALCULATE predicates are filter-only tables. Tag them before building the
+	// FROM clause so a chain crossing a bidirectional edge can be carved into
+	// the same correlated EXISTS semi-join used for outer filters.
+	var calcTagged []taggedPred
+	for _, pred := range append(append([]*parser.Expr{}, cm.preds...), cm.keepPreds...) {
+		s, predErr := e.emitExpr(pred)
+		if predErr != nil {
+			return nil, predErr
+		}
+		tagged := taggedPred{sql: s, expr: pred}
+		for _, cr := range collectColRefs(pred) {
+			if cr.Table == "" {
+				continue
+			}
+			table := semantic.StripSingleQuotes(cr.Table)
+			tagged.table = e.tableKey(table)
+			tagged.col = strings.ToLower(e.resolveColName(table, semantic.StripBrackets(cr.Column)))
+			break
+		}
+		calcTagged = append(calcTagged, tagged)
+	}
+
 	// Tables the CTE joins: the measure subtree's own tables, kept group-key
 	// tables, and surviving predicate tables (the latter filter-only, so they
 	// stay eligible for bidi EXISTS carving in stitchedClusterFrom).
@@ -271,13 +339,22 @@ func (e *Emitter) emitContextCTE(name string, fc *parser.FuncCall, clusterTables
 			needed[key] = true
 		}
 	}
+	valueTables := map[string]bool{}
+	for _, table := range e.measureValueTables(fc.Args[0]) {
+		valueTables[e.tableKey(table)] = true
+	}
 	for _, t := range clusterTables {
-		add(t, true)
+		add(t, valueTables[e.tableKey(t)])
 	}
 	for _, ck := range carried {
 		add(ck.gk.table, true)
 	}
 	for _, p := range keptOuter {
+		if p.table != "" {
+			add(p.table, false)
+		}
+	}
+	for _, p := range calcTagged {
 		if p.table != "" {
 			add(p.table, false)
 		}
@@ -291,6 +368,9 @@ func (e *Emitter) emitContextCTE(name string, fc *parser.FuncCall, clusterTables
 		return nil, err
 	}
 	clusterPreds := keptOuter
+	if bp == nil {
+		clusterPreds = append(append([]taggedPred{}, keptOuter...), calcTagged...)
+	}
 	var bridgeKept []taggedPred
 	if bp != nil {
 		clusterPreds = nil
@@ -311,21 +391,19 @@ func (e *Emitter) emitContextCTE(name string, fc *parser.FuncCall, clusterTables
 		delete(needed, bp.scan.key)
 	}
 
-	from, conds, err := e.stitchedClusterFrom(tables, needed, clusterPreds)
+	from, conds, _, err := e.stitchedClusterFrom(tables, needed, clusterPreds, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	var outerCalcConds, bridgeCalcConds []string
-	for _, pred := range append(append([]*parser.Expr{}, cm.preds...), cm.keepPreds...) {
-		s, predErr := e.emitExpr(pred)
-		if predErr != nil {
-			return nil, predErr
-		}
-		if bp != nil && len(e.measureExprTables(pred)) > 0 {
-			bridgeCalcConds = append(bridgeCalcConds, s)
-		} else {
-			outerCalcConds = append(outerCalcConds, s)
+	if bp != nil {
+		for _, pred := range calcTagged {
+			if len(e.measureExprTables(pred.expr)) > 0 {
+				bridgeCalcConds = append(bridgeCalcConds, pred.sql)
+			} else {
+				outerCalcConds = append(outerCalcConds, pred.sql)
+			}
 		}
 	}
 
@@ -335,35 +413,16 @@ func (e *Emitter) emitContextCTE(name string, fc *parser.FuncCall, clusterTables
 		// Current form: append one anchor scan and keep the range predicate in
 		// the context CTE's outer WHERE.
 		for _, scan := range coll.scans {
-			var items, keys []string
-			for _, gk := range e.groupCtx.keys {
-				if e.tableKey(gk.table) == scan.key {
-					items = append(items, gk.col)
-					keys = append(keys, gk.col)
-				}
+			scanSQL, scanErr := e.emitAnchorScan(scan)
+			if scanErr != nil {
+				return nil, scanErr
 			}
-			for i, agg := range scan.aggs {
-				items = append(items, fmt.Sprintf("%s(%s) AS a%d", agg.agg, agg.col, i))
-			}
-			var scanPreds []string
-			for _, pred := range e.groupCtx.preds {
-				if pred.table == scan.key {
-					scanPreds = append(scanPreds, pred.sql)
-				}
-			}
-			fmt.Fprintf(&fromBuf, "\nCROSS JOIN (SELECT %s FROM %s", strings.Join(items, ", "), e.sqlTable(scan.table))
-			if len(scanPreds) > 0 {
-				fmt.Fprintf(&fromBuf, " WHERE %s", strings.Join(scanPreds, " AND "))
-			}
-			if len(keys) > 0 {
-				fmt.Fprintf(&fromBuf, " GROUP BY %s", strings.Join(keys, ", "))
-			}
-			fmt.Fprintf(&fromBuf, ") AS %s", scan.alias)
+			fmt.Fprintf(&fromBuf, "\nCROSS JOIN %s", scanSQL)
 		}
 		for _, ck := range carried {
 			if ck.scan != nil && ck.kept {
 				conds = append(conds, fmt.Sprintf("%s.%s = %s.%s",
-					e.sqlTable(ck.gk.table), ck.gk.col, ck.scan.alias, ck.gk.col))
+					e.sqlTable(ck.gk.table), ck.gk.col, ck.scan.alias, ck.scan.groups[ck.idx]))
 			}
 		}
 		conds = append(conds, timeConds...)
@@ -440,14 +499,14 @@ func (e *Emitter) emitContextCTE(name string, fc *parser.FuncCall, clusterTables
 		if bp != nil && ck.scan == bp.scan {
 			keyExprs[i] = bp.keyExprs[ck.idx]
 		} else if ck.scan != nil {
-			keyExprs[i] = ck.scan.alias + "." + ck.gk.col
+			keyExprs[i] = ck.scan.alias + "." + ck.scan.groups[ck.idx]
 		} else {
 			keyExprs[i] = e.sqlTable(ck.gk.table) + "." + ck.gk.col
 		}
 		carriedKeys[i].expr = keyExprs[i]
 	}
 	prevCtx := e.groupCtx
-	e.groupCtx = &groupContext{keys: carriedKeys, preds: keptOuter}
+	e.groupCtx = &groupContext{keys: carriedKeys, preds: append(append([]taggedPred{}, keptOuter...), calcTagged...)}
 	inner, err := e.emitExpr(fc.Args[0])
 	e.groupCtx = prevCtx
 	if err != nil {
@@ -468,4 +527,125 @@ func (e *Emitter) emitContextCTE(name string, fc *parser.FuncCall, clusterTables
 		fmt.Fprintf(&fromBody, "\nGROUP BY %s", strings.Join(keyExprs, ", "))
 	}
 	return &contextCTE{name: name, keyItems: keyItems, values: []string{inner}, fromBody: fromBody.String(), keyIdxs: keyIdxs}, nil
+}
+
+func (e *Emitter) emitAnchorScan(scan *anchorScan) (string, error) {
+	var groupItems, groupExprs, scanTables []string
+	scanTables = append(scanTables, scan.table)
+	for gi, gk := range e.groupCtx.keys {
+		alias, ok := scan.groups[gi]
+		if !ok {
+			continue
+		}
+		expr := e.sqlTable(gk.table) + "." + gk.col
+		groupItems = append(groupItems, fmt.Sprintf("%s AS %s", expr, alias))
+		groupExprs = append(groupExprs, expr)
+		scanTables = append(scanTables, gk.table)
+	}
+
+	hasNonBlank := false
+	var expressionTables []string
+	for _, agg := range scan.aggs {
+		if agg.expr == nil {
+			continue
+		}
+		hasNonBlank = true
+		expressionTables = append(expressionTables, e.measureExprTables(agg.expr)...)
+		scanTables = append(scanTables, e.measureExprTables(agg.expr)...)
+	}
+
+	var scanPreds []string
+	for _, pred := range e.groupCtx.preds {
+		if pred.table == scan.key || (pred.table != "" && semantic.GroupingReaches(e.Schema, pred.table, expressionTables)) {
+			scanPreds = append(scanPreds, pred.sql)
+			scanTables = append(scanTables, pred.table)
+		}
+	}
+
+	seen := map[string]bool{}
+	uniqueTables := make([]string, 0, len(scanTables))
+	primary := scan.table
+	if hasNonBlank && len(expressionTables) > 0 {
+		// LASTNONBLANK evaluates the expression at candidate grain. Rooting the
+		// join at the expression fact keeps conform dimensions on that fact's
+		// relationship path instead of accidentally reaching them through a
+		// sibling fact hanging off the candidate-date table.
+		primary = expressionTables[0]
+		uniqueTables = append(uniqueTables, primary)
+		seen[e.tableKey(primary)] = true
+	}
+	for _, table := range scanTables {
+		key := e.tableKey(table)
+		if !seen[key] {
+			seen[key] = true
+			uniqueTables = append(uniqueTables, table)
+		}
+	}
+	scanFrom := e.sqlTable(primary)
+	if len(uniqueTables) > 1 {
+		jp, err := semantic.InferJoinPath(e.Schema, uniqueTables)
+		if err != nil {
+			return "", err
+		}
+		scanFrom = e.emitFlatJoins(primary, jp)
+	}
+
+	if !hasNonBlank {
+		items := append([]string{}, groupItems...)
+		for i, agg := range scan.aggs {
+			items = append(items, fmt.Sprintf("%s(%s.%s) AS a%d", agg.agg, e.sqlTable(scan.table), agg.col, i))
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "(SELECT %s FROM %s", strings.Join(items, ", "), scanFrom)
+		if len(scanPreds) > 0 {
+			fmt.Fprintf(&b, " WHERE %s", strings.Join(scanPreds, " AND "))
+		}
+		if len(groupExprs) > 0 {
+			fmt.Fprintf(&b, " GROUP BY %s", strings.Join(groupExprs, ", "))
+		}
+		fmt.Fprintf(&b, ") AS %s", scan.alias)
+		return b.String(), nil
+	}
+
+	innerItems := append([]string{}, groupItems...)
+	innerGroups := append([]string{}, groupExprs...)
+	outerItems := make([]string, 0, len(groupItems)+len(scan.aggs))
+	outerGroups := make([]string, 0, len(groupItems))
+	for gi := range e.groupCtx.keys {
+		if alias, ok := scan.groups[gi]; ok {
+			outerItems = append(outerItems, alias)
+			outerGroups = append(outerGroups, alias)
+		}
+	}
+	for i, agg := range scan.aggs {
+		candidate := e.sqlTable(scan.table) + "." + agg.col
+		innerItems = append(innerItems, fmt.Sprintf("%s AS c%d", candidate, i))
+		innerGroups = append(innerGroups, candidate)
+		if agg.expr == nil {
+			outerItems = append(outerItems, fmt.Sprintf("%s(c%d) AS a%d", agg.agg, i, i))
+			continue
+		}
+		value, err := e.emitExpr(agg.expr)
+		if err != nil {
+			return "", err
+		}
+		innerItems = append(innerItems, fmt.Sprintf("%s AS n%d", value, i))
+		outerItems = append(outerItems, fmt.Sprintf("MAX(c%d) FILTER (WHERE n%d IS NOT NULL) AS a%d", i, i, i))
+	}
+
+	var inner strings.Builder
+	fmt.Fprintf(&inner, "SELECT %s FROM %s", strings.Join(innerItems, ", "), scanFrom)
+	if len(scanPreds) > 0 {
+		fmt.Fprintf(&inner, " WHERE %s", strings.Join(scanPreds, " AND "))
+	}
+	if len(innerGroups) > 0 {
+		fmt.Fprintf(&inner, " GROUP BY %s", strings.Join(innerGroups, ", "))
+	}
+	var outer strings.Builder
+	fmt.Fprintf(&outer, "(SELECT %s FROM (%s) AS __nb", strings.Join(outerItems, ", "), inner.String())
+	if len(outerGroups) > 0 {
+		fmt.Fprintf(&outer, " GROUP BY %s", strings.Join(outerGroups, ", "))
+	}
+	fmt.Fprintf(&outer, ") AS %s", scan.alias)
+	return outer.String(), nil
 }

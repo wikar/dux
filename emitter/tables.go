@@ -75,6 +75,10 @@ func underlyingTableName(expr *parser.Expr) string {
 		return t.ColRef.Table
 	case t.FuncCall != nil:
 		switch strings.ToUpper(t.FuncCall.Name) {
+		case "VALUES", "DISTINCT":
+			if len(t.FuncCall.Args) == 1 {
+				return underlyingTableName(t.FuncCall.Args[0])
+			}
 		case "FILTER", "ALL", "ALLEXCEPT", "ADDCOLUMNS", "CALCULATETABLE":
 			if len(t.FuncCall.Args) >= 1 {
 				return underlyingTableName(t.FuncCall.Args[0])
@@ -123,7 +127,7 @@ func (e *Emitter) emitGenerate(fc *parser.FuncCall, leftJoin bool) (string, erro
 	var alias string
 	if src.name != "" {
 		alias = "__gen_" + sanitizeAliasSuffix(src.name)
-		e.rowCtx.Push(semantic.RowBinding{Table: src.name, Alias: alias})
+		e.rowCtx.Push(semantic.RowBinding{Table: e.tableKey(src.name), Alias: alias})
 		defer e.rowCtx.Pop()
 	} else {
 		alias = e.nextAlias("__gen")

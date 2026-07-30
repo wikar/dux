@@ -163,8 +163,10 @@ func (e *Emitter) emitStitched(
 
 		cteName := fmt.Sprintf("_mc%d", len(ctes))
 
-		// Cluster tables: group-key tables first (they root the join tree,
-		// mirroring the flat path's primary), then the measure tables.
+		// Ordinary clusters root at their value table so conformed dimensions do
+		// not choose a path through an unrelated fact. Context CTEs can make a
+		// dimension key non-BLANK without a row in the ordinary fact, so their
+		// shared key scan remains dimension-rooted.
 		seen := map[string]bool{}
 		var tables []string
 		add := func(t string) {
@@ -174,11 +176,35 @@ func (e *Emitter) emitStitched(
 				tables = append(tables, t)
 			}
 		}
-		for _, gk := range groupKeys {
-			add(gk.table)
-		}
-		for _, t := range c.tables {
-			add(t)
+		if plan.hasContextClusters() {
+			for _, gk := range groupKeys {
+				add(gk.table)
+			}
+			for _, t := range c.tables {
+				add(t)
+			}
+			// Prefer the dimension key scan only when it identifies one join tree.
+			// With conformed dimensions, retry from this cluster's fact rather than
+			// guessing which sibling fact connects the keys.
+			if e.Schema != nil {
+				if _, err := semantic.InferJoinPath(e.Schema, tables); semantic.IsAmbiguousPath(err) {
+					seen = map[string]bool{}
+					tables = nil
+					for _, t := range c.tables {
+						add(t)
+					}
+					for _, gk := range groupKeys {
+						add(gk.table)
+					}
+				}
+			}
+		} else {
+			for _, t := range c.tables {
+				add(t)
+			}
+			for _, gk := range groupKeys {
+				add(gk.table)
+			}
 		}
 		// needed: tables the CTE's SELECT list references. Predicate tables
 		// added below are filter-only and eligible for EXISTS carving.
@@ -209,20 +235,43 @@ func (e *Emitter) emitStitched(
 			}
 		}
 
-		from, whereConds, err := e.stitchedClusterFrom(tables, needed, clusterTagged)
+		valueTables := map[string]bool{}
+		for _, table := range c.tables {
+			valueTables[e.tableKey(table)] = true
+		}
+		from, whereConds, groupRefs, err := e.stitchedClusterFrom(tables, needed, clusterTagged, valueTables, groupKeys...)
 		if err != nil {
 			return "", err
+		}
+		clusterKeys := append([]groupKey{}, groupKeys...)
+		for i := range clusterKeys {
+			if ref := groupRefs[e.resolvedColKey(clusterKeys[i].table, clusterKeys[i].col)]; ref != "" {
+				clusterKeys[i].expr = ref
+			}
+		}
+		clusterGroupCols := append([]string{}, groupCols...)
+		for i := range plainKeys {
+			clusterGroupCols[i] = clusterKeys[i].expr
+		}
+		clusterRollups := make([]rollupElement, len(rollupElems))
+		keyIndex := len(plainKeys)
+		for i, el := range rollupElems {
+			clusterRollups[i] = rollupElement{nameSQL: el.nameSQL}
+			for range el.cols {
+				clusterRollups[i].cols = append(clusterRollups[i].cols, clusterKeys[keyIndex].expr)
+				keyIndex++
+			}
 		}
 
 		// Emit this cluster's measures in ITS filter context: the group keys
 		// plus only the predicates routed to this cluster. CALCULATE modifier
 		// resolution (filterctx.go) then removes/replicates the right filters.
 		var items []string
-		for ki, gc := range groupCols {
+		for ki, gc := range clusterGroupCols {
 			items = append(items, fmt.Sprintf("%s AS k%d", gc, ki))
 		}
-		kn := len(groupCols)
-		for gi, el := range rollupElems {
+		kn := len(clusterGroupCols)
+		for gi, el := range clusterRollups {
 			for _, col := range el.cols {
 				items = append(items, fmt.Sprintf("%s AS k%d", col, kn))
 				kn++
@@ -232,7 +281,7 @@ func (e *Emitter) emitStitched(
 			items = append(items, fmt.Sprintf("GROUPING(%s) AS g%d", el.cols[0], gi))
 		}
 		prevCtx := e.groupCtx
-		e.groupCtx = &groupContext{keys: groupKeys, preds: clusterTagged}
+		e.groupCtx = &groupContext{keys: clusterKeys, preds: clusterTagged}
 		emitErr := func() error {
 			for _, pi := range c.pairIdx {
 				exprSQL, err := e.emitExpr(pairArgs[pi+1])
@@ -274,10 +323,10 @@ func (e *Emitter) emitStitched(
 		if len(whereConds) > 0 {
 			fmt.Fprintf(&body, "\nWHERE %s", strings.Join(whereConds, " AND "))
 		}
-		if len(rollupElems) > 0 {
-			fmt.Fprintf(&body, "\nGROUP BY %s", rollupGroupingSets(groupCols, rollupElems))
-		} else if len(groupCols) > 0 {
-			fmt.Fprintf(&body, "\nGROUP BY %s", strings.Join(groupCols, ", "))
+		if len(clusterRollups) > 0 {
+			fmt.Fprintf(&body, "\nGROUP BY %s", rollupGroupingSets(clusterGroupCols, clusterRollups))
+		} else if len(clusterGroupCols) > 0 {
+			fmt.Fprintf(&body, "\nGROUP BY %s", strings.Join(clusterGroupCols, ", "))
 		}
 		ctes = append(ctes, stitchedCTE{name: cteName, body: body.String()})
 	}
@@ -406,7 +455,7 @@ func (e *Emitter) emitStitched(
 		for _, cc := range cctes[1:] {
 			fmt.Fprintf(&sb, "\nLEFT JOIN %s ON TRUE", cc.name)
 		}
-		return sb.String(), nil
+		return blankPrune(sb.String(), pairArgs, inlineArgs), nil
 	}
 
 	fmt.Fprintf(&sb, "\nSELECT %s\nFROM %s", strings.Join(outItems, ", "), ctes[0].name)
@@ -440,7 +489,7 @@ func (e *Emitter) emitStitched(
 		}
 		fmt.Fprintf(&sb, "\nLEFT JOIN %s ON %s", cc.name, strings.Join(conds, " AND "))
 	}
-	return sb.String(), nil
+	return blankPrune(sb.String(), pairArgs, inlineArgs), nil
 }
 
 // inlineMeasureAlias names the output column of an inline measure reference:
@@ -477,6 +526,16 @@ type existsChain struct {
 	tables map[string]bool     // lower-cased canonical tables inside the chain
 }
 
+// groupChain is the projected counterpart of existsChain. A group key beyond
+// a bidirectional edge must be projected, so a semi-join cannot carry it. A
+// DISTINCT key map carries the group columns without multiplying value rows
+// when several bridge rows reach the same grouped value.
+type groupChain struct {
+	anchor semantic.JoinStep
+	steps  []semantic.JoinStep
+	tables map[string]bool
+}
+
 // stitchedClusterFrom builds a cluster CTE's FROM clause and WHERE conditions.
 // needed is the set of tables the CTE's SELECT list references (group keys and
 // measure tables); preds are the TREATAS predicates routed to this cluster.
@@ -485,7 +544,7 @@ type existsChain struct {
 // whose subtree contains only filter-source tables is carved into an EXISTS
 // chain, with predicates on carved tables moved inside; remaining predicates
 // are returned as plain conditions.
-func (e *Emitter) stitchedClusterFrom(tables []string, needed map[string]bool, preds []taggedPred) (string, []string, error) {
+func (e *Emitter) stitchedClusterFrom(tables []string, needed map[string]bool, preds []taggedPred, valueTables map[string]bool, groupKeys ...groupKey) (string, []string, map[string]string, error) {
 	predSQL := func(ps []taggedPred) []string {
 		out := make([]string, len(ps))
 		for i, p := range ps {
@@ -494,14 +553,14 @@ func (e *Emitter) stitchedClusterFrom(tables []string, needed map[string]bool, p
 		return out
 	}
 	if len(tables) == 1 {
-		return e.sqlTable(tables[0]), predSQL(preds), nil
+		return e.sqlTable(tables[0]), predSQL(preds), nil, nil
 	}
 	if e.Schema == nil {
-		return "", nil, fmt.Errorf("SUMMARIZECOLUMNS: multi-table measures require a schema for join inference")
+		return "", nil, nil, fmt.Errorf("SUMMARIZECOLUMNS: multi-table measures require a schema for join inference")
 	}
 	jp, err := semantic.InferJoinPath(e.Schema, tables)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 
 	lower := e.tableKey
@@ -525,19 +584,69 @@ func (e *Emitter) stitchedClusterFrom(tables []string, needed map[string]bool, p
 		}
 		return false
 	}
+	groupTables := map[string]bool{}
+	for _, key := range groupKeys {
+		groupTables[lower(key.table)] = true
+	}
+	if valueTables == nil {
+		valueTables = map[string]bool{}
+		for table := range needed {
+			if !groupTables[table] {
+				valueTables[table] = true
+			}
+		}
+	}
+	var subtreeGroup func(t string) bool
+	subtreeGroup = func(t string) bool {
+		if groupTables[t] {
+			return true
+		}
+		for _, s := range kids[t] {
+			if subtreeGroup(lower(s.Table)) {
+				return true
+			}
+		}
+		return false
+	}
+	var subtreeValue func(t string) bool
+	subtreeValue = func(t string) bool {
+		if valueTables[t] {
+			return true
+		}
+		for _, s := range kids[t] {
+			if subtreeValue(lower(s.Table)) {
+				return true
+			}
+		}
+		return false
+	}
 
 	inChain := map[string]*existsChain{}
 	var chains []*existsChain
+	inGroupChain := map[string]*groupChain{}
+	var groupChains []*groupChain
 
 	var fromBuf strings.Builder
 	fromBuf.WriteString(e.sqlTable(tables[0]))
 	for _, s := range jp.Steps {
 		fl, tl := lower(s.FromTable), lower(s.Table)
+		if ch := inGroupChain[fl]; ch != nil {
+			ch.steps = append(ch.steps, s)
+			ch.tables[tl] = true
+			inGroupChain[tl] = ch
+			continue
+		}
 		if ch := inChain[fl]; ch != nil {
 			// Continuation of a carved chain.
 			ch.steps = append(ch.steps, s)
 			ch.tables[tl] = true
 			inChain[tl] = ch
+			continue
+		}
+		if s.Bidirectional && subtreeGroup(tl) && !subtreeValue(tl) {
+			ch := &groupChain{anchor: s, tables: map[string]bool{tl: true}}
+			inGroupChain[tl] = ch
+			groupChains = append(groupChains, ch)
 			continue
 		}
 		if s.Bidirectional && !subtreeNeeded(tl) {
@@ -553,8 +662,47 @@ func (e *Emitter) stitchedClusterFrom(tables []string, needed map[string]bool, p
 		)
 	}
 
-	var conds []string
 	predUsed := make([]bool, len(preds))
+	groupRefs := map[string]string{}
+	for ci, ch := range groupChains {
+		alias := fmt.Sprintf("__grp%d", ci)
+		var selected []string
+		selected = append(selected, fmt.Sprintf("%s.%s AS __anchor",
+			e.sqlTable(ch.anchor.Table), ch.anchor.OnToCol))
+		for _, key := range groupKeys {
+			if !ch.tables[lower(key.table)] {
+				continue
+			}
+			name := fmt.Sprintf("g%d", len(selected)-1)
+			selected = append(selected, fmt.Sprintf("%s.%s AS %s",
+				e.sqlTable(key.table), key.col, name))
+			groupRefs[e.resolvedColKey(key.table, key.col)] = alias + "." + name
+		}
+		var body strings.Builder
+		fmt.Fprintf(&body, "SELECT DISTINCT %s FROM %s",
+			strings.Join(selected, ", "), e.sqlTable(ch.anchor.Table))
+		for _, s := range ch.steps {
+			fmt.Fprintf(&body, " LEFT JOIN %s ON %s.%s = %s.%s",
+				e.sqlTable(s.Table),
+				e.sqlTable(s.FromTable), s.OnFromCol,
+				e.sqlTable(s.Table), s.OnToCol)
+		}
+		var groupConds []string
+		for pi, pred := range preds {
+			if ch.tables[lower(pred.table)] {
+				groupConds = append(groupConds, pred.sql)
+				predUsed[pi] = true
+			}
+		}
+		if len(groupConds) > 0 {
+			fmt.Fprintf(&body, " WHERE %s", strings.Join(groupConds, " AND "))
+		}
+		fmt.Fprintf(&fromBuf, "\nLEFT JOIN (%s) AS %s ON %s.__anchor IS NOT DISTINCT FROM %s.%s",
+			body.String(), alias, alias,
+			e.sqlTable(ch.anchor.FromTable), ch.anchor.OnFromCol)
+	}
+
+	var conds []string
 	for _, ch := range chains {
 		var b strings.Builder
 		fmt.Fprintf(&b, "EXISTS (SELECT 1 FROM %s", e.sqlTable(ch.anchor.Table))
@@ -584,7 +732,7 @@ func (e *Emitter) stitchedClusterFrom(tables []string, needed map[string]bool, p
 			conds = append(conds, p.sql)
 		}
 	}
-	return fromBuf.String(), conds, nil
+	return fromBuf.String(), conds, groupRefs, nil
 }
 
 // quoteIdent double-quotes name as a SQL identifier, escaping embedded quotes.

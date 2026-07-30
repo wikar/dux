@@ -20,9 +20,32 @@ import (
 
 // groupKey identifies one group-by column of the enclosing SUMMARIZECOLUMNS.
 type groupKey struct {
-	table string // table reference (quotes stripped); compare through tableKey
-	col   string // resolved SQL column name
-	expr  string // SQL expression naming this key in the current query scope
+	table  string // table reference (quotes stripped); compare through tableKey
+	col    string // resolved SQL column name
+	expr   string // SQL expression naming this key in the current query scope
+	line   int
+	column int
+}
+
+func (e *Emitter) validateGroupKeys(keys []groupKey, measureTables []string) error {
+	if e.Schema == nil || len(measureTables) == 0 {
+		return nil
+	}
+	measureSet := map[string]bool{}
+	for _, table := range measureTables {
+		measureSet[e.tableKey(table)] = true
+	}
+	for _, key := range keys {
+		if measureSet[e.tableKey(key.table)] || semantic.FilterReaches(e.Schema, key.table, measureTables) {
+			continue
+		}
+		return &semantic.SemanticError{
+			Message: fmt.Sprintf("measure over %s cannot be grouped by %s[%s]: filters from %s do not safely propagate to the measure tables; group by a shared dimension instead",
+				strings.Join(measureTables, ", "), key.table, key.col, key.table),
+			Line: key.line, Column: key.column,
+		}
+	}
+	return nil
 }
 
 // groupContext carries the enclosing SUMMARIZECOLUMNS grouping state.
@@ -249,7 +272,75 @@ func (e *Emitter) contextModifying(fc *parser.FuncCall) bool {
 	if err != nil {
 		return false
 	}
-	return cm.hasRemovals() || e.anyPredTouchesGroupKey(cm.preds)
+	return cm.hasRemovals() || e.anyPredTouchesGroupKey(cm.preds) ||
+		!e.inlineFilterExpr(cf.Args[0]) || e.calcCrossesBidi(cf, cm)
+}
+
+// calcCrossesBidi reports whether a CALCULATE predicate reaches the value
+// tables through a bidirectional relationship. Such predicates cannot use an
+// aggregate FILTER over a flat join: bridge multiplicity would fan out the
+// value rows. They are lifted into a context CTE where the bridge is carved
+// into a correlated EXISTS semi-join.
+func (e *Emitter) calcCrossesBidi(fc *parser.FuncCall, cm *calcModifiers) bool {
+	if e.Schema == nil || len(fc.Args) == 0 {
+		return false
+	}
+	valueTables := e.measureValueTables(fc.Args[0])
+	if len(valueTables) == 0 {
+		return false
+	}
+	for _, pred := range append(append([]*parser.Expr{}, cm.preds...), cm.keepPreds...) {
+		for _, filterTable := range e.measureExprTables(pred) {
+			if !semantic.FilterReaches(e.Schema, filterTable, valueTables) {
+				continue
+			}
+			path, err := semantic.InferJoinPath(e.Schema, append(append([]string{}, valueTables...), filterTable))
+			if err != nil {
+				continue
+			}
+			for _, step := range path.Steps {
+				if step.Bidirectional {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// inlineFilterExpr reports whether expr emits as one aggregate call that can
+// legally receive SQL's FILTER clause. Stored measure references are unwrapped
+// recursively; composed arithmetic and context-bearing calls are not inline.
+func (e *Emitter) inlineFilterExpr(expr *parser.Expr) bool {
+	visiting := map[*parser.MeasureDefinition]bool{}
+	var check func(*parser.Expr) bool
+	check = func(current *parser.Expr) bool {
+		if current == nil || current.Left == nil || len(current.Right) > 0 || current.Left.Neg {
+			return false
+		}
+		term := current.Left
+		if term.SubExpr != nil {
+			return check(term.SubExpr)
+		}
+		if term.ColRef != nil {
+			def := e.resolveMeasureDef(term.ColRef)
+			if def == nil || def.Expr == nil || visiting[def] {
+				return false
+			}
+			visiting[def] = true
+			ok := check(def.Expr)
+			delete(visiting, def)
+			return ok
+		}
+		if term.FuncCall != nil {
+			switch strings.ToUpper(term.FuncCall.Name) {
+			case "DISTINCTCOUNT", "COUNTBLANK":
+				return false
+			}
+		}
+		return term.FuncCall != nil && emitsInline(term.FuncCall)
+	}
+	return check(expr)
 }
 
 // emitCalculateGrouped emits CALCULATE inside a SUMMARIZECOLUMNS group context.
@@ -361,10 +452,24 @@ func (e *Emitter) emitCalculateGrouped(fc *parser.FuncCall) (string, error) {
 			}
 		}
 	}
+	bindings := make(map[string]string, len(tables))
+	for _, table := range tables {
+		bindings[e.tableKey(table)] = calcAlias(table)
+	}
+	popBindings := e.pushSQLBindings(bindings)
+	defer popBindings()
 
 	var conds []string
 	for _, p := range keptOuter {
-		conds = append(conds, p.sql)
+		if p.expr == nil {
+			conds = append(conds, p.sql)
+			continue
+		}
+		s, err := e.emitExpr(p.expr)
+		if err != nil {
+			return "", err
+		}
+		conds = append(conds, s)
 	}
 	for _, gk := range keptKeys {
 		conds = append(conds, fmt.Sprintf("%s.%s = %s.%s",

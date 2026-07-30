@@ -98,11 +98,12 @@ type Term struct {
 	SubExpr          *Expr             `parser:"| '(' @@ ')'"`
 	QualifiedIdent   string            `parser:"| @QualifiedIdent"`
 	QuotedIdent      string            `parser:"| @QuotedIdent"`
-	Ident            string            `parser:"| @Ident )"`
+	Ident            string            `parser:"| @( Ident | 'ASC' | 'DESC' ) )"`
 }
 
 // FuncCall is a named function invocation with zero or more arguments.
 type FuncCall struct {
+	Pos participelexer.Position
 	// Name matches either a keyword (SUM, CALCULATE, …) or a user-defined
 	// identifier to allow calling unknown/passthrough functions.
 	Name string  `parser:"@( Keyword | Ident )"`
@@ -133,9 +134,9 @@ type ColRef struct {
 // always match it as a FuncCall (Name="BLANK", Args=[]) before reaching
 // the Literal alternatives. The emitter maps FuncCall{Name:"BLANK"} → NULL.
 type Literal struct {
-	String  *string  `parser:"  @String"`
-	Number  *float64 `parser:"| @Number"`
-	Boolean *string  `parser:"| @( 'TRUE' | 'FALSE' )"`
+	String  *string `parser:"  @String"`
+	Number  *string `parser:"| @Number"`
+	Boolean *string `parser:"| @( 'TRUE' | 'FALSE' )"`
 }
 
 // EvaluateClause is the body following the EVALUATE keyword.

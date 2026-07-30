@@ -215,10 +215,7 @@ func (e *Emitter) resolveMeasureDef(cr *parser.ColRef) *parser.MeasureDefinition
 	}
 	name := semantic.StripBrackets(cr.Column)
 	if tbl := semantic.StripSingleQuotes(cr.Table); tbl != "" {
-		if tm, ok := measures[tbl]; ok {
-			return tm[name]
-		}
-		return nil
+		return semantic.FindMeasure(tbl, name, measures)
 	}
 	def, err := semantic.FindMeasureByName(name, measures)
 	if err != nil {
@@ -347,6 +344,20 @@ func (e *Emitter) measureExprTables(expr *parser.Expr) []string {
 
 	walkTerms(expr, visit)
 	return result
+}
+
+// measureExprTablesOutsideRowContext returns the referenced tables that need
+// an inner FROM. A table already bound by an iterator/source row is an outer
+// correlation target, not another inner scan.
+func (e *Emitter) measureExprTablesOutsideRowContext(expr *parser.Expr) []string {
+	tables := e.measureExprTables(expr)
+	out := tables[:0]
+	for _, table := range tables {
+		if _, bound := e.rowCtx.ResolveAlias(e.tableKey(table)); !bound {
+			out = append(out, table)
+		}
+	}
+	return out
 }
 
 // measureValueTables is the table set read by a measure value, excluding the

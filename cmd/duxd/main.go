@@ -20,6 +20,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -955,7 +956,9 @@ func queryHandler(db *sql.DB, schema *semantic.Schema, mu *sync.RWMutex) http.Ha
 		var filters []executor.ExternalFilter
 		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 			var req queryRequest
-			if err := json.Unmarshal(body, &req); err != nil {
+			decoder := json.NewDecoder(bytes.NewReader(body))
+			decoder.UseNumber()
+			if err := decoder.Decode(&req); err != nil {
 				writeError(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
 				return
 			}
@@ -1522,7 +1525,7 @@ func addRelationshipHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema
 				Bidirectional: req.Bidirectional,
 			})
 		}
-		if err := semantic.ValidateBidiPaths(schema); err != nil {
+		if err := semantic.ValidateFilterPaths(schema); err != nil {
 			if existing != nil {
 				existing.Bidirectional = prevBidi
 			} else {

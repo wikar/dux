@@ -15,6 +15,7 @@ package emitter
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/danielwikar/dux/parser"
@@ -99,21 +100,67 @@ func (e *Emitter) timeAnchor(agg, table, col string) string {
 		}
 	}
 	alias := "__ti_" + sanitizeAliasSuffix(table)
-	var conds []string
-	if e.groupCtx != nil {
+	tables := []string{table}
+	seen := map[string]bool{e.tableKey(table): true}
+	addTable := func(candidate string) {
+		key := e.tableKey(candidate)
+		if !seen[key] {
+			seen[key] = true
+			tables = append(tables, candidate)
+		}
+	}
+	if e.groupCtx != nil && e.Schema != nil {
 		for _, gk := range e.groupCtx.keys {
-			if e.tableKey(gk.table) == e.tableKey(table) {
-				conds = append(conds, fmt.Sprintf("%s.%s = %s.%s",
-					alias, gk.col, e.sqlTable(gk.table), gk.col))
+			if semantic.GroupingReaches(e.Schema, gk.table, []string{table}) {
+				addTable(gk.table)
 			}
 		}
 		for _, p := range e.groupCtx.preds {
-			if p.table == e.tableKey(table) {
-				conds = append(conds, p.sql)
+			if p.table != "" && semantic.GroupingReaches(e.Schema, p.table, []string{table}) {
+				addTable(p.table)
 			}
 		}
 	}
-	s := fmt.Sprintf("(SELECT %s(%s.%s) FROM %s AS %s", agg, alias, col, e.sqlTable(table), alias)
+
+	aliases := map[string]string{e.tableKey(table): alias}
+	var from strings.Builder
+	fmt.Fprintf(&from, "%s AS %s", e.sqlTable(table), alias)
+	if len(tables) > 1 && e.Schema != nil {
+		jp, err := semantic.InferJoinPath(e.Schema, tables)
+		if err == nil {
+			for _, step := range jp.Steps {
+				fromAlias := aliases[e.tableKey(step.FromTable)]
+				toAlias := "__ti_" + sanitizeAliasSuffix(step.Table)
+				aliases[e.tableKey(step.Table)] = toAlias
+				fmt.Fprintf(&from, "\nLEFT JOIN %s AS %s ON %s.%s = %s.%s",
+					e.sqlTable(step.Table), toAlias, fromAlias, step.OnFromCol, toAlias, step.OnToCol)
+			}
+		}
+	}
+
+	var conds []string
+	if e.groupCtx != nil {
+		for _, gk := range e.groupCtx.keys {
+			if innerAlias, ok := aliases[e.tableKey(gk.table)]; ok {
+				outer := gk.expr
+				if outer == "" {
+					outer = e.sqlTable(gk.table) + "." + gk.col
+				}
+				conds = append(conds, fmt.Sprintf("%s.%s = %s", innerAlias, gk.col, outer))
+			}
+		}
+		popBindings := e.pushSQLBindings(aliases)
+		for _, p := range e.groupCtx.preds {
+			if _, ok := aliases[p.table]; !ok || p.expr == nil {
+				continue
+			}
+			if pred, err := e.emitExpr(p.expr); err == nil {
+				conds = append(conds, pred)
+			}
+		}
+		popBindings()
+	}
+	s := fmt.Sprintf("(SELECT %s(%s.%s) FROM %s", agg, alias, col, from.String())
 	if len(conds) > 0 {
 		s += " WHERE " + strings.Join(conds, " AND ")
 	}
@@ -234,6 +281,21 @@ func (e *Emitter) emitDateBound(expr *parser.Expr) (string, error) {
 	if expr != nil && expr.Left != nil && expr.Left.FuncCall != nil && len(expr.Right) == 0 {
 		fc := expr.Left.FuncCall
 		switch strings.ToUpper(fc.Name) {
+		case "LASTNONBLANK":
+			if len(fc.Args) != 2 || fc.Args[0].Left == nil || fc.Args[0].Left.ColRef == nil ||
+				fc.Args[0].Left.ColRef.Table == "" || len(fc.Args[0].Right) > 0 {
+				return "", fmt.Errorf("LASTNONBLANK requires a table-qualified date column and an expression")
+			}
+			cr := fc.Args[0].Left.ColRef
+			table := semantic.StripSingleQuotes(cr.Table)
+			col := e.resolveColName(table, semantic.StripBrackets(cr.Column))
+			if e.anchorScans != nil {
+				return e.anchorScans.refLastNonBlank(e.canonTable(table), e.tableKey(table), col, fc.Args[1]), nil
+			}
+			if e.groupCtx != nil {
+				return e.emitGroupedLastNonBlank(table, col, fc.Args[1])
+			}
+			return e.emitStandaloneLastNonBlank(table, col, fc.Args[1])
 		case "MAX", "LASTDATE", "MIN", "FIRSTDATE":
 			if len(fc.Args) == 1 && fc.Args[0].Left != nil && fc.Args[0].Left.ColRef != nil &&
 				fc.Args[0].Left.ColRef.Table != "" {
@@ -251,6 +313,119 @@ func (e *Emitter) emitDateBound(expr *parser.Expr) (string, error) {
 		}
 	}
 	return e.emitExpr(expr)
+}
+
+func (e *Emitter) emitGroupedLastNonBlank(table, col string, expr *parser.Expr) (string, error) {
+	expressionTables := e.measureExprTables(expr)
+	primary := table
+	if len(expressionTables) > 0 {
+		primary = expressionTables[0]
+	}
+	targets := append([]string{table}, expressionTables...)
+	tables := []string{primary}
+	seen := map[string]bool{e.tableKey(primary): true}
+	addTable := func(candidate string) {
+		key := e.tableKey(candidate)
+		if !seen[key] {
+			seen[key] = true
+			tables = append(tables, candidate)
+		}
+	}
+	addTable(table)
+	for _, gk := range e.groupCtx.keys {
+		if semantic.GroupingReaches(e.Schema, gk.table, targets) {
+			addTable(gk.table)
+		}
+	}
+	for _, pred := range e.groupCtx.preds {
+		if pred.table != "" && semantic.GroupingReaches(e.Schema, pred.table, targets) {
+			addTable(pred.table)
+		}
+	}
+
+	aliases := map[string]string{}
+	aliasFor := func(candidate string) string {
+		key := e.tableKey(candidate)
+		if alias := aliases[key]; alias != "" {
+			return alias
+		}
+		alias := "__nb_" + sanitizeAliasSuffix(candidate)
+		aliases[key] = alias
+		return alias
+	}
+	var from strings.Builder
+	fmt.Fprintf(&from, "%s AS %s", e.sqlTable(primary), aliasFor(primary))
+	if len(tables) > 1 && e.Schema != nil {
+		jp, err := semantic.InferJoinPath(e.Schema, tables)
+		if err != nil {
+			return "", err
+		}
+		for _, step := range jp.Steps {
+			fmt.Fprintf(&from, "\nLEFT JOIN %s AS %s ON %s.%s = %s.%s",
+				e.sqlTable(step.Table), aliasFor(step.Table),
+				aliasFor(step.FromTable), step.OnFromCol, aliasFor(step.Table), step.OnToCol)
+		}
+	}
+
+	popBindings := e.pushSQLBindings(aliases)
+	defer popBindings()
+	value, err := e.emitExpr(expr)
+	if err != nil {
+		return "", err
+	}
+	var conds []string
+	for _, gk := range e.groupCtx.keys {
+		if innerAlias := aliases[e.tableKey(gk.table)]; innerAlias != "" {
+			outer := gk.expr
+			if outer == "" {
+				outer = e.sqlTable(gk.table) + "." + gk.col
+			}
+			conds = append(conds, fmt.Sprintf("%s.%s = %s", innerAlias, gk.col, outer))
+		}
+	}
+	for _, pred := range e.groupCtx.preds {
+		if aliases[pred.table] == "" || pred.expr == nil {
+			continue
+		}
+		sql, err := e.emitExpr(pred.expr)
+		if err != nil {
+			return "", err
+		}
+		conds = append(conds, sql)
+	}
+	candidate := aliasFor(table) + "." + col
+	where := ""
+	if len(conds) > 0 {
+		where = " WHERE " + strings.Join(conds, " AND ")
+	}
+	return fmt.Sprintf("(SELECT MAX(candidate) FILTER (WHERE nonblank_value IS NOT NULL) FROM "+
+		"(SELECT %s AS candidate, %s AS nonblank_value FROM %s%s GROUP BY %s) AS __nb)",
+		candidate, value, from.String(), where, candidate), nil
+}
+
+func (e *Emitter) emitStandaloneLastNonBlank(table, col string, expr *parser.Expr) (string, error) {
+	tables := append([]string{table}, e.measureExprTables(expr)...)
+	seen := map[string]bool{}
+	unique := tables[:0]
+	for _, t := range tables {
+		key := e.tableKey(t)
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, t)
+		}
+	}
+	from, err := e.calcFromClause(unique)
+	if err != nil {
+		return "", err
+	}
+	value, err := e.emitExpr(expr)
+	if err != nil {
+		return "", err
+	}
+	candidate := e.sqlTable(table) + "." + col
+	return fmt.Sprintf("(SELECT MAX(candidate) FILTER (WHERE nonblank_value IS NOT NULL) FROM "+
+		"(SELECT %s AS candidate, %s AS nonblank_value FROM %s GROUP BY %s) AS __nb)",
+		candidate, value, from, candidate), nil
 }
 
 // emitTimeIntelTable emits a range-family function as a standalone table
@@ -402,7 +577,10 @@ func literalNumber(expr *parser.Expr) (float64, bool) {
 	if t.Literal == nil || t.Literal.Number == nil {
 		return 0, false
 	}
-	v := *t.Literal.Number
+	v, err := strconv.ParseFloat(*t.Literal.Number, 64)
+	if err != nil {
+		return 0, false
+	}
 	if t.Neg {
 		v = -v
 	}

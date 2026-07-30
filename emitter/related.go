@@ -85,10 +85,10 @@ func (e *Emitter) findRelationship(match func(*semantic.Relationship) bool, fn, 
 	}
 	// Disambiguate using the active row context.
 	for _, r := range candidates {
-		if _, ok := e.rowCtx.ResolveAlias(r.FromTable); ok {
+		if _, ok := e.rowCtx.ResolveAlias(e.tableKey(r.FromTable)); ok {
 			return r, nil
 		}
-		if _, ok := e.rowCtx.ResolveAlias(r.ToTable); ok {
+		if _, ok := e.rowCtx.ResolveAlias(e.tableKey(r.ToTable)); ok {
 			return r, nil
 		}
 	}
@@ -99,7 +99,7 @@ func (e *Emitter) findRelationship(match func(*semantic.Relationship) bool, fn, 
 // row-context alias inside iterators, or the table identifier itself when the
 // enclosing FROM clause exposes it directly (FILTER, ADDCOLUMNS, GENERATE).
 func (e *Emitter) rowRef(table string) string {
-	if alias, ok := e.rowCtx.ResolveAlias(table); ok {
+	if alias, ok := e.rowCtx.ResolveAlias(e.tableKey(table)); ok {
 		return alias
 	}
 	return e.sqlTable(table)

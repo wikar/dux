@@ -19,3 +19,17 @@ func TestParseNegativeNumbers(t *testing.T) {
 		}
 	}
 }
+
+func TestParseExactAndEscapedSyntax(t *testing.T) {
+	queries := []string{
+		`EVALUATE ROW("N", 9007199254740993, "S", "say ""hello""")`,
+		`EVALUATE ROW("X", "a" & "b", "P", 2 ^ 3)`,
+		`EVALUATE TOPN(2, sales, sales[amount], ASC, sales[id], DESC)`,
+		`EVALUATE FILTER('Owner''s Sales', 'Owner''s Sales'[Gross]]Amount] > 0)`,
+	}
+	for _, query := range queries {
+		if _, err := parser.Parse(query); err != nil {
+			t.Errorf("Parse(%q): %v", query, err)
+		}
+	}
+}

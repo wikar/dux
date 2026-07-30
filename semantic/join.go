@@ -7,8 +7,8 @@
 package semantic
 
 import (
+	"errors"
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 )
@@ -32,6 +32,18 @@ type JoinStep struct {
 	// Bidirectional indicates that this edge was declared bidirectional in the
 	// schema.
 	Bidirectional bool
+}
+
+// AmbiguousPathError identifies a relationship path that cannot be chosen
+// deterministically. It unwraps to SemanticError for normal query positioning.
+type AmbiguousPathError struct{ err *SemanticError }
+
+func (e *AmbiguousPathError) Error() string { return e.err.Error() }
+func (e *AmbiguousPathError) Unwrap() error { return e.err }
+
+func IsAmbiguousPath(err error) bool {
+	var target *AmbiguousPathError
+	return errors.As(err, &target)
 }
 
 // LeafEdge returns the single step attaching table to the rest of this join
@@ -65,7 +77,6 @@ func InferJoinPath(schema *Schema, tables []string) (*JoinPath, error) {
 	if len(tables) <= 1 {
 		return &JoinPath{}, nil
 	}
-
 	primary, err := resolveTableStrict(schema, tables[0])
 	if err != nil {
 		return nil, err
@@ -121,12 +132,16 @@ func bfsJoin(schema *Schema, from, to string) ([]JoinStep, error) {
 		steps []JoinStep
 	}
 
-	visited := map[string]bool{strings.ToLower(from): true}
+	bestDepth := map[string]int{strings.ToLower(from): 0}
 	queue := []state{{table: from}}
+	var found []JoinStep
 
 	for len(queue) > 0 {
 		curr := queue[0]
 		queue = queue[1:]
+		if found != nil && len(curr.steps) >= len(found) {
+			continue
+		}
 
 		for _, rel := range schema.Relationships {
 			var nextRaw, fromCol, toCol string
@@ -150,11 +165,6 @@ func bfsJoin(schema *Schema, from, to string) ([]JoinStep, error) {
 				return nil, err
 			}
 			nextLower := strings.ToLower(nextTable)
-			if visited[nextLower] {
-				continue
-			}
-			visited[nextLower] = true
-
 			step := JoinStep{
 				FromTable:     curr.table,
 				Table:         nextTable,
@@ -168,10 +178,22 @@ func bfsJoin(schema *Schema, from, to string) ([]JoinStep, error) {
 			newSteps[len(curr.steps)] = step
 
 			if tableNamesMatch(nextTable, to) {
-				return newSteps, nil
+				if found != nil && len(found) == len(newSteps) {
+					return nil, &AmbiguousPathError{err: &SemanticError{Message: fmt.Sprintf("ambiguous relationship path between tables %q and %q; qualify the model with a single path", from, to)}}
+				}
+				found = newSteps
+				continue
 			}
+			depth := len(newSteps)
+			if previous, ok := bestDepth[nextLower]; ok && previous < depth {
+				continue
+			}
+			bestDepth[nextLower] = depth
 			queue = append(queue, state{table: nextTable, steps: newSteps})
 		}
+	}
+	if found != nil {
+		return found, nil
 	}
 
 	return nil, &SemanticError{
@@ -253,6 +275,45 @@ func FilterReaches(schema *Schema, src string, targets []string) bool {
 	return false
 }
 
+// GroupingReaches reports whether a group filter reaches any target using only
+// declared one-to-many propagation (dimension/ToTable → fact/FromTable).
+// Bidirectional reverse traversal is intentionally excluded: the emitter's
+// grouped LEFT JOIN shape cannot represent that filter without possible
+// many-side fan-out.
+func GroupingReaches(schema *Schema, src string, targets []string) bool {
+	targetSet := map[string]bool{}
+	for _, target := range targets {
+		targetSet[strings.ToLower(ResolveTable(schema, target))] = true
+	}
+	src = ResolveTable(schema, src)
+	if targetSet[strings.ToLower(src)] {
+		return true
+	}
+
+	visited := map[string]bool{strings.ToLower(src): true}
+	queue := []string{src}
+	for len(queue) > 0 {
+		curr := queue[0]
+		queue = queue[1:]
+		for _, rel := range schema.Relationships {
+			if !tableNamesMatch(rel.ToTable, curr) {
+				continue
+			}
+			next := ResolveTable(schema, rel.FromTable)
+			nl := strings.ToLower(next)
+			if visited[nl] {
+				continue
+			}
+			if targetSet[nl] {
+				return true
+			}
+			visited[nl] = true
+			queue = append(queue, next)
+		}
+	}
+	return false
+}
+
 // ResolveTable returns the canonical schema key for name: exact
 // case-insensitive match first, then bare-name suffix match for unqualified
 // names. Returns name unchanged if no schema entry is found. Used across the
@@ -310,130 +371,39 @@ func uniqueSlice(ss []string) []string {
 	return out
 }
 
-// ValidateBidiPaths checks that no two tables are reachable from each other
-// via more than one path once bidirectional edges are resolved as undirected.
-// An ambiguous schema causes non-deterministic CTE codegen and is rejected
-// with a SemanticError describing the conflicting paths.
-//
-// The algorithm builds the undirected reachability graph (all directed edges
-// are traversable in both directions; bidi edges just formalise this) and then
-// verifies that the edge set does not create a cycle — i.e. that the graph
-// remains a forest. Any cycle means two tables have multiple paths between them.
-func ValidateBidiPaths(schema *Schema) error {
-	// Only run when there is at least one bidi edge — unidirectional-only
-	// schemas cannot have the ambiguity problem.
-	if !slices.ContainsFunc(schema.Relationships, func(r *Relationship) bool { return r.Bidirectional }) {
-		return nil
-	}
-
-	// Collect all table names involved in any relationship.
-	tableSet := map[string]struct{}{}
-	for _, r := range schema.Relationships {
-		tableSet[strings.ToLower(r.FromTable)] = struct{}{}
-		tableSet[strings.ToLower(r.ToTable)] = struct{}{}
-	}
-
-	// For each ordered pair (src, dst) that appears in any relationship, use
-	// BFS over the undirected filter graph to count how many distinct shortest
-	// paths exist between all pairs of tables. Any pair with >1 path is ambiguous.
-	//
-	// Practical approach: for each pair of tables that can reach each other,
-	// remove one edge at a time from the undirected graph and check whether the
-	// two endpoints are still connected. If yes, there is an alternative path →
-	// ambiguous. This is the classic "check for bridge" inverse.
-	//
-	// Build adjacency list (undirected).
-	type edge struct {
-		to  string
-		rel *Relationship
-	}
-	adj := map[string][]edge{}
-	for _, r := range schema.Relationships {
-		fl := strings.ToLower(r.FromTable)
-		tl := strings.ToLower(r.ToTable)
-		adj[fl] = append(adj[fl], edge{to: tl, rel: r})
-		adj[tl] = append(adj[tl], edge{to: fl, rel: r})
-	}
-
-	// Normalise table names to the lower-case set we built.
-	norm := func(t string) string { return strings.ToLower(t) }
-
-	// reachable returns true if dst can be reached from src without using the
-	// excluded relationship.
-	reachable := func(src, dst string, exclude *Relationship) bool {
-		visited := map[string]bool{src: true}
-		q := []string{src}
-		for len(q) > 0 {
-			curr := q[0]
-			q = q[1:]
-			for _, e := range adj[curr] {
-				if e.rel == exclude {
-					continue
-				}
-				if !visited[e.to] {
-					if e.to == dst {
-						return true
-					}
-					visited[e.to] = true
-					q = append(q, e.to)
-				}
-			}
-		}
-		return false
-	}
-
-	// pathStr returns a human-readable description of the BFS path from src to
-	// dst excluding one relationship, for error messages.
-	pathStr := func(src, dst string, exclude *Relationship) string {
-		type state struct {
-			table string
-			path  []string
-		}
-		visited := map[string]bool{src: true}
-		q := []state{{src, []string{src}}}
-		for len(q) > 0 {
-			curr := q[0]
-			q = q[1:]
-			for _, e := range adj[curr.table] {
-				if e.rel == exclude {
-					continue
-				}
-				if !visited[e.to] {
-					newPath := append(append([]string{}, curr.path...), e.to)
-					if e.to == dst {
-						return strings.Join(newPath, " → ")
-					}
-					visited[e.to] = true
-					q = append(q, state{e.to, newPath})
-				}
-			}
-		}
-		return src + " → ... → " + dst
-	}
-
-	// For every bidi edge: if both endpoints can still reach each other when
-	// that edge is excluded, the graph is ambiguous.
+// ValidateFilterPaths rejects a bidirectional edge when another relationship
+// path already connects its endpoints, making filter propagation ambiguous.
+func ValidateFilterPaths(schema *Schema) error {
 	for _, r := range schema.Relationships {
 		if !r.Bidirectional {
 			continue
 		}
-		fl := norm(r.FromTable)
-		tl := norm(r.ToTable)
-		if reachable(fl, tl, r) {
-			// Describe the two conflicting paths.
-			directPath := fmt.Sprintf("%s ↔ %s (bidi edge)", r.FromTable, r.ToTable)
-			altPath := pathStr(fl, tl, r)
-			// Collect all tables for a stable sort in the error message.
-			tables := []string{r.FromTable, r.ToTable}
-			sort.Strings(tables)
+		src, dst := strings.ToLower(r.FromTable), strings.ToLower(r.ToTable)
+		seen := map[string]bool{src: true}
+		queue := []string{src}
+		for len(queue) > 0 {
+			current := queue[0]
+			queue = queue[1:]
+			for _, other := range schema.Relationships {
+				if other == r {
+					continue
+				}
+				from, to := strings.ToLower(other.FromTable), strings.ToLower(other.ToTable)
+				next := ""
+				if from == current {
+					next = to
+				} else if to == current {
+					next = from
+				}
+				if next != "" && !seen[next] {
+					seen[next] = true
+					queue = append(queue, next)
+				}
+			}
+		}
+		if seen[dst] {
 			return &SemanticError{
-				Message: fmt.Sprintf(
-					"ambiguous filter graph: tables %q and %q are connected by more than one path:\n"+
-						"  [1] %s\n"+
-						"  [2] %s\n"+
-						"remove one of the conflicting relationships or set bidirectional = false",
-					tables[0], tables[1], directPath, altPath,
-				),
+				Message: fmt.Sprintf("ambiguous relationship graph: %q and %q are connected by more than one path; remove one of the conflicting relationships", r.FromTable, r.ToTable),
 			}
 		}
 	}

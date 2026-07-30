@@ -1,10 +1,6 @@
 // Declarative DAX → DuckDB scalar function mapping.
 //
-// Most DAX scalar functions translate 1:1 (or nearly) to DuckDB built-ins.
-// Functions whose DuckDB spelling is identical (ABS, ROUND, SQRT, UPPER, ...)
-// flow through emitPassthrough untouched; this table covers the ones that
-// need renaming, argument reshuffling, or semantic adjustment. Entries are
-// consulted by emitFuncCall before falling back to passthrough.
+// DAX scalar functions either map here or appear in identityFuncs below.
 package emitter
 
 import (
@@ -34,6 +30,25 @@ func tmpl(minArgs, maxArgs int, pattern string) scalarFn {
 			return out, nil
 		},
 	}
+}
+
+func identity(minArgs, maxArgs int) scalarFn {
+	return scalarFn{minArgs: minArgs, maxArgs: maxArgs, emit: func(_ *Emitter, fc *parser.FuncCall, args []string) (string, error) {
+		return strings.ToUpper(fc.Name) + "(" + strings.Join(args, ", ") + ")", nil
+	}}
+}
+
+var identityFuncs = map[string]scalarFn{
+	"ABS":      identity(1, 1),
+	"COALESCE": identity(2, 64),
+	"EXP":      identity(1, 1),
+	"LN":       identity(1, 1),
+	"LOWER":    identity(1, 1),
+	"PI":       identity(0, 0),
+	"ROUND":    identity(2, 2),
+	"SIGN":     identity(1, 1),
+	"SQRT":     identity(1, 1),
+	"UPPER":    identity(1, 1),
 }
 
 var scalarFuncs = map[string]scalarFn{
@@ -82,10 +97,23 @@ var scalarFuncs = map[string]scalarFn{
 	"SUBSTITUTE":  {minArgs: 3, maxArgs: 4, emit: emitSubstitute},
 	"CONCATENATE": {minArgs: 2, maxArgs: 64, emit: emitConcatN},
 	"FORMAT":      {minArgs: 2, maxArgs: 2, emit: emitFormat},
+	"LEFT":        {minArgs: 1, maxArgs: 2, emit: emitLeftRight("left")},
+	"RIGHT":       {minArgs: 1, maxArgs: 2, emit: emitLeftRight("right")},
+	"TRIM":        tmpl(1, 1, "regexp_replace(trim(CAST({1} AS VARCHAR)), ' +', ' ', 'g')"),
 
 	// ── Logical ─────────────────────────────────────────────────────────────
 	"TRUE":  tmpl(0, 0, "TRUE"),
 	"FALSE": tmpl(0, 0, "FALSE"),
+}
+
+func emitLeftRight(name string) func(*Emitter, *parser.FuncCall, []string) (string, error) {
+	return func(_ *Emitter, _ *parser.FuncCall, args []string) (string, error) {
+		length := "1"
+		if len(args) == 2 {
+			length = args[1]
+		}
+		return fmt.Sprintf("%s(CAST(%s AS VARCHAR), %s)", name, args[0], length), nil
+	}
 }
 
 // emitScalarMapped validates arity, emits the arguments, and applies the
@@ -93,9 +121,9 @@ var scalarFuncs = map[string]scalarFn{
 func (e *Emitter) emitScalarMapped(name string, fn scalarFn, fc *parser.FuncCall) (string, error) {
 	if len(fc.Args) < fn.minArgs || len(fc.Args) > fn.maxArgs {
 		if fn.minArgs == fn.maxArgs {
-			return "", fmt.Errorf("%s requires exactly %d argument(s)", name, fn.minArgs)
+			return "", functionError(fc, fmt.Sprintf("%s requires exactly %d argument(s)", name, fn.minArgs))
 		}
-		return "", fmt.Errorf("%s requires between %d and %d arguments", name, fn.minArgs, fn.maxArgs)
+		return "", functionError(fc, fmt.Sprintf("%s requires between %d and %d arguments", name, fn.minArgs, fn.maxArgs))
 	}
 	args := make([]string, len(fc.Args))
 	for i, a := range fc.Args {

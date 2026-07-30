@@ -194,6 +194,30 @@ func TestExecute_Aggregation(t *testing.T) {
 	})
 }
 
+func TestQualifiedColumnsAndSourceCorrelation(t *testing.T) {
+	db, schema := setupTestDB(t)
+
+	t.Run("shared_column_name", func(t *testing.T) {
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(products[product], "Sales", SUM(sales[amount]))`)
+		if len(rows) != 3 {
+			t.Fatalf("rows = %v, want 3 products", rows)
+		}
+	})
+
+	t.Run("addcolumns_calculate", func(t *testing.T) {
+		_, rows := run(t, db, schema, `EVALUATE ADDCOLUMNS(
+			products,
+			"Sales", CALCULATE(SUM(sales[amount]), sales[product] = products[product]))`)
+		want := map[string]float64{"Widget": 250, "Gadget": 450, "Doohickey": 125}
+		for _, row := range rows {
+			product, _ := row["product"].(string)
+			if got := toFloat(row["Sales"]); got != want[product] {
+				t.Errorf("%s Sales = %v, want %v", product, got, want[product])
+			}
+		}
+	})
+}
+
 // ─── Iterator functions ───────────────────────────────────────────────────────
 
 func TestExecute_PositionedErrors(t *testing.T) {
@@ -465,17 +489,16 @@ func TestExecute_FilterContext(t *testing.T) {
 			sales[region],
 			"BigQty", CALCULATE(SUM(sales[amount]), sales[qty] > 2)
 		)`)
-		if len(rows) != 2 {
-			t.Fatalf("expected 2 rows, got %d", len(rows))
+		if len(rows) != 1 {
+			t.Fatalf("expected only the non-BLANK row, got %d", len(rows))
 		}
 		totals := map[string]float64{}
 		for _, row := range rows {
 			region, _ := row["region"].(string)
 			totals[region] = toFloat(row["BigQty"])
 		}
-		if totals["North"] != 0 {
-			// North has no rows with qty > 2, so FILTER excludes all → NULL (mapped to 0)
-			t.Errorf("North CALCULATE SUM: expected 0, got %v", totals["North"])
+		if _, ok := totals["North"]; ok {
+			t.Errorf("North should be pruned because its only expression is BLANK")
 		}
 		if totals["South"] != 400 {
 			t.Errorf("South CALCULATE SUM: expected 400, got %v", totals["South"])

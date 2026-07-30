@@ -177,27 +177,27 @@ func ExecuteFilteredContext(ctx context.Context, db *sql.DB, schema *semantic.Sc
 	for _, v := range q.Evaluate.Vars {
 		isTable, err := em.IsTableExpr(v.Expr)
 		if err != nil {
-			return nil, nil, fmt.Errorf("classify VAR %s: %w", v.Name, err)
+			return nil, nil, queryErr("emit", fmt.Errorf("classify VAR %s: %w", v.Name, err))
 		}
 
 		if isTable {
 			createSQL, err := em.EmitVarCreate(v.Name, v.Expr)
 			if err != nil {
-				return nil, nil, fmt.Errorf("emit VAR %s: %w", v.Name, err)
+				return nil, nil, queryErr("emit", fmt.Errorf("VAR %s: %w", v.Name, err))
 			}
 			if _, err := conn.ExecContext(ctx, createSQL); err != nil {
-				return nil, nil, fmt.Errorf("create temp table for VAR %s: %w", v.Name, err)
+				return nil, nil, queryErr("execute", fmt.Errorf("create temp table for VAR %s: %w", v.Name, err))
 			}
 			created = append(created, v.Name)
 		} else {
 			scalarSQL, err := em.EmitScalarQuery(v.Expr)
 			if err != nil {
-				return nil, nil, fmt.Errorf("emit scalar VAR %s: %w", v.Name, err)
+				return nil, nil, queryErr("emit", fmt.Errorf("scalar VAR %s: %w", v.Name, err))
 			}
 			row := conn.QueryRowContext(ctx, scalarSQL)
 			var val any
 			if err := row.Scan(&val); err != nil {
-				return nil, nil, fmt.Errorf("execute scalar VAR %s: %w", v.Name, err)
+				return nil, nil, queryErr("execute", fmt.Errorf("scalar VAR %s: %w", v.Name, err))
 			}
 			em.ScalarVars[strings.ToLower(v.Name)] = val
 		}

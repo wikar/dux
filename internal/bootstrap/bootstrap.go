@@ -93,7 +93,7 @@ func (r *Runtime) RefreshSchema() (schema *semantic.Schema, err error) {
 	if err := semantic.LoadDuxTOML(r.TOMLPath, schema); err != nil {
 		return nil, fmt.Errorf("load dux.toml: %w", err)
 	}
-	if err := semantic.ValidateBidiPaths(schema); err != nil {
+	if err := semantic.ValidateFilterPaths(schema); err != nil {
 		return nil, fmt.Errorf("schema validation: %w", err)
 	}
 	warning = schemaReferenceWarning(schema)

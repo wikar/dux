@@ -770,9 +770,9 @@ See [`samples/`](samples/) for more examples.
 | `AVERAGE(T[C])` | Mean of a column |
 | `COUNT(T[C])` | Count of non-blank values |
 | `COUNTA(T[C])` | Alias for `COUNT` |
-| `COUNTBLANK(T[C])` | Count of blank (NULL) values |
+| `COUNTBLANK(T[C])` | Count of blank (NULL) values; returns BLANK over no rows |
 | `COUNTROWS(T)` | Row count of a table |
-| `DISTINCTCOUNT(T[C])` | Count of distinct values |
+| `DISTINCTCOUNT(T[C])` | Count of distinct values, including BLANK; returns BLANK over no rows |
 | `MIN(T[C])` | Minimum value |
 | `MAX(T[C])` | Maximum value |
 | `MEDIAN(T[C])` | Median value |
@@ -794,16 +794,16 @@ These evaluate an expression row-by-row over a table.
 
 | Function | Description |
 |----------|-------------|
-| `SUMMARIZECOLUMNS(cols..., "Name", expr...)` | Group-by aggregation |
+| `SUMMARIZECOLUMNS(cols..., "Name", expr...)` | Group-by aggregation; rows whose expressions are all BLANK are omitted |
 | `ROLLUPADDISSUBTOTAL(col, "IsSubtotal", ...)` | Group argument adding subtotal rows; the named boolean column is TRUE on subtotal rows (compiles to `GROUPING SETS`) |
 | `ROLLUPGROUP(c1, c2, ...)` | Roll several columns up as one unit inside `ROLLUPADDISSUBTOTAL` |
 | `FILTER(T, predicate)` | Rows of `T` matching a predicate |
 | `ADDCOLUMNS(T, "Name", expr...)` | Add computed columns to a table |
 | `SELECTCOLUMNS(T, "Name", expr...)` | Project to named computed columns |
-| `TOPN(n, T, expr)` | Top `n` rows of `T` ordered by `expr` descending |
+| `TOPN(n, T, expr [, order]...)` | Top rows with DAX tie handling; each key defaults to `DESC` |
 | `UNION(T1, T2)` | Union of two tables (duplicates included) |
-| `INTERSECT(T1, T2)` | Rows present in both tables |
-| `EXCEPT(T1, T2)` | Rows in `T1` not in `T2` |
+| `INTERSECT(T1, T2)` | Matching rows, retaining duplicates from `T1` |
+| `EXCEPT(T1, T2)` | Non-matching rows, retaining duplicates from `T1` |
 | `VALUES(T[C])` | Distinct values of a column as a table |
 | `DISTINCT(T[C])` | Alias for `VALUES` |
 | `CROSSJOIN(T1, T2, ...)` | Cartesian product of two or more tables |
@@ -914,11 +914,11 @@ On a designated date table, time-intelligence functions clear **all** filters on
 
 ### Scalar function library
 
-DAX scalar functions are translated to DuckDB built-ins — either passed through directly when the spelling matches (`ABS`, `ROUND`, `SQRT`, `UPPER`, `LOWER`, `TRIM`, `LEFT`, `RIGHT`, `COALESCE`, …) or mapped when the semantics differ:
+DAX scalar functions are translated to DuckDB built-ins only when their behavior is implemented deliberately. Identity mappings are `ABS`, `COALESCE`, `EXP`, `LN`, `LOWER`, `PI`, `ROUND`, `SIGN`, `SQRT`, and `UPPER`; unknown function names are DUX errors rather than DuckDB passthroughs.
 
 - **Date/time** — `YEAR`, `MONTH`, `DAY`, `HOUR`, `MINUTE`, `SECOND`, `QUARTER`, `WEEKDAY` (types 1–3), `WEEKNUM`, `EOMONTH`, `EDATE`, `TODAY`, `NOW`, `DATE`, `TIME`, `DATEVALUE`, `DATEDIFF`
 - **Math** — `INT`, `MOD` (Excel sign semantics), `POWER`, `ROUNDUP`, `ROUNDDOWN`, `TRUNC`, `CEILING`/`FLOOR` (significance form), `LOG` (default base 10)
-- **Text** — `LEN`, `MID`, `SUBSTITUTE`, `REPLACE`, `CONCATENATE`, `SEARCH` (case-insensitive), `FIND`, `REPT`, `UNICHAR`, `EXACT`, `VALUE`, `FORMAT`
+- **Text** — `LEN`, `LEFT`, `RIGHT`, `MID`, `TRIM`, `SUBSTITUTE`, `REPLACE`, `CONCATENATE`, `SEARCH` (case-insensitive), `FIND`, `REPT`, `UNICHAR`, `EXACT`, `VALUE`, `FORMAT`
 
 `FORMAT` supports named formats (`"Percent"`, `"Fixed"`, `"Standard"`, `"Scientific"`, `"General Number"`), date patterns (`"yyyy-MM-dd"`, `"MMM d"`, …), and numeric masks (`"0.00"`, `"#,##0.00"`); the format string must be a literal.
 

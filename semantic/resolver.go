@@ -34,6 +34,10 @@ type Resolver struct {
 	// Tables with these names are accepted by the resolver without requiring a
 	// schema entry, because they are materialised as temp tables at execution time.
 	varNames map[string]bool
+	// allowBareColumns is limited to predicates/order keys over computed tables,
+	// whose output columns are not part of the semantic model.
+	allowBareColumns bool
+	measureState     map[*parser.MeasureDefinition]uint8
 }
 
 // Resolve runs the full semantic pass: measure pre-resolution followed by the
@@ -45,6 +49,10 @@ func (r *Resolver) Resolve(q *parser.Query) error {
 	// Clone the global store so per-query defines layer on top without leaking.
 	r.localMeasures = cloneMeasures(r.Schema.Measures)
 	if err := PreResolveMeasures(q.Defines, r.localMeasures); err != nil {
+		return err
+	}
+	r.measureState = map[*parser.MeasureDefinition]uint8{}
+	if err := r.resolveMeasures(q.Defines); err != nil {
 		return err
 	}
 	// Collect VAR names so the resolver can accept them as valid table references
@@ -74,8 +82,8 @@ func (r *Resolver) EffectiveMeasures() map[string]map[string]*parser.MeasureDefi
 func FindMeasureByName(name string, measures map[string]map[string]*parser.MeasureDefinition) (*parser.MeasureDefinition, error) {
 	var found *parser.MeasureDefinition
 	var foundTable string
-	for table, defs := range measures {
-		if def, ok := defs[name]; ok {
+	for table := range measures {
+		if def := FindMeasure(table, name, measures); def != nil {
 			if found != nil {
 				return nil, &SemanticError{
 					Message: fmt.Sprintf(
@@ -91,6 +99,21 @@ func FindMeasureByName(name string, measures map[string]map[string]*parser.Measu
 	return found, nil
 }
 
+// FindMeasure resolves a table-qualified measure case-insensitively.
+func FindMeasure(table, name string, measures map[string]map[string]*parser.MeasureDefinition) *parser.MeasureDefinition {
+	for tableKey, defs := range measures {
+		if !strings.EqualFold(tableKey, table) {
+			continue
+		}
+		for measureName, def := range defs {
+			if strings.EqualFold(measureName, name) {
+				return def
+			}
+		}
+	}
+	return nil
+}
+
 // PreResolveMeasures registers and resolves all DEFINE MEASURE declarations
 // into target. target is the Resolver's per-query localMeasures overlay (which
 // starts as a clone of Schema.Measures), so the shared Schema is never mutated.
@@ -103,6 +126,12 @@ func PreResolveMeasures(defines []*parser.MeasureDefinition, target map[string]m
 	// guarantee that bare [MeasureName] references are unambiguous.
 	for _, def := range defines {
 		table := StripSingleQuotes(def.Table)
+		for existingTable := range target {
+			if strings.EqualFold(existingTable, table) {
+				table = existingTable
+				break
+			}
+		}
 		name := StripBrackets(def.Column)
 		if existingTable, conflicts := MeasureNameConflict(target, table, name); conflicts {
 			return &SemanticError{
@@ -112,7 +141,98 @@ func PreResolveMeasures(defines []*parser.MeasureDefinition, target map[string]m
 		if target[table] == nil {
 			target[table] = make(map[string]*parser.MeasureDefinition)
 		}
-		target[table][name] = def
+		storedName := name
+		for existingName := range target[table] {
+			if strings.EqualFold(existingName, name) {
+				storedName = existingName
+				break
+			}
+		}
+		target[table][storedName] = def
+	}
+	return nil
+}
+
+// resolveMeasures validates the complete global + query-local dependency graph
+// before the emitter expands any definition.
+func (r *Resolver) resolveMeasures(definitions []*parser.MeasureDefinition) error {
+	var visit func(*parser.MeasureDefinition) error
+	visit = func(def *parser.MeasureDefinition) error {
+		switch r.measureState[def] {
+		case 1:
+			return &SemanticError{Message: fmt.Sprintf("circular measure reference involving %s%s", def.Table, def.Column)}
+		case 2:
+			return nil
+		}
+		r.measureState[def] = 1
+		if err := r.resolveMeasureExpr(def.Expr, visit); err != nil {
+			return err
+		}
+		r.measureState[def] = 2
+		return nil
+	}
+	for _, def := range definitions {
+		if err := visit(def); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Resolver) resolveMeasureExpr(expr *parser.Expr, visit func(*parser.MeasureDefinition) error) error {
+	if expr == nil {
+		return nil
+	}
+	terms := []*parser.Term{expr.Left}
+	for _, op := range expr.Right {
+		terms = append(terms, op.Right)
+	}
+	for _, term := range terms {
+		if term == nil {
+			continue
+		}
+		if term.ColRef != nil {
+			cr := term.ColRef
+			name := StripBrackets(cr.Column)
+			var def *parser.MeasureDefinition
+			if cr.Table == "" {
+				var err error
+				def, err = FindMeasureByName(name, r.localMeasures)
+				if err != nil {
+					return err
+				}
+				if def == nil {
+					return &SemanticError{Message: fmt.Sprintf("unknown measure %q", name), Line: cr.Pos.Line, Column: cr.Pos.Column}
+				}
+			} else {
+				def = FindMeasure(StripSingleQuotes(cr.Table), name, r.localMeasures)
+				if def == nil {
+					if err := r.resolveColRef(cr); err != nil {
+						return err
+					}
+					continue
+				}
+			}
+			if err := visit(def); err != nil {
+				var semanticErr *SemanticError
+				if errors.As(err, &semanticErr) && semanticErr.Line == 0 {
+					semanticErr.Line, semanticErr.Column = cr.Pos.Line, cr.Pos.Column
+				}
+				return err
+			}
+		}
+		if term.FuncCall != nil {
+			for _, arg := range term.FuncCall.Args {
+				if err := r.resolveMeasureExpr(arg, visit); err != nil {
+					return err
+				}
+			}
+		}
+		if term.SubExpr != nil {
+			if err := r.resolveMeasureExpr(term.SubExpr, visit); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -122,11 +242,13 @@ func PreResolveMeasures(defines []*parser.MeasureDefinition, target map[string]m
 // tables so that bare [MeasureName] references stay unambiguous.
 func MeasureNameConflict(measures map[string]map[string]*parser.MeasureDefinition, table, name string) (string, bool) {
 	for existingTable, defs := range measures {
-		if existingTable == table {
+		if strings.EqualFold(existingTable, table) {
 			continue
 		}
-		if _, conflicts := defs[name]; conflicts {
-			return existingTable, true
+		for existingName := range defs {
+			if strings.EqualFold(existingName, name) {
+				return existingTable, true
+			}
 		}
 	}
 	return "", false
@@ -234,7 +356,23 @@ func (r *Resolver) resolveTerm(t *parser.Term) error {
 // resolveFuncCall resolves a function call's argument expressions. Arity is
 // validated by the emitter.
 func (r *Resolver) resolveFuncCall(fc *parser.FuncCall) error {
-	for _, arg := range fc.Args {
+	for i, arg := range fc.Args {
+		// TOPN order keys over computed tables name output columns, not model
+		// measures. The emitter validates their shape against the table result.
+		if strings.EqualFold(fc.Name, "TOPN") && i >= 2 && arg != nil && arg.Left != nil &&
+			arg.Left.ColRef != nil && arg.Left.ColRef.Table == "" && len(arg.Right) == 0 {
+			continue
+		}
+		if strings.EqualFold(fc.Name, "FILTER") && i == 1 {
+			prev := r.allowBareColumns
+			r.allowBareColumns = true
+			err := r.resolveExpr(arg)
+			r.allowBareColumns = prev
+			if err != nil {
+				return err
+			}
+			continue
+		}
 		if err := r.resolveExpr(arg); err != nil {
 			return err
 		}
@@ -248,9 +386,12 @@ func (r *Resolver) resolveFuncCall(fc *parser.FuncCall) error {
 // measure it is treated as a plain column reference (deferred to runtime).
 func (r *Resolver) resolveColRef(cr *parser.ColRef) error {
 	if cr.Table == "" {
+		if r.allowBareColumns {
+			return nil
+		}
 		// Try bare measure lookup first.
 		name := StripBrackets(cr.Column)
-		_, err := FindMeasureByName(name, r.localMeasures)
+		def, err := FindMeasureByName(name, r.localMeasures)
 		if err != nil {
 			// Ambiguous — anchor the error to this reference.
 			var se *SemanticError
@@ -259,9 +400,10 @@ func (r *Resolver) resolveColRef(cr *parser.ColRef) error {
 			}
 			return err
 		}
-		// Whether or not it's a measure, we don't error — a bare column ref
-		// without a table qualifier is resolved at runtime against the active scope.
-		return nil
+		if def == nil {
+			return &SemanticError{Message: fmt.Sprintf("unknown measure %q", name), Line: cr.Pos.Line, Column: cr.Pos.Column}
+		}
+		return r.resolveMeasures([]*parser.MeasureDefinition{def})
 	}
 	tableName := StripSingleQuotes(cr.Table)
 	// VAR-declared names are not in the schema but are valid at execution time.
@@ -271,22 +413,20 @@ func (r *Resolver) resolveColRef(cr *parser.ColRef) error {
 	col := StripBrackets(cr.Column)
 	// Check the measure store before the column list — Table[MeasureName] is
 	// valid when the name is a declared measure in that table.
-	if tableMeasures, ok := r.localMeasures[tableName]; ok {
-		if _, isMeasure := tableMeasures[col]; isMeasure {
-			return nil
-		}
+	if def := FindMeasure(tableName, col, r.localMeasures); def != nil {
+		return r.resolveMeasures([]*parser.MeasureDefinition{def})
 	}
 	// Look up the table in the schema. Accept both the bare name and the
 	// qualified name (db.table) transparently.
-	t, ok := r.Schema.Tables[tableName]
-	if !ok {
+	t, _, canonicalCol := r.Schema.FindColumn(tableName, col)
+	if t == nil {
 		return &SemanticError{
 			Message: fmt.Sprintf("unknown table %q", tableName),
 			Line:    cr.Pos.Line,
 			Column:  cr.Pos.Column,
 		}
 	}
-	if _, ok := t.Columns[col]; !ok {
+	if canonicalCol == "" {
 		return &SemanticError{
 			Message: fmt.Sprintf("unknown column %q in table %q", col, tableName),
 			Line:    cr.Pos.Line,
@@ -320,7 +460,7 @@ func (r *Resolver) tableExists(tableName string) bool {
 //	"[Total Revenue]" → "Total Revenue"
 func StripBrackets(s string) string {
 	if len(s) >= 2 && s[0] == '[' && s[len(s)-1] == ']' {
-		return s[1 : len(s)-1]
+		return strings.ReplaceAll(s[1:len(s)-1], "]]", "]")
 	}
 	return s
 }
@@ -331,7 +471,7 @@ func StripBrackets(s string) string {
 //	"Sales"         → "Sales"  (no-op for unquoted names)
 func StripSingleQuotes(s string) string {
 	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' {
-		return s[1 : len(s)-1]
+		return strings.ReplaceAll(s[1:len(s)-1], "''", "'")
 	}
 	return s
 }

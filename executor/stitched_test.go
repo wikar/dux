@@ -10,6 +10,7 @@ package executor_test
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -86,6 +87,101 @@ func setupMultiTableDB(t *testing.T) (*sql.DB, *semantic.Schema) {
 	return db, schema
 }
 
+func setupBidiBridgeDB(t *testing.T) (*sql.DB, *semantic.Schema) {
+	t.Helper()
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatalf("open duckdb: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	ddl := []string{
+		`CREATE TABLE clubs (clubkey INTEGER, style VARCHAR, name VARCHAR)`,
+		`INSERT INTO clubs VALUES (100, 'Beer', 'A'), (101, 'Beer', 'B'), (102, 'Wine', 'C')`,
+		`CREATE TABLE memberships (clubkey INTEGER, customerkey INTEGER)`,
+		`INSERT INTO memberships VALUES (100, 1), (100, 1), (100, 2), (101, 1), (102, 3)`,
+		`CREATE TABLE customers (customerkey INTEGER)`,
+		`INSERT INTO customers VALUES (1), (2), (3)`,
+		`CREATE TABLE dates (year INTEGER)`,
+		`INSERT INTO dates VALUES (2024), (2025)`,
+		`CREATE TABLE bidi_sales (customerkey INTEGER, year INTEGER, amount INTEGER, discount INTEGER)`,
+		`INSERT INTO bidi_sales VALUES (1, 2024, 10, 1), (2, 2024, 20, 2), (3, 2025, 30, 3)`,
+	}
+	for _, stmt := range ddl {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("setup: %v — %s", err, stmt)
+		}
+	}
+	schema, err := semantic.IntrospectDuckDB(db)
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	schema.Relationships = append(schema.Relationships,
+		&semantic.Relationship{FromTable: "memberships", FromColumn: "clubkey", ToTable: "clubs", ToColumn: "clubkey"},
+		&semantic.Relationship{FromTable: "memberships", FromColumn: "customerkey", ToTable: "customers", ToColumn: "customerkey", Bidirectional: true},
+		&semantic.Relationship{FromTable: "bidi_sales", FromColumn: "customerkey", ToTable: "customers", ToColumn: "customerkey"},
+		&semantic.Relationship{FromTable: "bidi_sales", FromColumn: "year", ToTable: "dates", ToColumn: "year"},
+	)
+	addMeasure(t, schema, "bidi_sales", "Net", `SUM(bidi_sales[amount]) - SUM(bidi_sales[discount])`)
+	return db, schema
+}
+
+func TestStitched_BidirectionalGroupKeyFiltersMeasure(t *testing.T) {
+	db, schema := setupBidiBridgeDB(t)
+	_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+		clubs[name],
+		"Net", bidi_sales[Net]
+	)`)
+	if len(rows) != 3 {
+		t.Fatalf("expected three clubs, got %d: %v", len(rows), rows)
+	}
+	want := map[string]float64{"A": 27, "B": 9, "C": 27}
+	for _, row := range rows {
+		name := cell(t, row, "name").(string)
+		if got := toFloat(cell(t, row, "Net")); got != want[name] {
+			t.Errorf("%s Net = %v, want %v", name, got, want[name])
+		}
+	}
+}
+
+func TestGroupOnlySlicerIgnoresExternalFilterFromAnotherTable(t *testing.T) {
+	db, schema := setupBidiBridgeDB(t)
+	_, rows := runFiltered(t, db, schema,
+		`EVALUATE SUMMARIZECOLUMNS(clubs[name])`,
+		[]executor.ExternalFilter{{Table: "dates", Column: "year", Op: "in", Values: []any{2024}}})
+	if len(rows) != 3 {
+		t.Fatalf("expected all three untrimmed Club options, got %d: %v", len(rows), rows)
+	}
+}
+
+func TestStitched_BidirectionalCalculateDoesNotFanOut(t *testing.T) {
+	db, schema := setupBidiBridgeDB(t)
+	_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+		"Amount", CALCULATE(SUM(bidi_sales[amount]), clubs[style] = "Beer"),
+		"Net", CALCULATE([Net], clubs[style] = "Beer"),
+		"OneClub", CALCULATE([Net], clubs[name] = "A")
+	)`)
+	if len(rows) != 1 {
+		t.Fatalf("expected one row, got %d: %v", len(rows), rows)
+	}
+	if got := toFloat(cell(t, rows[0], "Amount")); got != 30 {
+		t.Errorf("Amount = %v, want 30 (bridge fan-out would give 40)", got)
+	}
+	if got := toFloat(cell(t, rows[0], "Net")); got != 27 {
+		t.Errorf("Net = %v, want 27 (bridge fan-out would give 36)", got)
+	}
+	if got := toFloat(cell(t, rows[0], "OneClub")); got != 27 {
+		t.Errorf("OneClub = %v, want 27", got)
+	}
+}
+
+func TestStandaloneCalculateDoesNotFanOutAcrossBidirectionalBridge(t *testing.T) {
+	db, schema := setupBidiBridgeDB(t)
+	cols, rows := run(t, db, schema, `EVALUATE CALCULATE([Net], clubs[style] = "Beer")`)
+	if len(rows) != 1 || len(cols) != 1 || toFloat(rows[0][cols[0]]) != 27 {
+		t.Fatalf("standalone CALCULATE = %v, want Net 27", rows)
+	}
+}
+
 // rowByKey returns the row whose column k equals v.
 func rowByKey(t *testing.T, rows []map[string]any, k string, v int64) map[string]any {
 	t.Helper()
@@ -121,6 +217,25 @@ func TestStitched_MultiTableFanOut(t *testing.T) {
 	}
 	if got := toFloat(cell(t, r2025, "Returned")); got != 4 {
 		t.Errorf("2025 Returned = %v, want 4", got)
+	}
+}
+
+func TestCrossFactGroupKeyRejected(t *testing.T) {
+	db, schema := setupMultiTableDB(t)
+	_, _, err := executorExecute(db, schema, `EVALUATE SUMMARIZECOLUMNS(
+		fact_returns[datekey],
+		"Sold", SUM(fact_sales[qty]))`)
+	if err == nil {
+		t.Fatal("expected unsafe cross-fact grouping error")
+	}
+	for _, want := range []string{"fact_returns", "fact_sales", "shared dimension"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err, want)
+		}
+	}
+	var qe *executor.QueryError
+	if !errors.As(err, &qe) || qe.Line != 2 || qe.Column == 0 {
+		t.Errorf("error position = %#v, want line 2 and a non-zero column", err)
 	}
 }
 

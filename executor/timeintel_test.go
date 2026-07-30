@@ -2,10 +2,12 @@ package executor_test
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/danielwikar/dux/executor"
 	"github.com/danielwikar/dux/semantic"
 )
 
@@ -49,6 +51,20 @@ func setupTimeDBWithDesignation(t *testing.T, designate bool) (*sql.DB, *semanti
 			(4, DATE '2024-01-20', 100.0),
 			(5, DATE '2024-02-15', 200.0),
 			(6, DATE '2024-03-10', 300.0)`,
+		`CREATE TABLE stock (
+			product       VARCHAR,
+			snapshot_date DATE,
+			qty           INTEGER
+		)`,
+		`INSERT INTO stock VALUES
+			('A', DATE '2023-01-12', 11),
+			('A', DATE '2023-02-08', 12),
+			('A', DATE '2023-03-03', 13),
+			('A', DATE '2024-01-11', 21),
+			('A', DATE '2024-02-09', 22),
+			('A', DATE '2024-03-07', 23),
+			('B', DATE '2024-02-25', 999),
+			('C', DATE '2024-02-28', NULL)`,
 	}
 	for _, s := range ddl {
 		if _, err := db.Exec(s); err != nil {
@@ -72,6 +88,12 @@ func setupTimeDBWithDesignation(t *testing.T, designate bool) (*sql.DB, *semanti
 		ToTable:    "fiscal",
 		ToColumn:   "year",
 	})
+	schema.Relationships = append(schema.Relationships, &semantic.Relationship{
+		FromTable:  "stock",
+		FromColumn: "snapshot_date",
+		ToTable:    "dates",
+		ToColumn:   "date",
+	})
 	if designate {
 		schema.SetDateTable("dates", "date")
 	}
@@ -89,6 +111,24 @@ func monthRow(t *testing.T, rows []map[string]any, year, month float64) map[stri
 	}
 	t.Fatalf("no row for year=%v month=%v", year, month)
 	return nil
+}
+
+func hasMonth(rows []map[string]any, year, month float64) bool {
+	for _, row := range rows {
+		if toFloat(row["year"]) == year && toFloat(row["month"]) == month {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDay(rows []map[string]any, day string) bool {
+	for _, row := range rows {
+		if strings.HasPrefix(fmt.Sprint(row["date"]), day) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestExecute_TimeIntelligence(t *testing.T) {
@@ -131,8 +171,8 @@ func TestExecute_TimeIntelligence(t *testing.T) {
 		if v := toFloat(cell(t, monthRow(t, rows, 2024, 2), "PY")); v != 20 {
 			t.Errorf("2024-02 PY: expected 20, got %v", v)
 		}
-		if v := monthRow(t, rows, 2023, 2)["PY"]; v != nil {
-			t.Errorf("2023-02 PY: expected NULL (no 2022 data), got %v", v)
+		if hasMonth(rows, 2023, 2) {
+			t.Errorf("2023-02 should be pruned because PY is BLANK")
 		}
 	})
 
@@ -218,8 +258,8 @@ func TestExecute_TimeIntelligence(t *testing.T) {
 			"Total", SUM(orders[amount]),
 			"R7D", CALCULATE(SUM(orders[amount]), DATESINPERIOD(dates[date], MAX(dates[date]), -7, DAY))
 		)`)
-		if len(rows) != 731 {
-			t.Fatalf("expected 731 rows (2023+2024 days), got %d", len(rows))
+		if len(rows) != 42 {
+			t.Fatalf("expected 42 non-BLANK rolling-window rows, got %d", len(rows))
 		}
 		dayRow := func(day string) map[string]any {
 			for _, row := range rows {
@@ -238,8 +278,8 @@ func TestExecute_TimeIntelligence(t *testing.T) {
 		if v := toFloat(cell(t, dayRow("2023-01-21"), "R7D")); v != 10 {
 			t.Errorf("R7D on 2023-01-21: expected 10, got %v", v)
 		}
-		if v := dayRow("2023-01-22")["R7D"]; v != nil {
-			t.Errorf("R7D on 2023-01-22: expected NULL, got %v", v)
+		if hasDay(rows, "2023-01-22") {
+			t.Errorf("2023-01-22 should be pruned because every expression is BLANK")
 		}
 		// The plain measure stays at day grain next to the windowed one.
 		if v := toFloat(cell(t, dayRow("2023-01-15"), "Total")); v != 10 {
@@ -272,8 +312,8 @@ func TestExecute_TimeIntelligence(t *testing.T) {
 		if v := toFloat(cell(t, dayRow("2023-01-21"), "Nested")); v != 10 {
 			t.Errorf("nested window on 2023-01-21: expected 10, got %v", v)
 		}
-		if v := dayRow("2023-01-22")["Nested"]; v != nil {
-			t.Errorf("nested window on 2023-01-22: expected NULL, got %v", v)
+		if hasDay(rows, "2023-01-22") {
+			t.Errorf("2023-01-22 should be pruned because Nested is BLANK")
 		}
 	})
 
@@ -324,6 +364,115 @@ func TestExecute_TimeIntelligence(t *testing.T) {
 		for _, v := range rows[0] {
 			if toFloat(v) != 600 {
 				t.Errorf("expected 600, got %v", v)
+			}
+		}
+	})
+
+	t.Run("fact_anchor_correlates_through_date_dimension", func(t *testing.T) {
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year], dates[month],
+			"Closing", CALCULATE(
+				SUM(stock[qty]),
+				DATESINPERIOD(stock[snapshot_date], MAX(stock[snapshot_date]), 1, DAY))
+		)`)
+		for _, c := range []struct{ y, m, want float64 }{
+			{2023, 1, 11}, {2023, 2, 12}, {2023, 3, 13},
+			{2024, 1, 21}, {2024, 3, 23},
+		} {
+			if got := toFloat(cell(t, monthRow(t, rows, c.y, c.m), "Closing")); got != c.want {
+				t.Errorf("Closing %v-%v = %v, want %v", c.y, c.m, got, c.want)
+			}
+		}
+		if hasMonth(rows, 2024, 2) {
+			t.Errorf("2024-02 should be pruned because Closing is BLANK")
+		}
+	})
+
+	t.Run("LASTNONBLANK_evaluates_the_expression", func(t *testing.T) {
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year], dates[month],
+			"Closing", CALCULATE(
+				SUM(stock[qty]),
+				DATESINPERIOD(
+					dates[date],
+					LASTNONBLANK(dates[date], SUM(stock[qty])),
+					1, DAY))
+		)`)
+		for _, c := range []struct{ y, m, want float64 }{
+			{2023, 1, 11}, {2023, 2, 12}, {2023, 3, 13},
+			{2024, 1, 21}, {2024, 2, 999}, {2024, 3, 23},
+		} {
+			if got := toFloat(cell(t, monthRow(t, rows, c.y, c.m), "Closing")); got != c.want {
+				t.Errorf("Closing %v-%v = %v, want %v", c.y, c.m, got, c.want)
+			}
+		}
+	})
+
+	t.Run("LASTNONBLANK_outside_date_bound_is_rejected", func(t *testing.T) {
+		_, _, err := executorExecute(db, schema,
+			`EVALUATE ROW("Last", LASTNONBLANK(dates[date], SUM(stock[qty])))`)
+		if err == nil || !strings.Contains(err.Error(), "supported only") {
+			t.Fatalf("error = %v, want positional-support error", err)
+		}
+		var queryErr *executor.QueryError
+		if !errors.As(err, &queryErr) || queryErr.Line == 0 || queryErr.Column == 0 {
+			t.Fatalf("error = %v, want positioned QueryError", err)
+		}
+	})
+
+	t.Run("nested_CALCULATE_filters_anchor_and_value", func(t *testing.T) {
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year], dates[month],
+			"Closing A", CALCULATE(
+				CALCULATE(
+					SUM(stock[qty]),
+					DATESINPERIOD(
+						stock[snapshot_date],
+						MAX(stock[snapshot_date]),
+						1, DAY)),
+				stock[product] = "A")
+		)`)
+		if got := toFloat(cell(t, monthRow(t, rows, 2024, 2), "Closing A")); got != 22 {
+			t.Fatalf("filtered February closing = %v, want 22", got)
+		}
+	})
+
+	t.Run("nested_CALCULATE_filters_LASTNONBLANK_anchor", func(t *testing.T) {
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year], dates[month],
+			"Closing A", CALCULATE(
+				CALCULATE(
+					SUM(stock[qty]),
+					DATESINPERIOD(
+						dates[date],
+						LASTNONBLANK(dates[date], SUM(stock[qty])),
+						1, DAY)),
+				stock[product] = "A")
+		)`)
+		if got := toFloat(cell(t, monthRow(t, rows, 2024, 2), "Closing A")); got != 22 {
+			t.Fatalf("filtered LASTNONBLANK February closing = %v, want 22", got)
+		}
+	})
+
+	t.Run("CALCULATE_filters_composed_values", func(t *testing.T) {
+		_, rows := run(t, db, schema, `EVALUATE SUMMARIZECOLUMNS(
+			dates[year],
+			"Average A", CALCULATE(
+				DIVIDE(SUM(stock[qty]), COUNT(stock[qty])),
+				stock[product] = "A"),
+			"Double A", CALCULATE(
+				SUM(stock[qty]) + SUM(stock[qty]),
+				stock[product] = "A")
+		)`)
+		for _, want := range []struct {
+			year, average, doubled float64
+		}{{2023, 12, 72}, {2024, 22, 132}} {
+			row := rowByKey(t, rows, "year", int64(want.year))
+			if got := toFloat(cell(t, row, "Average A")); got != want.average {
+				t.Errorf("%v Average A = %v, want %v", want.year, got, want.average)
+			}
+			if got := toFloat(cell(t, row, "Double A")); got != want.doubled {
+				t.Errorf("%v Double A = %v, want %v", want.year, got, want.doubled)
 			}
 		}
 	})

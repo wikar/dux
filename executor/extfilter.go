@@ -18,6 +18,7 @@
 package executor
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -288,25 +289,28 @@ func literalFor(v any, numeric bool) (*parser.Literal, error) {
 		raw := `"` + s + `"`
 		return &parser.Literal{String: &raw}
 	}
-	num := func(n float64) *parser.Literal { return &parser.Literal{Number: &n} }
+	num := func(n string) *parser.Literal { return &parser.Literal{Number: &n} }
 
 	switch t := v.(type) {
+	case json.Number:
+		return literalFor(string(t), numeric)
 	case float64:
 		if numeric {
-			return num(t), nil
+			return num(strconv.FormatFloat(t, 'f', -1, 64)), nil
 		}
 		return str(strconv.FormatFloat(t, 'f', -1, 64)), nil
 	case int:
-		return literalFor(float64(t), numeric)
+		return literalFor(strconv.FormatInt(int64(t), 10), numeric)
 	case int32:
-		return literalFor(float64(t), numeric)
+		return literalFor(strconv.FormatInt(int64(t), 10), numeric)
 	case int64:
-		return literalFor(float64(t), numeric)
+		return literalFor(strconv.FormatInt(t, 10), numeric)
 	case float32:
-		return literalFor(float64(t), numeric)
+		return literalFor(strconv.FormatFloat(float64(t), 'f', -1, 32), numeric)
 	case string:
 		if numeric {
-			n, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
+			n := strings.TrimSpace(t)
+			_, err := strconv.ParseFloat(n, 64)
 			if err != nil {
 				return nil, fmt.Errorf("%q is not numeric", t)
 			}
@@ -437,7 +441,7 @@ func (rf *resolvedFilter) predicate() *parser.Expr {
 			Right: []*parser.OpExpr{{Op: "&&", Right: &parser.Term{SubExpr: le}}},
 		}
 	case "contains":
-		zero := 0.0
+		zero := "0"
 		return binary(funcExpr("SEARCH", litExpr(rf.value), col()), ">", litExpr(&parser.Literal{Number: &zero}))
 	default:
 		op := rf.op

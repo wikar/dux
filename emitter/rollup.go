@@ -64,9 +64,11 @@ func (e *Emitter) parseRollup(fc *parser.FuncCall, groupKeys *[]groupKey) ([]rol
 				tbl := semantic.StripSingleQuotes(ce.Left.ColRef.Table)
 				col := e.resolveColName(tbl, semantic.StripBrackets(ce.Left.ColRef.Column))
 				*groupKeys = append(*groupKeys, groupKey{
-					table: tbl,
-					col:   col,
-					expr:  e.sqlTable(tbl) + "." + col,
+					table:  tbl,
+					col:    col,
+					expr:   e.sqlTable(tbl) + "." + col,
+					line:   ce.Left.ColRef.Pos.Line,
+					column: ce.Left.ColRef.Pos.Column,
 				})
 			}
 		}

@@ -66,7 +66,7 @@ func TestBareMeasureJoinsHomeTable(t *testing.T) {
 		// The group key lives on products; the measure body reads sales, which
 		// only the measure store can reveal.
 		sql := emitMeasureOK(t, `EVALUATE SUMMARIZECOLUMNS(products[category], "Net", [NetSalesAmount])`)
-		assertContains(t, sql, "SUM(amount)", "FROM products", "LEFT JOIN sales")
+		assertContains(t, sql, "SUM(sales.amount)", "FROM sales", "LEFT JOIN products")
 	})
 
 	t.Run("SummarizeColumnsMatchesQualified", func(t *testing.T) {
@@ -81,24 +81,24 @@ func TestBareMeasureJoinsHomeTable(t *testing.T) {
 
 	t.Run("SummarizeColumnsNoGroupKeys", func(t *testing.T) {
 		sql := emitMeasureOK(t, `EVALUATE SUMMARIZECOLUMNS("Net", [NetSalesAmount])`)
-		assertContains(t, sql, "SUM(amount)", "FROM sales")
+		assertContains(t, sql, "SUM(sales.amount)", "FROM sales")
 	})
 
 	t.Run("MeasureInGroupPosition", func(t *testing.T) {
 		sql := emitMeasureOK(t, `EVALUATE SUMMARIZECOLUMNS(products[category], [NetSalesAmount])`)
-		assertContains(t, sql, "SUM(amount)", "LEFT JOIN sales")
+		assertContains(t, sql, "SUM(sales.amount)", "FROM products", "LEFT JOIN sales")
 	})
 
 	t.Run("ArithmeticOverBareMeasure", func(t *testing.T) {
 		sql := emitMeasureOK(t, `EVALUATE SUMMARIZECOLUMNS(products[category], "Net", [NetSalesAmount] * 2)`)
-		assertContains(t, sql, "SUM(amount) * 2", "LEFT JOIN sales")
+		assertContains(t, sql, "SUM(sales.amount) * 2", "FROM sales", "LEFT JOIN products")
 	})
 
 	t.Run("StandaloneCalculate", func(t *testing.T) {
 		// The filter argument names products, so only measure expansion can
 		// bring sales — the table the aggregate actually reads — into the FROM.
 		sql := emitMeasureOK(t, `EVALUATE SUMMARIZECOLUMNS("Net", CALCULATE([NetSalesAmount], products[category] = "A"))`)
-		assertContains(t, sql, "SUM(amount)", "sales")
+		assertContains(t, sql, "SUM(sales.amount)", "sales")
 	})
 
 	t.Run("GroupedCalculateWithRemoval", func(t *testing.T) {
@@ -106,7 +106,7 @@ func TestBareMeasureJoinsHomeTable(t *testing.T) {
 		// which needs the measure's home table in that CTE's FROM.
 		sql := emitMeasureOK(t, `EVALUATE SUMMARIZECOLUMNS(products[category],
 			"AllNet", CALCULATE([NetSalesAmount], ALL(products)))`)
-		assertContains(t, sql, "SUM(amount)", "sales")
+		assertContains(t, sql, "SUM(sales.amount)", "sales")
 	})
 
 	t.Run("MeasureOnGroupKeyTableAddsNoJoin", func(t *testing.T) {
@@ -122,7 +122,7 @@ func TestBareMeasureJoinsHomeTable(t *testing.T) {
 func TestRow(t *testing.T) {
 	t.Run("BareMeasure", func(t *testing.T) {
 		sql := emitMeasureOK(t, `EVALUATE ROW("Net", [NetSalesAmount])`)
-		assertContains(t, sql, "SUM(amount) AS 'Net'", "FROM sales")
+		assertContains(t, sql, "SUM(sales.amount) AS 'Net'", "FROM sales")
 		assertNotContains(t, sql, "GROUP BY")
 	})
 

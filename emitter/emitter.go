@@ -22,6 +22,10 @@ type Emitter struct {
 	Measures   map[string]map[string]*parser.MeasureDefinition
 	ScalarVars map[string]any
 	rowCtx     semantic.RowContext
+	// sqlScopes maps canonical table identities to aliases in nested FROM
+	// scopes. The innermost binding wins; unaliased tables need no entry because
+	// table-qualified references render with their canonical SQL table name.
+	sqlScopes []map[string]string
 	// groupCtx is set while emitting SUMMARIZECOLUMNS measure expressions so
 	// nested CALCULATE calls can resolve filter-context modifiers (ALL etc.)
 	// against the enclosing group-by keys. See filterctx.go.
@@ -47,6 +51,7 @@ type taggedPred struct {
 	table string // lower-cased canonical table name; "" if unknown
 	col   string // lower-cased resolved column name; "" if unknown
 	sql   string
+	expr  *parser.Expr // original expression, re-emitted inside aliased scopes
 }
 
 // Emit produces a DuckDB SQL string from a resolved Query.
@@ -99,19 +104,23 @@ func (e *Emitter) emitExpr(expr *parser.Expr) (string, error) {
 	if len(expr.Right) == 0 {
 		return left, nil
 	}
-	var sb strings.Builder
-	sb.WriteString(left)
+	sql := left
 	for _, op := range expr.Right {
 		right, err := e.emitTerm(op.Right)
 		if err != nil {
 			return "", err
 		}
-		sb.WriteString(" ")
-		sb.WriteString(normaliseOp(op.Op))
-		sb.WriteString(" ")
-		sb.WriteString(right)
+		if op.Op == "&" {
+			sql = fmt.Sprintf("concat(%s, %s)", sql, right)
+			continue
+		}
+		if op.Op == "==" {
+			sql = fmt.Sprintf("%s IS NOT DISTINCT FROM %s", sql, right)
+			continue
+		}
+		sql += " " + normaliseOp(op.Op) + " " + right
 	}
-	return sb.String(), nil
+	return sql, nil
 }
 
 func (e *Emitter) emitTerm(t *parser.Term) (string, error) {
@@ -179,17 +188,15 @@ func (e *Emitter) emitColRef(cr *parser.ColRef) (string, error) {
 	tableKey := semantic.StripSingleQuotes(cr.Table)
 
 	// Iterator row-context alias takes highest priority.
-	if alias, ok := e.rowCtx.ResolveAlias(tableKey); ok {
+	if alias, ok := e.rowCtx.ResolveAlias(e.tableKey(tableKey)); ok {
 		return alias + "." + e.resolveColName(tableKey, stripped), nil
 	}
 
 	if measures := e.effectiveMeasures(); measures != nil {
 		if tableKey != "" {
 			// Table-qualified measure expansion.
-			if tableMeasures, ok := measures[tableKey]; ok {
-				if def, ok := tableMeasures[stripped]; ok && def.Expr != nil {
-					return e.emitExpr(def.Expr)
-				}
+			if def := semantic.FindMeasure(tableKey, stripped, measures); def != nil && def.Expr != nil {
+				return e.emitExpr(def.Expr)
 			}
 		} else {
 			// Bare [MeasureName] — scan all tables; name must be unique.
@@ -203,9 +210,31 @@ func (e *Emitter) emitColRef(cr *parser.ColRef) (string, error) {
 		}
 	}
 
-	// Plain column reference — use the exact name from the schema when available
-	// so that mixed-case column names (e.g. l_1stIn) are preserved verbatim.
-	return e.resolveColName(tableKey, stripped), nil
+	// Plain column reference — preserve schema casing and qualify every
+	// table-qualified reference. Bare references remain bare because they name
+	// measures or output columns in the few positions where DUX permits them.
+	col := e.resolveColName(tableKey, stripped)
+	if tableKey == "" {
+		return col, nil
+	}
+	if alias, ok := e.sqlBinding(e.tableKey(tableKey)); ok {
+		return alias + "." + col, nil
+	}
+	return e.sqlTable(tableKey) + "." + col, nil
+}
+
+func (e *Emitter) pushSQLBindings(bindings map[string]string) func() {
+	e.sqlScopes = append(e.sqlScopes, bindings)
+	return func() { e.sqlScopes = e.sqlScopes[:len(e.sqlScopes)-1] }
+}
+
+func (e *Emitter) sqlBinding(tableKey string) (string, bool) {
+	for i := len(e.sqlScopes) - 1; i >= 0; i-- {
+		if alias, ok := e.sqlScopes[i][tableKey]; ok {
+			return alias, true
+		}
+	}
+	return "", false
 }
 
 // effectiveMeasures returns the measure lookup map: e.Measures (explicit,
@@ -227,10 +256,8 @@ func (e *Emitter) effectiveMeasures() map[string]map[string]*parser.MeasureDefin
 // bracket-stripped name is emitted as-is, letting DuckDB validate it.
 func (e *Emitter) resolveColName(table, stripped string) string {
 	if e.Schema != nil && table != "" {
-		if t, ok := e.Schema.Tables[table]; ok {
-			if col, ok := t.Columns[stripped]; ok {
-				return col.Name
-			}
+		if _, _, name := e.Schema.FindColumn(table, stripped); name != "" {
+			return name
 		}
 	}
 	return stripped
@@ -242,10 +269,10 @@ func (e *Emitter) emitLiteral(l *parser.Literal) string {
 	switch {
 	case l.String != nil:
 		// Raw token includes surrounding double-quotes; convert to SQL single-quoted.
-		inner := (*l.String)[1 : len(*l.String)-1]
+		inner := strings.ReplaceAll((*l.String)[1:len(*l.String)-1], `""`, `"`)
 		return "'" + strings.ReplaceAll(inner, "'", "''") + "'"
 	case l.Number != nil:
-		return fmt.Sprintf("%g", *l.Number)
+		return *l.Number
 	case l.Boolean != nil:
 		return strings.ToUpper(*l.Boolean)
 	}
@@ -320,6 +347,13 @@ func (e *Emitter) emitFuncCall(fc *parser.FuncCall) (string, error) {
 		return e.emitTimeIntelTable(fc)
 	case "TOTALYTD", "TOTALQTD", "TOTALMTD":
 		return e.emitTotalPeriod(fc)
+	case "LASTNONBLANK":
+		err := &semantic.SemanticError{Message: "LASTNONBLANK is currently supported only as a DATESINPERIOD or DATESBETWEEN bound"}
+		if len(fc.Args) > 0 && fc.Args[0].Left != nil && fc.Args[0].Left.ColRef != nil {
+			err.Line = fc.Args[0].Left.ColRef.Pos.Line
+			err.Column = fc.Args[0].Left.ColRef.Pos.Column
+		}
+		return "", err
 	case "CALENDAR":
 		return e.emitCalendar(fc)
 	case "CALENDARAUTO":
@@ -363,6 +397,9 @@ func (e *Emitter) emitFuncCall(fc *parser.FuncCall) (string, error) {
 	case "ISBLANK":
 		return e.emitIsBlank(fc)
 	case "BLANK":
+		if len(fc.Args) != 0 {
+			return "", functionError(fc, "BLANK requires no arguments")
+		}
 		return "NULL", nil
 	case "IF":
 		return e.emitIf(fc)
@@ -380,9 +417,15 @@ func (e *Emitter) emitFuncCall(fc *parser.FuncCall) (string, error) {
 		if fn, ok := scalarFuncs[strings.ToUpper(fc.Name)]; ok {
 			return e.emitScalarMapped(strings.ToUpper(fc.Name), fn, fc)
 		}
-		// Unknown / passthrough function: emit as-is and let DuckDB validate.
-		return e.emitPassthrough(fc)
+		if fn, ok := identityFuncs[strings.ToUpper(fc.Name)]; ok {
+			return e.emitScalarMapped(strings.ToUpper(fc.Name), fn, fc)
+		}
+		return "", functionError(fc, fmt.Sprintf("unknown function %s", strings.ToUpper(fc.Name)))
 	}
+}
+
+func functionError(fc *parser.FuncCall, message string) error {
+	return &semantic.SemanticError{Message: message, Line: fc.Pos.Line, Column: fc.Pos.Column}
 }
 
 // ─── Aggregation functions ───────────────────────────────────────────────────
@@ -420,7 +463,8 @@ func (e *Emitter) emitDistinctCount(fc *parser.FuncCall) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("COUNT(DISTINCT %s)", arg), nil
+	return fmt.Sprintf("CASE WHEN COUNT(*) = 0 THEN NULL ELSE COUNT(DISTINCT %s) + "+
+		"CASE WHEN COUNT(*) > COUNT(%s) THEN 1 ELSE 0 END END", arg, arg), nil
 }
 
 // emitCountBlank emits COUNTBLANK(T[C]) as COUNT(*) - COUNT(col).
@@ -433,7 +477,7 @@ func (e *Emitter) emitCountBlank(fc *parser.FuncCall) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("(COUNT(*) - COUNT(%s))", arg), nil
+	return fmt.Sprintf("COUNT_IF(%s IS NULL)", arg), nil
 }
 
 // ─── Iterator (X) functions ──────────────────────────────────────────────────
@@ -530,7 +574,7 @@ func (e *Emitter) iterSource(arg *parser.Expr) (*tableSource, string, func(), er
 	}
 	if src.name != "" {
 		alias := "__row_" + sanitizeAliasSuffix(src.name)
-		e.rowCtx.Push(semantic.RowBinding{Table: src.name, Alias: alias})
+		e.rowCtx.Push(semantic.RowBinding{Table: e.tableKey(src.name), Alias: alias})
 		return src, alias, func() { e.rowCtx.Pop() }, nil
 	}
 	return src, e.nextAlias("__row"), func() {}, nil
@@ -636,7 +680,7 @@ func (e *Emitter) emitCalculate(fc *parser.FuncCall) (string, error) {
 		addTbl(t)
 	}
 	for _, arg := range preds {
-		for _, t := range e.measureExprTables(arg) {
+		for _, t := range e.measureExprTablesOutsideRowContext(arg) {
 			addTbl(t)
 		}
 	}
@@ -644,21 +688,27 @@ func (e *Emitter) emitCalculate(fc *parser.FuncCall) (string, error) {
 		addTbl(tf.table)
 	}
 
-	// Emit filter predicates.
-	var filters []string
+	// Emit filter predicates with their source table so bidirectional bridge
+	// chains can be carved into correlated EXISTS predicates.
+	var filters []taggedPred
 	for _, arg := range preds {
 		f, err := e.emitExpr(arg)
 		if err != nil {
 			return "", err
 		}
-		filters = append(filters, f)
+		tables := e.measureExprTables(arg)
+		table := ""
+		if len(tables) == 1 {
+			table = e.tableKey(tables[0])
+		}
+		filters = append(filters, taggedPred{sql: f, table: table})
 	}
 	for _, tf := range cm.timeFilters {
 		pred, err := e.emitTimeIntelPred(tf, e.sqlTable(tf.table)+"."+tf.col)
 		if err != nil {
 			return "", err
 		}
-		filters = append(filters, pred)
+		filters = append(filters, taggedPred{sql: pred, table: e.tableKey(tf.table), col: strings.ToLower(tf.col)})
 	}
 
 	// If no predicates remain (none given, or only ALL-family modifiers),
@@ -673,17 +723,24 @@ func (e *Emitter) emitCalculate(fc *parser.FuncCall) (string, error) {
 		}
 		return inner, nil
 	}
-	whereClause := strings.Join(filters, " AND ")
-
-	// Build FROM clause, joining additional tables when needed.
+	// Build FROM clause, carving pure filter chains after bidirectional edges
+	// into EXISTS so bridge multiplicity cannot fan out the value rows.
 	if len(allTables) == 0 {
-		return fmt.Sprintf("(SELECT %s WHERE %s)", inner, whereClause), nil
+		conds := make([]string, len(filters))
+		for i, p := range filters {
+			conds[i] = p.sql
+		}
+		return fmt.Sprintf("(SELECT %s WHERE %s)", inner, strings.Join(conds, " AND ")), nil
 	}
-	fromClause, err := e.calcFromClause(allTables)
+	needed := map[string]bool{}
+	for _, table := range e.measureValueTables(fc.Args[0]) {
+		needed[e.tableKey(table)] = true
+	}
+	fromClause, conds, _, err := e.stitchedClusterFrom(allTables, needed, filters, nil)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("(SELECT %s FROM %s WHERE %s)", inner, fromClause, whereClause), nil
+	return fmt.Sprintf("(SELECT %s FROM %s WHERE %s)", inner, fromClause, strings.Join(conds, " AND ")), nil
 }
 
 // calcFromClause builds a FROM clause over allTables, inferring join steps
@@ -747,7 +804,11 @@ func (e *Emitter) emitTreatas(fc *parser.FuncCall) (string, error) {
 		if t == nil || t.ColRef == nil || len(a.Right) > 0 {
 			return "", fmt.Errorf("TREATAS: target arguments must be column references (e.g. Product[Category])")
 		}
-		cols[i] = e.resolveColName(semantic.StripSingleQuotes(t.ColRef.Table), semantic.StripBrackets(t.ColRef.Column))
+		col, err := e.emitColRef(t.ColRef)
+		if err != nil {
+			return "", err
+		}
+		cols[i] = col
 	}
 
 	// arg[0]: source — TableConstructor or VALUES(t[c]).
@@ -806,7 +867,10 @@ func (e *Emitter) emitTreatas(fc *parser.FuncCall) (string, error) {
 		if vcr == nil || vcr.ColRef == nil {
 			return "", fmt.Errorf("TREATAS: VALUES argument must be a column reference")
 		}
-		srcCol := e.resolveColName(semantic.StripSingleQuotes(vcr.ColRef.Table), semantic.StripBrackets(vcr.ColRef.Column))
+		srcCol, err := e.emitColRef(vcr.ColRef)
+		if err != nil {
+			return "", err
+		}
 		srcTable := e.sqlTable(semantic.StripSingleQuotes(vcr.ColRef.Table))
 		return fmt.Sprintf("%s IN (SELECT DISTINCT %s FROM %s)", cols[0], srcCol, srcTable), nil
 
@@ -828,11 +892,35 @@ func (e *Emitter) emitFilter(fc *parser.FuncCall) (string, error) {
 	if err := e.requireNoInlineAgg("FILTER", fc.Args[1]); err != nil {
 		return "", err
 	}
+	from := src.sql
+	var pop func()
+	if src.nested {
+		alias := e.nextAlias("__src")
+		from += " AS " + alias
+		bindings := map[string]string{}
+		if src.name != "" {
+			bindings[e.tableKey(src.name)] = alias
+		} else {
+			// A computed table exposes output columns, not its base table aliases.
+			// Bind qualified predicate references to the computed source alias.
+			for _, cr := range collectColRefs(fc.Args[1]) {
+				if cr.Table != "" {
+					bindings[e.tableKey(semantic.StripSingleQuotes(cr.Table))] = alias
+				}
+			}
+		}
+		if len(bindings) > 0 {
+			pop = e.pushSQLBindings(bindings)
+		}
+	}
+	if pop != nil {
+		defer pop()
+	}
 	pred, err := e.emitExpr(fc.Args[1])
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("(SELECT * FROM %s WHERE %s)", e.fromClauseSQL(src), pred), nil
+	return fmt.Sprintf("(SELECT * FROM %s WHERE %s)", from, pred), nil
 }
 
 // emitAll emits ALL / ALLEXCEPT as a table expression. When used as a
@@ -976,7 +1064,7 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			wherePreds = append(wherePreds, taggedPred{table: predTable, col: predCol, sql: pred})
+			wherePreds = append(wherePreds, taggedPred{table: predTable, col: predCol, sql: pred, expr: arg})
 			continue
 		}
 		// FILTER(Table, pred) in the group position is a filter argument:
@@ -1007,7 +1095,7 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 					break
 				}
 			}
-			wherePreds = append(wherePreds, taggedPred{table: predTable, col: predCol, sql: pred})
+			wherePreds = append(wherePreds, taggedPred{table: predTable, col: predCol, sql: pred, expr: filterFC.Args[1]})
 			continue
 		}
 		// Any other table-valued argument would be emitted into the SELECT
@@ -1034,14 +1122,34 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 				tbl := semantic.StripSingleQuotes(arg.Left.ColRef.Table)
 				col := e.resolveColName(tbl, semantic.StripBrackets(arg.Left.ColRef.Column))
 				plainKeys = append(plainKeys, groupKey{
-					table: tbl,
-					col:   col,
-					expr:  e.sqlTable(tbl) + "." + col,
+					table:  tbl,
+					col:    col,
+					expr:   e.sqlTable(tbl) + "." + col,
+					line:   arg.Left.ColRef.Pos.Line,
+					column: arg.Left.ColRef.Pos.Column,
 				})
 			}
 		}
 	}
 	groupKeys := append(append([]groupKey{}, plainKeys...), rollupKeys...)
+	// A group-only SUMMARIZECOLUMNS has no measure context for filters on
+	// an unrelated table to affect. This is also the shape used to populate an
+	// untrimmed slicer. Related filters still cascade to the group table.
+	if len(pairArgs) == 0 && len(measureArgs) == 0 {
+		groupTables := make([]string, len(groupKeys))
+		for i, key := range groupKeys {
+			groupTables[i] = key.table
+		}
+		if e.Schema != nil && len(groupTables) > 0 {
+			kept := wherePreds[:0]
+			for _, pred := range wherePreds {
+				if semantic.FilterReaches(e.Schema, pred.table, groupTables) {
+					kept = append(kept, pred)
+				}
+			}
+			wherePreds = kept
+		}
+	}
 
 	// Establish the group context so CALCULATE calls inside measure
 	// expressions (direct, nested, or via measure expansion) can resolve
@@ -1064,6 +1172,11 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	// context-modifying measures (liftContext false).
 	liftContext := len(rollupElems) == 0 && len(groupCols) == len(plainKeys)
 	plan := e.planMeasures(pairArgs, measureArgs, liftContext)
+	for _, cluster := range plan.clusters {
+		if err := e.validateGroupKeys(groupKeys, cluster.tables); err != nil {
+			return "", err
+		}
+	}
 	if tableClusterCount(plan.clusters) > 1 || plan.hasContextClusters() || e.stitchForBidi(plan, groupKeys, wherePreds) {
 		return e.emitStitched(groupCols, plainKeys, rollupElems, rollupKeys, pairArgs, measureArgs, plan, wherePreds)
 	}
@@ -1094,9 +1207,8 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 		measures = append(measures, fmt.Sprintf("%s AS %s", valSQL, nameSQL))
 	}
 
-	// Collect all referenced tables: group columns first, then measure expressions.
-	// Group columns establish the primary (driving) table; measure expressions may
-	// reference additional tables that need to be joined in.
+	// Collect value tables first so the fact table drives join inference; shared
+	// dimensions can otherwise offer equal paths through unrelated fact tables.
 	seen := map[string]bool{}
 	var allTables []string
 	addTbl := func(t string) {
@@ -1106,15 +1218,24 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 			allTables = append(allTables, t)
 		}
 	}
-	for _, arg := range groupArgs {
-		for _, t := range e.measureExprTables(arg) {
-			addTbl(t)
-		}
-	}
 	for i := 1; i < len(pairArgs); i += 2 {
 		for _, t := range e.measureExprTables(pairArgs[i]) {
 			addTbl(t)
 		}
+	}
+	for _, arg := range groupArgs {
+		if arg.Left != nil && arg.Left.FuncCall != nil && len(arg.Right) == 0 {
+			name := strings.ToUpper(arg.Left.FuncCall.Name)
+			if name == "TREATAS" || name == "FILTER" {
+				continue
+			}
+		}
+		for _, t := range e.measureExprTables(arg) {
+			addTbl(t)
+		}
+	}
+	for _, pred := range wherePreds {
+		addTbl(pred.table)
 	}
 
 	// Build FROM clause, using join inference when multiple tables are present.
@@ -1152,7 +1273,7 @@ func (e *Emitter) emitSummarizeColumns(fc *parser.FuncCall) (string, error) {
 	} else if len(groupCols) > 0 {
 		fmt.Fprintf(&sb, "\nGROUP BY %s", strings.Join(groupCols, ", "))
 	}
-	return sb.String(), nil
+	return blankPrune(sb.String(), pairArgs, measureArgs), nil
 }
 
 // emitRow emits ROW("Name", Expr, ...), the single-row table constructor.
@@ -1192,6 +1313,12 @@ func (e *Emitter) emitProjectColumns(fc *parser.FuncCall, selectPrefix string) (
 		return "", fmt.Errorf("%s: first argument must be a table expression: %w", name, err)
 	}
 
+	alias := e.nextAlias("__row")
+	if src.name != "" {
+		e.rowCtx.Push(semantic.RowBinding{Table: e.tableKey(src.name), Alias: alias})
+		defer e.rowCtx.Pop()
+	}
+
 	var cols []string
 	for i := 1; i < len(fc.Args); i += 2 {
 		nameExpr, err := e.emitExpr(fc.Args[i])
@@ -1208,7 +1335,7 @@ func (e *Emitter) emitProjectColumns(fc *parser.FuncCall, selectPrefix string) (
 		cols = append(cols, fmt.Sprintf("(%s) AS %s", valExpr, nameExpr))
 	}
 
-	return fmt.Sprintf("%s%s FROM %s", selectPrefix, strings.Join(cols, ", "), e.fromClauseSQL(src)), nil
+	return fmt.Sprintf("%s%s FROM %s AS %s", selectPrefix, strings.Join(cols, ", "), src.sql, alias), nil
 }
 
 func (e *Emitter) emitSetOp(op string, fc *parser.FuncCall) (string, error) {
@@ -1223,11 +1350,27 @@ func (e *Emitter) emitSetOp(op string, fc *parser.FuncCall) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("(%s)\n%s\n(%s)", left, op, right), nil
+	if op == "UNION ALL" {
+		return fmt.Sprintf("SELECT * FROM ((%s)\n%s\n(%s))", left, op, right), nil
+	}
+	left, err = normaliseToSelect(left)
+	if err != nil {
+		return "", fmt.Errorf("%s: first argument must be a table expression: %w", op, err)
+	}
+	right, err = normaliseToSelect(right)
+	if err != nil {
+		return "", fmt.Errorf("%s: second argument must be a table expression: %w", op, err)
+	}
+	exists := "EXISTS"
+	if op == "EXCEPT" {
+		exists = "NOT EXISTS"
+	}
+	return fmt.Sprintf("SELECT __set_l.* FROM (%s) AS __set_l WHERE %s "+
+		"(SELECT 1 FROM (%s) AS __set_r WHERE __set_l IS NOT DISTINCT FROM __set_r)",
+		left, exists, right), nil
 }
 
-// emitTopN emits TOPN as ORDER BY … DESC LIMIT n. The table argument may be a
-// nested table expression (e.g. TOPN(5, SUMMARIZECOLUMNS(...), [Total])).
+// emitTopN uses RANK so ties at the Nth row are retained as DAX requires.
 func (e *Emitter) emitTopN(fc *parser.FuncCall) (string, error) {
 	if len(fc.Args) < 3 {
 		return "", fmt.Errorf("TOPN requires at least 3 arguments (n, table, expr)")
@@ -1240,19 +1383,31 @@ func (e *Emitter) emitTopN(fc *parser.FuncCall) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("TOPN: second argument must be a table expression: %w", err)
 	}
-	// Over a computed table the order expression names an output column, so it
-	// must not be re-expanded as a measure — reference it like an ORDER BY key.
-	var orderExpr string
-	if src.nested {
-		orderExpr, err = e.emitOrderKey(fc.Args[2])
-	} else {
-		orderExpr, err = e.emitExpr(fc.Args[2])
+	var orders []string
+	for i := 2; i < len(fc.Args); i++ {
+		var orderExpr string
+		if src.nested {
+			orderExpr, err = e.emitOrderKey(fc.Args[i])
+		} else {
+			orderExpr, err = e.emitExpr(fc.Args[i])
+		}
+		if err != nil {
+			return "", err
+		}
+		dir := "DESC"
+		if i+1 < len(fc.Args) && isOrderDirection(fc.Args[i+1]) {
+			dir = strings.ToUpper(fc.Args[i+1].Left.Ident)
+			i++
+		}
+		orders = append(orders, orderExpr+" "+dir)
 	}
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("SELECT * FROM %s ORDER BY %s DESC LIMIT %s",
-		e.fromClauseSQL(src), orderExpr, n), nil
+	return fmt.Sprintf("SELECT * FROM %s QUALIFY RANK() OVER (ORDER BY %s) <= %s",
+		e.fromClauseSQL(src), strings.Join(orders, ", "), n), nil
+}
+
+func isOrderDirection(expr *parser.Expr) bool {
+	return expr != nil && expr.Left != nil && len(expr.Right) == 0 &&
+		(strings.EqualFold(expr.Left.Ident, "ASC") || strings.EqualFold(expr.Left.Ident, "DESC"))
 }
 
 // ─── Scalar / logical functions ──────────────────────────────────────────────
@@ -1374,21 +1529,6 @@ func (e *Emitter) emitNot(fc *parser.FuncCall) (string, error) {
 	return fmt.Sprintf("NOT (%s)", arg), nil
 }
 
-// emitPassthrough emits an unrecognised function call verbatim so that DuckDB
-// built-ins not explicitly handled (LEFT, RIGHT, LEN, ABS, ROUND, etc.) pass
-// through naturally.
-func (e *Emitter) emitPassthrough(fc *parser.FuncCall) (string, error) {
-	args := make([]string, 0, len(fc.Args))
-	for _, a := range fc.Args {
-		s, err := e.emitExpr(a)
-		if err != nil {
-			return "", err
-		}
-		args = append(args, s)
-	}
-	return fmt.Sprintf("%s(%s)", strings.ToUpper(fc.Name), strings.Join(args, ", ")), nil
-}
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // sqlIdent returns a DuckDB-safe SQL identifier for a bare (unquoted) table
@@ -1440,6 +1580,27 @@ func isStringLiteral(expr *parser.Expr) bool {
 	return expr.Left.Literal != nil && expr.Left.Literal.String != nil
 }
 
+// blankPrune applies SUMMARIZECOLUMNS' rule that rows where every expression
+// is BLANK are omitted. Grouping and subtotal columns do not define a row.
+func blankPrune(sql string, pairArgs, inlineArgs []*parser.Expr) string {
+	var aliases []string
+	for i := 0; i+1 < len(pairArgs); i += 2 {
+		raw := *pairArgs[i].Left.Literal.String
+		aliases = append(aliases, raw[1:len(raw)-1])
+	}
+	for i, arg := range inlineArgs {
+		aliases = append(aliases, inlineMeasureAlias(arg, i))
+	}
+	if len(aliases) == 0 {
+		return sql
+	}
+	conds := make([]string, len(aliases))
+	for i, alias := range aliases {
+		conds[i] = "__sc." + quoteIdent(alias) + " IS NOT NULL"
+	}
+	return "SELECT * FROM (\n" + sql + "\n) AS __sc\nWHERE " + strings.Join(conds, " OR ")
+}
+
 // isMeasureColRef reports whether expr is a single ColRef that resolves to a
 // measure in the effective measure store. Used by emitSummarizeColumns to
 // avoid placing aggregate expressions in the GROUP BY clause.
@@ -1458,11 +1619,7 @@ func (e *Emitter) isMeasureColRef(expr *parser.Expr) bool {
 	name := semantic.StripBrackets(cr.Column)
 	tableKey := semantic.StripSingleQuotes(cr.Table)
 	if tableKey != "" {
-		if tableMeasures, ok := measures[tableKey]; ok {
-			_, isMeasure := tableMeasures[name]
-			return isMeasure
-		}
-		return false
+		return semantic.FindMeasure(tableKey, name, measures) != nil
 	}
 	// Bare [Name] — check across all tables.
 	def, err := semantic.FindMeasureByName(name, measures)
@@ -1658,25 +1815,8 @@ func hasMatchingOuterParens(s string) bool {
 
 // ─── Scalar VAR support ───────────────────────────────────────────────────────
 
-// isTableFunc reports whether a DUX function name returns a table.
-func isTableFunc(name string) bool {
-	switch strings.ToUpper(name) {
-	case "FILTER", "SUMMARIZECOLUMNS", "ROW", "ADDCOLUMNS", "SELECTCOLUMNS",
-		"UNION", "INTERSECT", "EXCEPT", "TOPN", "DISTINCT", "VALUES",
-		"ALL", "ALLEXCEPT", "CROSSJOIN", "GENERATE", "GENERATEALL",
-		"DATESYTD", "DATESQTD", "DATESMTD", "SAMEPERIODLASTYEAR", "DATEADD",
-		"PREVIOUSYEAR", "PREVIOUSQUARTER", "PREVIOUSMONTH", "PREVIOUSDAY",
-		"NEXTYEAR", "NEXTQUARTER", "NEXTMONTH", "NEXTDAY",
-		"DATESBETWEEN", "DATESINPERIOD", "CALENDAR", "CALENDARAUTO",
-		"RELATEDTABLE":
-		return true
-	}
-	return false
-}
-
-// IsTableExpr reports whether expr evaluates to a table result set (true) or a
-// scalar value (false). The classification is AST-first for known function
-// names, falling back to SQL normalisation for unknown/passthrough functions.
+// IsTableExpr reports whether expr evaluates to a table result set. Function
+// kind comes from the implemented DUX function registry, never emitted SQL.
 func (e *Emitter) IsTableExpr(expr *parser.Expr) (bool, error) {
 	if expr == nil || expr.Left == nil {
 		return false, fmt.Errorf("empty expression")
@@ -1700,26 +1840,9 @@ func (e *Emitter) IsTableExpr(expr *parser.Expr) (bool, error) {
 	case t.QuotedIdent != "":
 		return true, nil
 	case t.FuncCall != nil:
-		if isTableFunc(t.FuncCall.Name) {
-			return true, nil
-		}
-		switch strings.ToUpper(t.FuncCall.Name) {
-		// Known scalar / aggregation functions.
-		case "SUM", "AVERAGE", "COUNT", "COUNTA", "COUNTBLANK", "COUNTROWS",
-			"DISTINCTCOUNT", "MIN", "MAX", "MEDIAN",
-			"SUMX", "AVERAGEX", "COUNTX", "MINX", "MAXX", "CONCATENATEX",
-			"DIVIDE", "IF", "SWITCH", "NOT", "AND", "OR", "ISBLANK", "BLANK",
-			"TOTALYTD", "TOTALQTD", "TOTALMTD", "DATE":
-			return false, nil
-		}
-		// Fallthrough: use SQL normalisation for passthrough / unknown functions.
+		return isTableFunc(t.FuncCall.Name), nil
 	}
-	sql, err := e.emitExpr(expr)
-	if err != nil {
-		return false, err
-	}
-	_, normalErr := normaliseToSelect(sql)
-	return normalErr == nil, nil
+	return false, nil
 }
 
 // EmitScalarQuery returns a complete SQL SELECT statement that evaluates expr

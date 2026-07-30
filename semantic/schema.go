@@ -112,6 +112,24 @@ func (s *Schema) FindTable(name string) (*Table, string) {
 	return nil, ""
 }
 
+// FindColumn resolves a table and column case-insensitively and returns their
+// canonical schema names.
+func (s *Schema) FindColumn(table, column string) (*Column, string, string) {
+	t, tableKey := s.FindTable(table)
+	if t == nil {
+		return nil, "", ""
+	}
+	if c, ok := t.Columns[column]; ok {
+		return c, tableKey, column
+	}
+	for key, c := range t.Columns {
+		if strings.EqualFold(key, column) {
+			return c, tableKey, key
+		}
+	}
+	return nil, tableKey, ""
+}
+
 // SetTableHidden marks table (any casing) as hidden or visible, updating both
 // the persistent HiddenTables map and the live Table flag when present.
 func (s *Schema) SetTableHidden(table string, hidden bool) {

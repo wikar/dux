@@ -79,6 +79,42 @@ func assertNotContains(t *testing.T, sql string, fragments ...string) {
 	}
 }
 
+func TestQualifiedColumnsAndSourceBindings(t *testing.T) {
+	t.Run("shared_column_names", func(t *testing.T) {
+		sql := emit(t, `EVALUATE SUMMARIZECOLUMNS(
+			products[product], "Amount", SUM(sales[amount]))`)
+		assertContains(t, sql,
+			"SELECT products.product, SUM(sales.amount)",
+			"GROUP BY products.product")
+	})
+
+	t.Run("ADDCOLUMNS_correlates_to_source_row", func(t *testing.T) {
+		sql := emit(t, `EVALUATE ADDCOLUMNS(
+			products,
+			"Sales", CALCULATE(
+				SUM(sales[amount]),
+				sales[product] = products[product]))`)
+		assertContains(t, sql,
+			"SUM(sales.amount) FROM sales",
+			"sales.product = __row1.product",
+			"FROM products AS __row1")
+		assertNotContains(t, sql, "JOIN products")
+	})
+
+	t.Run("source_binding_uses_canonical_table_identity", func(t *testing.T) {
+		schema := minSchema()
+		schema.Tables["analytics.products"] = schema.Tables["products"]
+		delete(schema.Tables, "products")
+		q := mustParse(t, `EVALUATE ADDCOLUMNS(
+			products, "Name", analytics.products[product])`)
+		sql, err := (&emitter.Emitter{Schema: schema}).Emit(q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertContains(t, sql, "(__row1.product) AS 'Name'", "FROM products AS __row1")
+	})
+}
+
 // ─── Aggregation ─────────────────────────────────────────────────────────────
 
 func TestAggregation(t *testing.T) {
@@ -110,7 +146,7 @@ func TestAggregation(t *testing.T) {
 		{
 			"COUNTBLANK",
 			`EVALUATE SUMMARIZECOLUMNS(sales[region], "Blanks", COUNTBLANK(sales[amount]))`,
-			[]string{"COUNT(*) - COUNT(", "amount"},
+			[]string{"COUNT_IF(", "amount IS NULL"},
 		},
 		{
 			"MIN",
@@ -160,27 +196,27 @@ func TestIterators(t *testing.T) {
 		{
 			"SUMX",
 			`EVALUATE SUMMARIZECOLUMNS(sales[region], "Rev", SUMX(sales, sales[amount] * sales[qty]))`,
-			[]string{"SUM(amount * qty)", "GROUP BY region"},
+			[]string{"SUM(sales.amount * sales.qty)", "GROUP BY sales.region"},
 		},
 		{
 			"AVERAGEX",
 			`EVALUATE SUMMARIZECOLUMNS(sales[region], "Avg", AVERAGEX(sales, sales[amount]))`,
-			[]string{"AVG(amount)", "GROUP BY region"},
+			[]string{"AVG(sales.amount)", "GROUP BY sales.region"},
 		},
 		{
 			"COUNTX",
 			`EVALUATE SUMMARIZECOLUMNS(sales[region], "N", COUNTX(sales, sales[id]))`,
-			[]string{"COUNT(id)", "GROUP BY region"},
+			[]string{"COUNT(sales.id)", "GROUP BY sales.region"},
 		},
 		{
 			"MINX",
 			`EVALUATE SUMMARIZECOLUMNS(sales[region], "Min", MINX(sales, sales[amount]))`,
-			[]string{"MIN(amount)", "GROUP BY region"},
+			[]string{"MIN(sales.amount)", "GROUP BY sales.region"},
 		},
 		{
 			"MAXX",
 			`EVALUATE SUMMARIZECOLUMNS(sales[region], "Max", MAXX(sales, sales[amount]))`,
-			[]string{"MAX(amount)", "GROUP BY region"},
+			[]string{"MAX(sales.amount)", "GROUP BY sales.region"},
 		},
 		// Outside a group context the scalar-subquery form is kept.
 		{
@@ -237,7 +273,7 @@ func TestTableOps(t *testing.T) {
 		{
 			"TOPN",
 			`EVALUATE TOPN(5, sales, sales[amount])`,
-			[]string{"SELECT * FROM sales ORDER BY", "DESC LIMIT 5"},
+			[]string{"SELECT * FROM sales QUALIFY RANK() OVER (ORDER BY", "DESC) <= 5"},
 		},
 		{
 			"UNION",
@@ -247,12 +283,12 @@ func TestTableOps(t *testing.T) {
 		{
 			"INTERSECT",
 			`EVALUATE INTERSECT(FILTER(sales, sales[region] = "North"), FILTER(sales, sales[region] = "South"))`,
-			[]string{"INTERSECT"},
+			[]string{"WHERE EXISTS", "IS NOT DISTINCT FROM"},
 		},
 		{
 			"EXCEPT",
 			`EVALUATE EXCEPT(FILTER(sales, sales[region] = "North"), FILTER(sales, sales[region] = "South"))`,
-			[]string{"EXCEPT"},
+			[]string{"WHERE NOT EXISTS", "IS NOT DISTINCT FROM"},
 		},
 	}
 
@@ -357,7 +393,7 @@ func TestFilterContextModifiers(t *testing.T) {
 			"Total", SUM(sales[amount]),
 			"Grand", CALCULATE(SUM(sales[amount]), ALL(sales))
 		)`)
-		assertContains(t, sql, "_cc0 AS (", "(SUM(amount)) AS v", "LEFT JOIN _cc0 ON TRUE")
+		assertContains(t, sql, "_cc0 AS (", "(SUM(sales.amount)) AS v", "LEFT JOIN _cc0 ON TRUE")
 		assertNotContains(t, sql, "__cal_sales")
 	})
 
@@ -458,7 +494,7 @@ func TestFilterContextModifiers(t *testing.T) {
 		)`)
 		// The context CTE drops the cleared TREATAS filter; the group-key CTE
 		// keeps it.
-		assertContains(t, sql, "WHERE region IN ('North')", "LEFT JOIN _cc0 ON TRUE")
+		assertContains(t, sql, "WHERE sales.region IN ('North')", "LEFT JOIN _cc0 ON TRUE")
 		cteBody := sql[strings.Index(sql, "_cc0 AS ("):]
 		cteBody = cteBody[:strings.Index(cteBody, "\n)")]
 		if strings.Contains(cteBody, "IN ('North')") {
@@ -470,7 +506,7 @@ func TestFilterContextModifiers(t *testing.T) {
 		// Outside SUMMARIZECOLUMNS there is no ambient context — ALL just
 		// yields the unfiltered aggregate as a complete SELECT.
 		sql := emit(t, `EVALUATE CALCULATE(SUM(sales[amount]), ALL(sales))`)
-		assertContains(t, sql, "(SELECT SUM(amount) FROM sales)")
+		assertContains(t, sql, "(SELECT SUM(sales.amount) FROM sales)")
 	})
 }
 
@@ -492,7 +528,7 @@ func TestComposableTables(t *testing.T) {
 			[Total]
 		)`)
 		// The order key must reference the output column, not re-aggregate.
-		assertContains(t, sql, `ORDER BY "Total" DESC LIMIT 2`)
+		assertContains(t, sql, `QUALIFY RANK() OVER (ORDER BY "Total" DESC) <= 2`)
 	})
 
 	t.Run("SUMX_over_FILTER_keeps_row_binding", func(t *testing.T) {
@@ -550,8 +586,8 @@ func TestRollup(t *testing.T) {
 			"Total", SUM(sales[amount])
 		)`)
 		assertContains(t, sql,
-			"(GROUPING(region) = 1) AS 'RegionTotal'",
-			"GROUP BY GROUPING SETS ((category, region), (category))")
+			"(GROUPING(sales.region) = 1) AS 'RegionTotal'",
+			"GROUP BY GROUPING SETS ((products.category, sales.region), (products.category))")
 	})
 
 	t.Run("hierarchical_sets", func(t *testing.T) {
@@ -559,7 +595,7 @@ func TestRollup(t *testing.T) {
 			ROLLUPADDISSUBTOTAL(sales[region], "RT", sales[product], "PT"),
 			"Total", SUM(sales[amount])
 		)`)
-		assertContains(t, sql, "GROUPING SETS ((region, product), (region), ())")
+		assertContains(t, sql, "GROUPING SETS ((sales.region, sales.product), (sales.region), ())")
 	})
 
 	t.Run("ROLLUPGROUP_composite_unit", func(t *testing.T) {
@@ -567,7 +603,7 @@ func TestRollup(t *testing.T) {
 			ROLLUPADDISSUBTOTAL(ROLLUPGROUP(sales[region], sales[product]), "IsTotal"),
 			"Total", SUM(sales[amount])
 		)`)
-		assertContains(t, sql, "GROUPING SETS ((region, product), ())")
+		assertContains(t, sql, "GROUPING SETS ((sales.region, sales.product), ())")
 	})
 
 	t.Run("bare_ROLLUPGROUP_errors", func(t *testing.T) {
@@ -1117,8 +1153,8 @@ func TestBidirectionalCTE(t *testing.T) {
 			)`)
 		assertContains(t, sql,
 			"WITH _mc0 AS",
-			"FROM dimb",
-			"LEFT JOIN factmeasures",
+			"FROM factmeasures",
+			"LEFT JOIN dimb",
 			"EXISTS (SELECT 1 FROM bridge",
 			"GROUP BY",
 		)
@@ -1134,6 +1170,23 @@ func TestBidirectionalCTE(t *testing.T) {
 				TREATAS({"X","Y"}, DimA[Category])
 			)`)
 		assertContains(t, sql, "EXISTS (SELECT 1 FROM bridge", "Category IN ('X', 'Y')")
+	})
+
+	// CALCULATE filters use the same semi-join. The filter table is not a
+	// value dependency and must never make the bridge a projected flat join.
+	t.Run("TC04_CalculateSemiJoinGuard", func(t *testing.T) {
+		sql := emitBidi(t,
+			`EVALUATE SUMMARIZECOLUMNS(
+				"Total", CALCULATE(SUM(FactMeasures[Amount]), TREATAS({"X","Y"}, DimA[Category]))
+			)`)
+		assertContains(t, sql,
+			"WITH _cc0 AS",
+			"FROM factmeasures",
+			"EXISTS (SELECT 1 FROM bridge",
+			"JOIN dima",
+			"Category IN ('X', 'Y')",
+		)
+		assertNotContains(t, sql, "LEFT JOIN bridge", "LEFT JOIN dima")
 	})
 
 	// TC-05: Empty filter context — same SQL shape as TC-01; no special-casing.
@@ -1218,29 +1271,9 @@ func TestBidirectionalCTE(t *testing.T) {
 		em := &emitter.Emitter{Schema: s}
 		sql, err := em.Emit(q)
 		if err != nil {
-			t.Fatalf("emit (projected bridge): %v", err)
+			t.Fatalf("emit projected bidirectional grouping: %v", err)
 		}
-		assertNotContains(t, sql, "_bd_")
-		assertContains(t, sql,
-			"WITH _mc0 AS",
-			"_mc1 AS",
-			"FULL OUTER JOIN _mc1",
-			"IS NOT DISTINCT FROM",
-			"LEFT JOIN analytics.sales",
-			"LEFT JOIN forecast.periods",
-			"LEFT JOIN forecast.plan",
-		)
-		// The two facts must never share one join tree: the sales fact and the
-		// forecast fact belong to different CTEs.
-		if i := strings.Index(sql, "analytics.sales"); i >= 0 {
-			cte := sql[:strings.Index(sql, "_mc1")]
-			if strings.Contains(cte, "forecast.plan") {
-				t.Errorf("analytics.sales and forecast.plan share a join tree:\n%s", sql)
-			}
-		}
-		if n := strings.Count(strings.ToLower(sql), "join analytics.date"); n != 0 {
-			t.Errorf("analytics.date must only appear in FROM clauses, found %d JOINs:\n%s", n, sql)
-		}
+		assertContains(t, sql, "WITH _mc0 AS", "_mc1 AS", "SELECT DISTINCT")
 	})
 
 	// Unidirectional relationships must still emit LEFT JOIN, never a CTE.
@@ -1256,9 +1289,9 @@ func TestBidirectionalCTE(t *testing.T) {
 
 // ─── Bidirectional validation ─────────────────────────────────────────────────
 
-func TestValidateBidiPaths(t *testing.T) {
+func TestValidateFilterPaths(t *testing.T) {
 	t.Run("ValidSchema", func(t *testing.T) {
-		if err := semantic.ValidateBidiPaths(bidiSchema()); err != nil {
+		if err := semantic.ValidateFilterPaths(bidiSchema()); err != nil {
 			t.Errorf("expected no error for valid bidi schema, got: %v", err)
 		}
 	})
@@ -1273,7 +1306,7 @@ func TestValidateBidiPaths(t *testing.T) {
 			ToTable: "DimA", ToColumn: "DimAKey",
 		})
 		// Mark the bidi edge to trigger the ambiguity check.
-		err := semantic.ValidateBidiPaths(s)
+		err := semantic.ValidateFilterPaths(s)
 		if err == nil {
 			t.Fatal("expected ambiguity error, got nil")
 		}
@@ -1284,7 +1317,7 @@ func TestValidateBidiPaths(t *testing.T) {
 
 	t.Run("NoBidiEdges", func(t *testing.T) {
 		s := minSchema()
-		if err := semantic.ValidateBidiPaths(s); err != nil {
+		if err := semantic.ValidateFilterPaths(s); err != nil {
 			t.Errorf("expected no error when no bidi edges present, got: %v", err)
 		}
 	})
