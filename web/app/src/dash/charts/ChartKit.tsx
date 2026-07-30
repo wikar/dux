@@ -463,7 +463,7 @@ export function CartesianChart({
         />
       );
     }
-    return <Line key={s.key} {...shared} stroke={s.color} strokeWidth={SERIES_STROKE} dot={dot} />;
+    return <Line key={s.key} {...shared} connectNulls stroke={s.color} strokeWidth={SERIES_STROKE} dot={dot} />;
   };
 
   return (
