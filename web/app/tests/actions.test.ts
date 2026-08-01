@@ -1,10 +1,14 @@
 import { afterEach, expect, test } from "bun:test";
-import { save } from "../src/dash/actions";
+import { applySlicerSelection, save, seedSlicerSelections } from "../src/dash/actions";
 import { loadDoc, useUiStore } from "../src/dash/store";
 import type { Dashboard } from "../src/dash/types";
 
 const originalFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = originalFetch; });
+const originalWindow = globalThis.window;
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  Object.defineProperty(globalThis, "window", { configurable: true, value: originalWindow });
+});
 
 const dashboard = (width: number): Dashboard => ({
   version: 1,
@@ -37,4 +41,34 @@ test("a late save response cannot mark another dashboard saved", async () => {
 
   expect(useUiStore.getState().etag).toBe("etag-second");
   expect(useUiStore.getState().savedJson).toBe(JSON.stringify(second));
+});
+
+test("clearing a preset slicer in view mode stays All after URL reseeding", () => {
+  let url = new URL("http://dux.test/dash/report");
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      get location() { return url; },
+      history: { replaceState: (_: unknown, __: string, to: string) => { url = new URL(to, url); } },
+    },
+  });
+  const doc: Dashboard = {
+    version: 1,
+    canvas: { width: 100, height: 100 },
+    elements: [{
+      id: "year",
+      type: "slicer",
+      layout: { x: 0, y: 0, w: 100, h: 100 },
+      slicer: { table: "Date", column: "Year", kind: "buttons", default: { kind: "values", values: ["2025"] } },
+    }],
+  };
+  loadDoc(doc);
+  useUiStore.getState().setMode("view");
+
+  seedSlicerSelections(doc);
+  applySlicerSelection("year", null);
+  seedSlicerSelections(doc); // DashApp reacts to the updated query string.
+
+  expect(useUiStore.getState().slicerSelections.year).toBeUndefined();
+  expect(JSON.parse(url.searchParams.get("f")!)).toEqual({ year: [] });
 });

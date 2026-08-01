@@ -12,17 +12,19 @@ export function gotoDashboard(path: string): boolean {
 
 // ─── Slicer selections ↔ ?f= deep link ───────────────────────────────────────
 
-/** Parse the ?f= parameter: {elementId: ["v1","v2"] | {from,to}}. */
-function selectionsFromUrl(): Record<string, SlicerSelection> {
+/** Parse the ?f= parameter: {elementId: ["v1","v2"] | [] | {from,to}}.
+ *  An empty array explicitly overrides a saved preset with "All". */
+function selectionsFromUrl(): Record<string, SlicerSelection | null> {
   const raw = new URLSearchParams(window.location.search).get("f");
   if (!raw) return {};
   try {
     const obj = JSON.parse(raw) as Record<string, unknown>;
-    const out: Record<string, SlicerSelection> = {};
+    const out: Record<string, SlicerSelection | null> = {};
     for (const [id, v] of Object.entries(obj)) {
       if (Array.isArray(v)) {
         const values = v.filter((x): x is string => typeof x === "string");
         if (values.length > 0) out[id] = { kind: "values", values };
+        else if (v.length === 0) out[id] = null;
       } else if (v && typeof v === "object") {
         const r = v as { from?: unknown; to?: unknown };
         const from = typeof r.from === "string" ? r.from : undefined;
@@ -45,6 +47,11 @@ function selectionsToUrl(selections: Record<string, SlicerSelection>) {
       obj[id] = { from: sel.from, to: sel.to };
     }
   }
+  // Absence normally means "use the document preset". Preserve an explicit
+  // clear so the URL-driven reseed does not restore that preset.
+  for (const id of Object.keys(presetSelections(useDocStore.getState().doc))) {
+    if (!selections[id]) obj[id] = [];
+  }
   const url = new URL(window.location.href);
   if (Object.keys(obj).length > 0) url.searchParams.set("f", JSON.stringify(obj));
   else url.searchParams.delete("f");
@@ -66,8 +73,8 @@ export function applySlicerSelection(id: string, sel: SlicerSelection | null) {
   const ui = useUiStore.getState();
   // An explicit choice supersedes the seeded preset — never prune it after.
   if (ui.presetPending[id]) ui.resolveSlicerPreset(id, []);
-  syncSlicerSelection(id, sel);
   if (ui.mode === "edit") setSlicerPreset(id, sel);
+  syncSlicerSelection(id, sel);
 }
 
 // ─── Slicer presets (slicer.default) ─────────────────────────────────────────
@@ -143,7 +150,11 @@ export function redo() {
  *  dashboard by a category that has since been deleted or renamed. See
  *  useSlicerPreset in visuals/Slicer. */
 export function seedSlicerSelections(doc: Dashboard) {
-  const all = { ...presetSelections(doc), ...selectionsFromUrl() };
+  const all = presetSelections(doc);
+  for (const [id, selection] of Object.entries(selectionsFromUrl())) {
+    if (selection) all[id] = selection;
+    else delete all[id];
+  }
   useUiStore.getState().setSlicerSelections(all, Object.keys(all));
   // Presets are not in the URL yet — mirror them so the link a viewer copies
   // reproduces what they see.
