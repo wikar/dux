@@ -15,7 +15,7 @@
     "@tanstack/react-virtual": "^3.14.13",
     "@uiw/react-color-sketch": "^2.10.3",
     "highlight.js": "^11.12.0",
-    "maplibre-gl": "^5.24.0",
+    "maplibre-gl": "^6.10.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",

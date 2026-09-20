@@ -323,7 +323,7 @@ credentials and remotes.
 
 Capabilities:
 
-- **Elements**: bar / line / combo / area / donut charts (with stacking, dual axes, and a series-split "Series by" well), tables (virtualized, sortable), pivot/matrix with query-backed subtotals (correct for non-additive measures), KPI cards, maps (MapLibre, lazy-loaded so dashboards without one never pay for the engine), markdown text, and images. Element types hot-swap with their field wells remapped.
+- **Elements**: bar / line / combo / area / donut charts (with stacking, dual axes, and a series-split "Series by" well), tables (virtualized, sortable), pivot/matrix with query-backed subtotals (correct for non-additive measures), KPI cards, maps (MapLibre 6, requires WebGL2; lazy-loaded so dashboards without one never pay for the engine), markdown text, and images. Element types hot-swap with their field wells remapped.
 - **Slicers & cross-filtering**: buttons / dropdown / range / date-range slicers filter every element (AND semantics) and cascade each other's option lists. Selections live in the URL's `?f=` parameter — a shareable deep link — and `?fullscreen` gives a chrome-less wall-display view. In view/fullscreen mode, clicking a bar / line point / donut slice / table row cross-filters the other visuals and highlights the selection (Ctrl/⌘ to multi-select, click empty canvas to clear). A header funnel shows every filter affecting each visual. Per-element CSV export.
 - **Themes**: all styling flows from theme tokens (palette, backgrounds, borders, text, font — every color with alpha) cascading defaults ← `dashboards/theme.json` ← per-dashboard overrides.
 - **Live refresh**: per-dashboard interval with a server-side floor and per-element stagger.

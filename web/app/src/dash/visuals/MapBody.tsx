@@ -1,8 +1,9 @@
 // MapLibre canvas with one or two data layers. Loaded as its own chunk — see
 // Map.tsx, which owns the registry entry.
 import { useEffect, useMemo, useRef, useState } from "react";
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { formatValue } from "@dux/core";
 import styles from "./Map.module.css";
 import { displayMessage } from "../message";
@@ -10,6 +11,8 @@ import { useFormats, usePalette, useResolvedTheme } from "../data";
 import { categoryColor, coordinateExtent, isDarkColor, layerCategories, layerGeoJSON, mapThemeColors, resolveMapStyle, useMapLayerData } from "../mapData";
 import { markKey, updateElement, useDocStore, useUiStore } from "../store";
 import type { DashElement, MapLayer } from "../types";
+
+maplibregl.setWorkerUrl(workerUrl);
 
 const sourceId = (id: string) => `dux-map-source-${id}`;
 const renderId = (layer: MapLayer) => `dux-map-${layer.kind}-${layer.id}`;
@@ -225,7 +228,7 @@ export default function MapBody({ el }: { el: DashElement }) {
 
   useEffect(() => {
     if (!containerRef.current) return;
-    // Without a WebGL context maplibre throws out of its constructor. Report it
+    // Without a WebGL2 context maplibre throws out of its constructor. Report it
     // in the element instead of letting it escape the effect.
     let map: maplibregl.Map;
     try {
@@ -347,7 +350,7 @@ export default function MapBody({ el }: { el: DashElement }) {
       }}
     >
       <div ref={containerRef} className={styles.canvas} />
-      {unavailable && <div className={styles.warning}>Warning: This browser could not create a WebGL context, so the map cannot render</div>}
+      {unavailable && <div className={styles.warning}>Warning: This browser could not create a WebGL2 context, so the map cannot render</div>}
       {!unavailable && !renderable && <div className={styles.message}>Add longitude and latitude to a layer</div>}
       {/* First load only — a refresh leaves the drawn layers alone; the header
           dot carries its in-flight state. */}
