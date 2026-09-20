@@ -14,16 +14,18 @@ export default defineConfig({
   build: {
     outDir: "dist",
     target: "esnext",
-    rollupOptions: {
+    rolldownOptions: {
       output: {
         // The chart engine is the dash chunk's bulk and changes only on
         // dependency bumps — its own chunk caches across app releases.
-        // React is pinned to its own chunk: without that, Rollup colocates
+        // React is pinned to its own chunk: without that, the bundler colocates
         // it inside the recharts chunk, which makes the entry statically
         // import that chunk and load charts on every tab.
-        manualChunks(id: string) {
-          if (/node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return "react";
-          if (/node_modules[\\/](recharts|victory-vendor|d3-[^\\/]+)[\\/]/.test(id)) return "recharts";
+        codeSplitting: {
+          groups: [
+            { name: "react", test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
+            { name: "recharts", test: /node_modules[\\/](recharts|victory-vendor|d3-[^\\/]+)[\\/]/ },
+          ],
         },
       },
     },
