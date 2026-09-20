@@ -97,8 +97,8 @@ func TestOwnerAndReaderShareSQLiteDuckLake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(duckDB, "v1.5.4") {
-		t.Fatalf("DuckDB version = %q, want pinned baseline v1.5.4", duckDB)
+	if duckDB != "v1.5.5" {
+		t.Fatalf("DuckDB version = %q, want pinned baseline v1.5.5", duckDB)
 	}
 	if duckLake == "" {
 		t.Fatal("empty DuckLake extension version")
