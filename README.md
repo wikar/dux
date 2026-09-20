@@ -96,9 +96,9 @@ The bundle is versioned independently of DUX and records which versions it was v
 
 ## Requirements
 
-- Go 1.25+
+- Go 1.25+ (builds use the pinned Go 1.27.1 toolchain)
 - A C compiler (required by `go-duckdb` via CGO)
-- [Bun](https://bun.sh) (for building the UI)
+- [Bun](https://bun.sh) 1.4.2 (for building the UI)
 - DuckDB 1.5.5 with its matching DuckLake extension. DUX pins the tested official Go binding rather than following releases automatically. Future versions are adopted and pinned only after extension, concurrency, import, and container compatibility tests pass.
 
 ### Installing a C compiler

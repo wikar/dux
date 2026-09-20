@@ -1,5 +1,5 @@
 # --- UI build stage (Bun workspace: web/core + web/app) ---
-FROM oven/bun:1-alpine AS ui-builder
+FROM oven/bun:1.4.2-alpine AS ui-builder
 WORKDIR /app/web
 COPY web/bun.lock web/package.json ./
 COPY web/core/package.json core/
@@ -9,7 +9,7 @@ COPY web/ .
 RUN bun run build
 
 # --- Go build stage ---
-FROM golang:1.25 AS go-builder
+FROM golang:1.27.1 AS go-builder
 WORKDIR /app
 ARG VERSION=dev
 COPY go.mod go.sum ./
