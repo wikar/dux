@@ -11,27 +11,27 @@
   },
   "dependencies": {
     "@dux/core": "workspace:*",
-    "@tanstack/react-query": "^5.62.0",
-    "@tanstack/react-virtual": "^3",
+    "@tanstack/react-query": "^5.103.1",
+    "@tanstack/react-virtual": "^3.14.13",
     "@uiw/react-color-sketch": "^2.10.3",
-    "highlight.js": "^11.11.1",
+    "highlight.js": "^11.12.0",
     "maplibre-gl": "^5.24.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
-    "recharts": "^3.9.2",
+    "recharts": "^3.10.1",
     "remark-gfm": "^4.0.0",
     "zundo": "^2.3.0",
-    "zustand": "^5.0.3"
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^4.5.2",
-    "eslint": "^10.8.0",
+    "eslint": "^10.11.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "typescript": "^5.7.3",
-    "typescript-eslint": "^8.65.0",
+    "typescript-eslint": "^8.70.0",
     "vite": "^6.3.2"
   }
 }

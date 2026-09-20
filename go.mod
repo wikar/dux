@@ -6,9 +6,9 @@ toolchain go1.27.1
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/alecthomas/participle/v2 v2.1.1
+	github.com/alecthomas/participle/v2 v2.1.4
 	github.com/duckdb/duckdb-go/v2 v2.10505.0
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 )
 
 require (
