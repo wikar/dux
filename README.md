@@ -1,5 +1,21 @@
 # DUX
 
+## Screenshots
+
+### Home
+
+<a href="docs/screenshots/dux_home.png"><img src="docs/screenshots/dux_home.png" alt="DUX Home" width="480"></a>
+
+### Explorer
+
+<a href="docs/screenshots/dux_explorer.png"><img src="docs/screenshots/dux_explorer.png" alt="DUX Explorer" width="480"></a>
+
+### Dash
+
+<a href="docs/screenshots/dux_dash.png"><img src="docs/screenshots/dux_dash.png" alt="DUX Dash" width="480"></a>
+
+## Overview
+
 A **semantic stack** for analytics: durable lakehouse storage, a semantic model, a DAX-inspired query language, a server, and dashboards — one Go binary on top of DuckDB. Query syntax follows [DAX](https://learn.microsoft.com/en-us/dax/dax-overview) — column references, named measures, filter context, and iterator functions — without requiring a cube engine.
 
 Each layer has one owner and one storage path:

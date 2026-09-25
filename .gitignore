@@ -1,6 +1,8 @@
 # Binaries
 *.exe
 *.exe~
+dux
+duxd
 
 # Test binary and coverage output
 *.test
@@ -39,7 +41,6 @@ db/*.sql
 
 # Reference data
 reference/
-docs/
 plans/
 TDD*
 
