@@ -69,6 +69,25 @@ func TestBodyLimit(t *testing.T) {
 	}
 }
 
+func TestDecodeJSONBody(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want string
+	}{
+		{`{"name":"ok"}`, "ok"},
+		{`{"name":"ok","extra":1}`, ""},
+		{`{"name":"ok"} {"name":"again"}`, ""},
+	} {
+		var request struct {
+			Name string `json:"name"`
+		}
+		err := decodeJSONBody(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body)), &request)
+		if (err == nil) != (tc.want != "") || (err == nil && request.Name != tc.want) {
+			t.Errorf("body %q: name=%q, error=%v", tc.body, request.Name, err)
+		}
+	}
+}
+
 func TestDuckLakeStatusDoesNotExposeAbsolutePaths(t *testing.T) {
 	dir := t.TempDir()
 	runtime, err := bootstrap.Bootstrap(dir, filepath.Join(dir, "dux.sqlite"), filepath.Join(dir, "ducklake.sqlite"), filepath.Join(dir, "ducklake"), filepath.Join(dir, "missing.toml"), true)

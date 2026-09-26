@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -103,19 +100,8 @@ func maintenanceCollectionHandler(service *ducklake.Service) http.HandlerFunc {
 			var request struct {
 				Operation string `json:"operation"`
 			}
-			body, err := readBody(w, r)
-			if err != nil {
+			if err := decodeJSONBody(w, r, &request); err != nil {
 				writeError(w, err.Error(), bodyErrorStatus(err))
-				return
-			}
-			decoder := json.NewDecoder(bytes.NewReader(body))
-			decoder.DisallowUnknownFields()
-			if err := decoder.Decode(&request); err != nil {
-				writeError(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			if err := decoder.Decode(&struct{}{}); err != io.EOF {
-				writeError(w, "request body must contain one JSON object", http.StatusBadRequest)
 				return
 			}
 			job, err := service.StartMaintenance(request.Operation)
@@ -144,19 +130,8 @@ func maintenanceJobHandler(service *ducklake.Service) http.HandlerFunc {
 func importCollectionHandler(service *ducklake.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request ducklake.ImportRequest
-		body, err := readBody(w, r)
-		if err != nil {
+		if err := decodeJSONBody(w, r, &request); err != nil {
 			writeError(w, err.Error(), bodyErrorStatus(err))
-			return
-		}
-		decoder := json.NewDecoder(bytes.NewReader(body))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil {
-			writeError(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if err := decoder.Decode(&struct{}{}); err != io.EOF {
-			writeError(w, "request body must contain one JSON object", http.StatusBadRequest)
 			return
 		}
 		job, err := service.StartImport(r.Header.Get("Idempotency-Key"), request)

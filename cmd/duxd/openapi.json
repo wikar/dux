@@ -1,0 +1,562 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "DUX Query API",
+    "version": "1.0.0",
+    "description": "Execute DUX queries against the DUX DuckLake instance. Main-schema tables use Table; other schemas use schema.Table. Mutating DuckLake endpoints assume a trusted network and provide no authentication in this release."
+  },
+  "paths": {
+    "/query": {
+      "post": {
+        "summary": "Execute a DUX query",
+        "description": "Send a raw DUX query string in the request body. Returns a JSON object with column names and row data.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/plain": {
+              "schema": { "type": "string" },
+              "example": "EVALUATE SUMMARIZECOLUMNS(Product[Category], \"Net Revenue\", SUM(Sales[NetRevenue]))"
+            },
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                  "query": { "type": "string", "description": "The DUX query text" },
+                  "filters": {
+                    "type": "array",
+                    "description": "External filters applied to the query's outermost filter context (dashboard slicers). Ops: in, between, =, !=, <, <=, >, >=, contains.",
+                    "items": {
+                      "type": "object",
+                      "required": ["table", "column", "op"],
+                      "properties": {
+                        "table":  { "type": "string" },
+                        "column": { "type": "string" },
+                        "op":     { "type": "string", "enum": ["in", "between", "=", "!=", "<", "<=", ">", ">=", "contains"] },
+                        "values": { "type": "array", "description": "op=in" },
+                        "value":  { "description": "scalar ops and contains" },
+                        "from":   { "description": "op=between" },
+                        "to":     { "description": "op=between" }
+                      }
+                    }
+                  }
+                }
+              },
+              "example": { "query": "EVALUATE SUMMARIZECOLUMNS(Product[Category], \"Net Revenue\", SUM(Sales[NetRevenue]))", "filters": [ { "table": "Product", "column": "Category", "op": "in", "values": ["Water", "Soft Drinks"] } ] }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Query result set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "columns": { "type": "array", "items": { "type": "string" } },
+                    "rows":    { "type": "array", "items": { "type": "array" } }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Parse or execution error" },
+          "503": { "description": "Server busy: no query connection became available within the admission timeout. No SQL ran, so the request is safe to retry. Retry-After carries the retry floor in seconds." }
+        }
+      }
+    },
+    "/version": {
+      "get": {
+        "summary": "Server version and API capabilities",
+        "description": "Returns the duxd version and capability flags (externalFilters, measureFormats) for client handshakes.",
+        "responses": {
+          "200": {
+            "description": "Version object",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/schema": {
+      "get": {
+        "summary": "Get schema",
+        "description": "Returns tables, columns, relationships, and measures as JSON.",
+        "responses": {
+          "200": {
+            "description": "Schema object",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/values": {
+      "get": {
+        "summary": "Distinct values of a column",
+        "description": "Distinct non-null values of a column as strings, for slicer and filter pickers. Capped at 50, then sorted: two values that both parse as numbers compare by value, any other pair compares lexically. Main-schema tables use Table; other schemas use schema.Table.",
+        "parameters": [
+          {
+            "name": "table",
+            "in": "query",
+            "required": true,
+            "description": "Table key as it appears in the semantic model.",
+            "schema": { "type": "string" },
+            "example": "Venue"
+          },
+          {
+            "name": "column",
+            "in": "query",
+            "required": true,
+            "description": "Column name within the table.",
+            "schema": { "type": "string" },
+            "example": "VenueType"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Case-insensitive substring filter applied to the string form of each value.",
+            "schema": { "type": "string" },
+            "example": "bar"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Up to 50 distinct values",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "type": "string" } },
+                "example": ["Bar", "Biergarten", "Bistro"]
+              }
+            }
+          },
+          "400": { "description": "table or column query parameter missing" },
+          "404": { "description": "Unknown table, or unknown column in that table" },
+          "500": { "description": "Value lookup failed" },
+          "503": { "description": "Server busy: no query connection became available within the admission timeout. No SQL ran, so the request is safe to retry. Retry-After carries the retry floor in seconds." }
+        }
+      }
+    },
+    "/export": {
+      "get": {
+        "summary": "Export dux.toml",
+        "description": "Download the semantic model — relationships, measures, date tables, and hidden designations — as a dux.toml file.",
+        "responses": {
+          "200": {
+            "description": "TOML file",
+            "content": {
+              "text/plain": {
+                "schema": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/import": {
+      "post": {
+        "summary": "Import dux.toml",
+        "description": "Upload a dux.toml body. Replaces the whole semantic model — relationships, measures, date tables, and hidden designations — in the metadata database.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/plain": {
+              "schema": { "type": "string" },
+              "example": "[[relationship]]\nfrom_table = \"Sales\"\nfrom_column = \"ProductKey\"\nto_table = \"Product\"\nto_column = \"ProductKey\"\n\n[[measure]]\ntable = \"Sales\"\nname = \"Total Revenue\"\nexpression = \"SUM(Sales[NetRevenue])\""
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Imported successfully" },
+          "400": { "description": "Invalid TOML" }
+        }
+      }
+    },
+    "/measures": {
+      "get": {
+        "summary": "List measures",
+        "description": "Returns all measures as a flat JSON array.",
+        "responses": {
+          "200": {
+            "description": "Array of measures",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "table":      { "type": "string" },
+                      "name":       { "type": "string" },
+                      "expression": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Add a measure",
+        "description": "Create or update a named measure. The expression is validated through the DUX parser.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["table", "name", "expression"],
+                "properties": {
+                  "table":      { "type": "string", "example": "Sales" },
+                  "name":       { "type": "string", "example": "Total Revenue" },
+                  "expression": { "type": "string", "example": "SUM(Sales[NetRevenue])" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Created" },
+          "400": { "description": "Validation error" }
+        }
+      }
+    },
+    "/measures/{table}/{name}": {
+      "delete": {
+        "summary": "Delete a measure",
+        "parameters": [
+          { "name": "table", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "name",  "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Deleted" },
+          "400": { "description": "Missing parameters" }
+        }
+      }
+    },
+    "/relationships": {
+      "get": {
+        "summary": "List relationships",
+        "description": "Returns all relationships as a JSON array.",
+        "responses": {
+          "200": {
+            "description": "Array of relationships",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "from_table":     { "type": "string" },
+                      "from_column":    { "type": "string" },
+                      "to_table":       { "type": "string" },
+                      "to_column":      { "type": "string" },
+                      "bidirectional":  { "type": "boolean", "default": false }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Add a relationship",
+        "description": "Declare a foreign-key relationship between two tables.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["from_table", "from_column", "to_table", "to_column"],
+                "properties": {
+                  "from_table":    { "type": "string", "example": "Sales" },
+                  "from_column":   { "type": "string", "example": "ProductKey" },
+                  "to_table":      { "type": "string", "example": "Product" },
+                  "to_column":     { "type": "string", "example": "ProductKey" },
+                  "bidirectional": { "type": "boolean", "default": false, "description": "When true, filter context propagates bidirectionally through this edge. Rejected at schema load if it creates an ambiguous filter graph." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Created" },
+          "400": { "description": "Validation error" }
+        }
+      },
+      "delete": {
+        "summary": "Delete a relationship",
+        "description": "Remove an existing relationship. The body must match an existing relationship exactly.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["from_table", "from_column", "to_table", "to_column"],
+                "properties": {
+                  "from_table":  { "type": "string" },
+                  "from_column": { "type": "string" },
+                  "to_table":    { "type": "string" },
+                  "to_column":   { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": { "description": "Deleted" },
+          "400": { "description": "Validation error" }
+        }
+      }
+    },
+    "/datetable": {
+      "post": {
+        "summary": "Designate the date table",
+        "description": "Marks a table as the model's date table with the given DATE/TIMESTAMP column. Only one date table is allowed — any previous designation is replaced. Time-intelligence functions clear all filters on the designated table.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["table", "column"],
+                "properties": {
+                  "table":  { "type": "string", "example": "dates" },
+                  "column": { "type": "string", "example": "date" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Designated" },
+          "400": { "description": "Column is not a DATE or TIMESTAMP" },
+          "404": { "description": "Unknown table or column" }
+        }
+      },
+      "delete": {
+        "summary": "Clear the date table designation",
+        "responses": {
+          "204": { "description": "Cleared" }
+        }
+      }
+    },
+    "/hidden": {
+      "post": {
+        "summary": "Mark a table, view, or column as hidden",
+        "description": "Marks a table (or view) as hidden when column is omitted, or a single column when it is present. Hidden objects stay queryable; the flag only affects UI presentation.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["table"],
+                "properties": {
+                  "table":  { "type": "string", "example": "Sales" },
+                  "column": { "type": "string", "example": "OrderId", "description": "Omit to hide the whole table or view." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Hidden" },
+          "400": { "description": "Missing table" },
+          "404": { "description": "Unknown table or column" }
+        }
+      },
+      "delete": {
+        "summary": "Clear a hidden designation",
+        "description": "Un-hides a table (or view) when column is omitted, or a single column when it is present.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["table"],
+                "properties": {
+                  "table":  { "type": "string" },
+                  "column": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": { "description": "Cleared" },
+          "400": { "description": "Missing table" },
+          "404": { "description": "Unknown table or column" }
+        }
+      }
+    },
+    "/refresh": {
+      "post": {
+        "summary": "Refresh schema metadata",
+        "description": "Re-introspect DuckLake and reload persisted metadata and TOML configuration. Automatic schema polling normally makes this unnecessary.",
+        "responses": {
+          "200": { "description": "Schema refreshed successfully" },
+          "500": { "description": "Introspection or reload error" }
+        }
+      }
+    },
+    "/api/ducklake/status": {
+      "get": {
+        "summary": "Get DuckLake status",
+        "responses": { "200": { "description": "Versions, snapshot/schema state, local paths, and scheduler configuration" } }
+      }
+    },
+    "/api/ducklake/imports": {
+      "post": {
+        "summary": "Import completed Parquet files",
+        "description": "Files must be relative to --import-dir. DUX validates and copies them once while hashing, then registers them transactionally. Idempotency-Key is required. The endpoint returns 404 when imports are disabled.",
+        "parameters": [{ "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "maxLength": 256 } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["table", "files"], "properties": { "schema": { "type": "string", "default": "main", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }, "table": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }, "files": { "type": "array", "minItems": 1, "description": "Bounded by --import-max-files (default 100)", "items": { "type": "string", "maxLength": 1024 } }, "createIfMissing": { "type": "boolean", "default": false } } } } } },
+        "responses": { "202": { "description": "Import validated, copied, and accepted for transactional registration" }, "400": { "description": "Invalid path, Parquet file, or schema" }, "404": { "description": "Imports disabled" }, "409": { "description": "DuckLake busy, conflicting idempotency key, or content already imported; error identifies the active/prior import" } }
+      }
+    },
+    "/api/ducklake/imports/{id}": {
+      "get": {
+        "summary": "Get an import job",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Import job" }, "404": { "description": "Not found" } }
+      }
+    },
+    "/api/ducklake/maintenance": {
+      "get": { "summary": "List maintenance runs", "responses": { "200": { "description": "Recent maintenance runs" } } },
+      "post": {
+        "summary": "Start DuckLake maintenance",
+        "description": "Operation is compact or checkpoint.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["operation"], "properties": { "operation": { "type": "string", "enum": ["compact", "checkpoint"] } } } } } },
+        "responses": { "202": { "description": "Maintenance job accepted" }, "409": { "description": "DuckLake operation busy" } }
+      }
+    },
+    "/api/ducklake/maintenance/{id}": {
+      "get": {
+        "summary": "Get a maintenance job",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Maintenance job" }, "404": { "description": "Not found" } }
+      }
+    },
+    "/api/dash/dashboards": {
+      "get": {
+        "summary": "List dashboards",
+        "description": "All dashboard files under the store, recursively. Files that fail JSON parsing or schema validation are listed with valid=false and their error. Identities are lower-case slash-separated paths without the .json extension.",
+        "responses": {
+          "200": {
+            "description": "Array of dashboard entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path":     { "type": "string" },
+                      "name":     { "type": "string" },
+                      "modified": { "type": "string", "format": "date-time" },
+                      "etag":     { "type": "string" },
+                      "valid":    { "type": "boolean" },
+                      "error":    { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dash/dashboards/{path}": {
+      "get": {
+        "summary": "Get a dashboard",
+        "description": "Returns the listing entry plus the parsed document (or raw text for unparseable files). The ETag response header carries the version for If-Match on save. With ?raw=1 the response is the stored file verbatim (no envelope) — the download half of backup/restore.",
+        "parameters": [
+          { "name": "path", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Slash-separated identity without .json" },
+          { "name": "raw", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Download the file bytes instead of the envelope" }
+        ],
+        "responses": {
+          "200": { "description": "Dashboard envelope {path, name, modified, etag, valid, error?, document?, raw?} — or the bare document with ?raw=1" },
+          "404": { "description": "Not found" }
+        }
+      },
+      "put": {
+        "summary": "Create or update a dashboard",
+        "description": "Body is the dashboard document (validated against /api/dash/schema.json). Create: no If-Match header. Update: If-Match with the last seen etag; 428 without it, 409 with a stale one (response carries currentEtag and modified for the conflict dialog). If-Match: * is the deliberate-overwrite escape hatch — create-or-replace unconditionally (upload/restore).",
+        "parameters": [
+          { "name": "path", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "If-Match", "in": "header", "required": false, "schema": { "type": "string" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": {
+          "200": { "description": "Updated — {etag, created:false}" },
+          "201": { "description": "Created — {etag, created:true}" },
+          "409": { "description": "Stale If-Match — {error, currentEtag, modified}" },
+          "412": { "description": "If-Match on a dashboard that no longer exists" },
+          "422": { "description": "Document fails schema validation" },
+          "428": { "description": "Update without If-Match" }
+        }
+      },
+      "delete": {
+        "summary": "Delete a dashboard",
+        "parameters": [
+          { "name": "path", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "If-Match", "in": "header", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "Deleted" },
+          "404": { "description": "Not found" },
+          "409": { "description": "Stale If-Match" },
+          "428": { "description": "Missing If-Match" }
+        }
+      }
+    },
+    "/api/dash/assets/{path}": {
+      "get": {
+        "summary": "Fetch an asset",
+        "description": "Serves image files (.png/.jpg/.jpeg/.webp/.svg) kept on disk under the dashboards root — deploy them alongside the documents; there is no upload endpoint. SVG is served with a no-execute Content-Security-Policy.",
+        "responses": {
+          "200": { "description": "Image bytes" },
+          "404": { "description": "Not found" }
+        }
+      }
+    },
+    "/api/dash/theme": {
+      "get": {
+        "summary": "Global theme tokens",
+        "description": "Contents of dashboards/theme.json ({} when absent). ETag header when the file exists.",
+        "responses": { "200": { "description": "Theme JSON object" } }
+      },
+      "put": {
+        "summary": "Replace the global theme",
+        "description": "Same If-Match semantics as dashboards.",
+        "responses": {
+          "200": { "description": "Saved — {etag}" },
+          "409": { "description": "Stale If-Match" },
+          "428": { "description": "Update without If-Match" }
+        }
+      }
+    },
+    "/api/dash/schema.json": {
+      "get": {
+        "summary": "Dashboard document JSON Schema",
+        "description": "The JSON Schema (draft 2020-12) that PUT dashboards are validated against.",
+        "responses": { "200": { "description": "JSON Schema document" } }
+      }
+    }
+  }
+}

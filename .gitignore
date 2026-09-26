@@ -1,8 +1,8 @@
 # Binaries
 *.exe
 *.exe~
-dux
-duxd
+/dux
+/duxd
 
 # Test binary and coverage output
 *.test
