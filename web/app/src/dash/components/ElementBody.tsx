@@ -157,7 +157,7 @@ export function FunnelButton({ el, floating }: { el: DashElement; floating?: boo
 function FloatingActions({ el, def }: { el: DashElement; def: VisualDef }) {
   const controls = useDocStore((s) => s.doc?.controls);
   const live = useRefreshInterval(el.id) !== false;
-  const titleShown = el.title?.show !== false && !!el.title?.text;
+  const titleShown = el.type !== "kpi" && el.title?.show !== false && !!el.title?.text;
   if (titleShown) return null;
   const funnel = !!def.controls?.funnel && controls?.funnel !== false;
   const csv = !!def.controls?.csv && controls?.csv !== false;

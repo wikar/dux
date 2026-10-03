@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { reorderFieldsInElement } from "../src/dash/docOps";
+import { addFieldToWell, reorderFieldsInElement, replaceFieldInWell } from "../src/dash/docOps";
 import { buildElementDux } from "../src/dash/elementQuery";
-import { loadDoc, useDocStore } from "../src/dash/store";
+import { loadDoc, updateElement, useDocStore } from "../src/dash/store";
 import type { BuilderFieldRef, DashElement } from "../src/dash/types";
 
 const field = (name: string): BuilderFieldRef => ({ table: "analytics.Sales", name, kind: "column" });
@@ -41,4 +41,23 @@ test("visual query follows type and series settings", () => {
   expect(buildElementDux(bar)).toContain("TOPN");
   expect(buildElementDux({ ...bar, viz: { series: "Region" } })).not.toContain("TOPN");
   expect(buildElementDux({ ...bar, type: "line", query: { mode: "builder", fields } })).toContain("ORDER BY");
+});
+
+test("KPI Title follows the measure added to its value well", () => {
+  const kpi: DashElement = {
+    id: "kpi",
+    type: "kpi",
+    layout: { x: 0, y: 0, w: 200, h: 112 },
+    title: { text: "KPI card", show: true },
+    query: { mode: "builder", fields: [] },
+  };
+  loadDoc({ version: 1, canvas: { width: 200, height: 112 }, elements: [kpi] });
+  const measure = (name: string) => ({ table: "Sales", name, kind: "measure" as const, dataType: "" });
+
+  addFieldToWell("kpi", "values", measure("NetSalesAmount"));
+  expect(useDocStore.getState().doc!.elements[0].title).toEqual({ text: "NetSalesAmount", show: true });
+
+  updateElement("kpi", (el) => ({ ...el, title: { ...el.title, show: false } }));
+  replaceFieldInWell("kpi", "values", ["NetSalesAmount"], measure("NetProfitAmount"));
+  expect(useDocStore.getState().doc!.elements[0].title).toEqual({ text: "NetProfitAmount", show: false });
 });

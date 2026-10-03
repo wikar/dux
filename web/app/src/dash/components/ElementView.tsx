@@ -78,7 +78,7 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
     }
   };
 
-  const showTitle = el.title?.show !== false && !!el.title?.text;
+  const showTitle = el.type !== "kpi" && el.title?.show !== false && !!el.title?.text;
   const meta = VISUALS[el.type];
 
   return (

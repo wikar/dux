@@ -54,6 +54,10 @@ export interface VizSettings extends MapViz {
   stacked?: boolean;
   /** line: metric names plotted on the secondary (right) y axis. */
   y2?: string[];
+  /** line / combo: fit line-only vertical axes to the observed range. */
+  zoomY?: boolean;
+  /** line / combo: draw smooth curves between points. */
+  smoothLines?: boolean;
   /** combo: metric names rendered as lines (the rest are bars). */
   lines?: string[];
   /** combo: put line series on the secondary (right) y axis. Default true. */

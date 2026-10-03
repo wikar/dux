@@ -197,7 +197,12 @@ function addFieldPure(el: DashElement, well: WellId, p: DragPayload): DashElemen
   if (well === "lines") viz.lines = [...(viz.lines ?? []), p.name];
   if (well === "cols") viz.cols = [...(viz.cols ?? []), p.name];
   if (well === "series") viz.series = p.name;
-  return { ...el, query: { ...q, fields }, viz };
+  return {
+    ...el,
+    query: { ...q, fields },
+    viz,
+    ...(el.type === "kpi" && well === "values" ? { title: { ...el.title, text: p.name, show: el.title?.show ?? true } } : {}),
+  };
 }
 
 /** Pure remove: a field leaves the list, well memberships, and sort keys. */

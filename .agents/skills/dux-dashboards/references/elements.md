@@ -17,6 +17,8 @@ measure name or the numeric column's name).
 
 - Fields: n dims + n metrics.
 - `viz.y2`: array of metric names plotted on the right axis (two-scale).
+- `viz.zoomY`: fit both vertical axes to the observed range (default false); use when variation matters more than distance from zero.
+- `viz.smoothLines`: draw natural cubic curves between points (default false).
 - Default sort when unset: axis columns ascending.
 
 ### combo (bars + lines)
@@ -24,6 +26,8 @@ measure name or the numeric column's name).
 - Fields: n dims + n metrics.
 - `viz.lines`: metric names rendered as lines (the rest are bars).
 - `viz.lineY2`: lines on the right axis (default `true`).
+- `viz.zoomY`: fit the line axis to the observed range (default false); an axis shared with bars retains zero.
+- `viz.smoothLines`: draw natural cubic curves for line series (default false).
 
 ### area
 

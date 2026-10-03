@@ -21,7 +21,7 @@ const lineChart: VisualDef = {
     seriesSplit: true,
     sortByDims: true,
   },
-  options: [SHOW_EMPTY, LEGEND],
+  options: [SHOW_EMPTY, { key: "zoomY", label: "Fit vertical range to data", kind: "check", default: false }, { key: "smoothLines", label: "Smooth lines", kind: "check", default: false }, LEGEND],
   series: (ctx) => {
     // Split series are dim values, never right-axis metrics. Left series are
     // colored first so the palette order matches the plotted order.
@@ -32,6 +32,7 @@ const lineChart: VisualDef = {
       kind: "line",
       color: color(ctx.palette, i),
       axis: y2.has(key) ? "right" : "left",
+      smooth: ctx.viz.smoothLines,
       dot: { base: "auto", highlight: true },
     }));
   },

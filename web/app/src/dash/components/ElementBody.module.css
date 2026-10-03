@@ -204,7 +204,7 @@
 }
 
 .kpiValue {
-  font-size: clamp(18px, 12cqw, 44px);
+  font-size: clamp(14px, min(12cqw, calc(100cqh - 38px)), 44px);
   font-weight: 700;
   color: var(--th-text);
   line-height: 1.1;

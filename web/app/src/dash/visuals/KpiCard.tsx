@@ -4,7 +4,7 @@ import styles from "../components/ElementBody.module.css";
 import { S } from "../glyphs";
 import type { DataBodyProps, VisualDef } from "./types";
 
-function KpiBody({ data, metricCols, formats, viz }: DataBodyProps) {
+function KpiBody({ el, data, metricCols, formats, viz }: DataBodyProps) {
   const col = metricCols[0] ?? data.columns[data.columns.length - 1];
   const idx = data.columns.indexOf(col);
   const value = idx >= 0 && data.rows.length > 0 ? data.rows[0][idx] : null;
@@ -25,7 +25,7 @@ function KpiBody({ data, metricCols, formats, viz }: DataBodyProps) {
       <span className={styles.kpiValue} style={{ color }}>
         {value === null || value === undefined ? "—" : formatValue(value, formats[col])}
       </span>
-      <span className={styles.kpiLabel}>{col}</span>
+      {el.title?.show !== false && <span className={styles.kpiLabel}>{el.title?.text || col}</span>}
     </div>
   );
 }

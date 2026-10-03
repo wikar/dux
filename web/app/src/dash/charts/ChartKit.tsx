@@ -310,6 +310,8 @@ export interface SeriesSpec {
   radius?: number;
   /** area: band opacity. */
   fillOpacity?: number;
+  /** line: use a natural cubic spline through the points. */
+  smooth?: boolean;
   /** line / area point markers. base "auto" shows them only on sparse data;
    *  highlight enlarges the marks that are cross-filter selected. */
   dot?: { base: number | "auto"; highlight?: boolean };
@@ -323,6 +325,8 @@ interface CartesianProps {
   interaction?: Interaction;
   /** Category on the y axis (horizontal bars). */
   horizontal?: boolean;
+  /** Fit line-only vertical axes to the data instead of including zero. */
+  zoomY?: boolean;
   /** Outline for a cross-filter-selected marker — the theme's text color, so
    *  the mark separates from its own line without borrowing a series color. */
   markStroke?: string;
@@ -390,14 +394,18 @@ export function CartesianChart({
   legend,
   interaction,
   horizontal,
+  zoomY,
   markStroke,
 }: CartesianProps) {
   const split = interaction?.seriesDim; // when set, each series key is a dim value
   const click = interaction?.onMarkClick;
   const sel = interaction?.selectedKeys;
   const right = series.filter((s) => s.axis === "right");
-  const leftKeys = series.filter((s) => s.axis !== "right").map((s) => s.key);
+  const left = series.filter((s) => s.axis !== "right");
+  const leftKeys = left.map((s) => s.key);
   const rightKeys = right.map((s) => s.key);
+  const lineDomain = (axisSeries: SeriesSpec[]) =>
+    zoomY && axisSeries.length > 0 && axisSeries.every((s) => s.kind === "line") ? ["auto", "auto"] as const : undefined;
   const leftFmt = tickFormatter(formats, leftKeys);
   const rightFmt = tickFormatter(formats, rightKeys);
   // A horizontal layout has a single numeric axis, so series carry no axis id.
@@ -463,7 +471,7 @@ export function CartesianChart({
         />
       );
     }
-    return <Line key={s.key} {...shared} connectNulls stroke={s.color} strokeWidth={SERIES_STROKE} dot={dot} />;
+    return <Line key={s.key} {...shared} type={s.smooth ? "natural" : "linear"} connectNulls stroke={s.color} strokeWidth={SERIES_STROKE} dot={dot} />;
   };
 
   return (
@@ -499,6 +507,7 @@ export function CartesianChart({
             <YAxis
               yAxisId="left"
               type="number"
+              domain={lineDomain(left)}
               {...commonAxis}
               tickFormatter={leftFmt}
               width={numericAxisWidth(data, leftKeys, leftFmt)}
@@ -508,6 +517,7 @@ export function CartesianChart({
                 yAxisId="right"
                 orientation="right"
                 type="number"
+                domain={lineDomain(right)}
                 {...commonAxis}
                 tickFormatter={rightFmt}
                 width={numericAxisWidth(data, rightKeys, rightFmt)}

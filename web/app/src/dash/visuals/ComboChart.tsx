@@ -23,7 +23,7 @@ const comboChart: VisualDef = {
     chart: true,
     sortByDims: true,
   },
-  options: [SHOW_EMPTY, { key: "lineY2", label: "Lines on right axis", kind: "check", default: true }, LEGEND],
+  options: [SHOW_EMPTY, { key: "zoomY", label: "Fit vertical range to data", kind: "check", default: false }, { key: "smoothLines", label: "Smooth lines", kind: "check", default: false }, { key: "lineY2", label: "Lines on right axis", kind: "check", default: true }, LEGEND],
   series: (ctx) => {
     const lineKeys = (ctx.viz.lines ?? []).filter((n) => ctx.keys.includes(n));
     const barKeys = ctx.keys.filter((k) => !lineKeys.includes(k));
@@ -40,6 +40,7 @@ const comboChart: VisualDef = {
       kind: "line",
       color: color(ctx.palette, barKeys.length + i),
       axis: right ? "right" : "left",
+      smooth: ctx.viz.smoothLines,
       dot: { base: "auto", highlight: true },
     }));
     return [...bars, ...lines];

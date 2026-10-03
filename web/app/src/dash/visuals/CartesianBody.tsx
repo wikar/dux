@@ -5,6 +5,7 @@ import { CartesianChart } from "../charts/ChartKit";
 import type { DataBodyProps } from "./types";
 
 export default function CartesianBody({
+  el,
   rows,
   keys,
   formats,
@@ -25,6 +26,7 @@ export default function CartesianBody({
       interaction={interaction}
       markStroke={textColor}
       horizontal={!!meta.cartesian?.orientable && viz.orientation === "horizontal"}
+      zoomY={el.type === "line" || el.type === "combo" ? viz.zoomY : undefined}
     />
   );
 }
