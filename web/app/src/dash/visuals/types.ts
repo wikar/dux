@@ -7,7 +7,7 @@
 // and the settings pane without dragging in body components.
 import type { ComponentType, JSX } from "react";
 import type { MeasureFormat, QueryResponse } from "@dux/core";
-import type { ChartRow, Interaction, SeriesSpec } from "../charts/ChartKit";
+import type { ChartRow, Interaction } from "../charts/chartData";
 import type { DashElement, ElementType, VizSettings } from "../types";
 
 /** Field wells a visual can expose. Membership is derived from the element's
@@ -57,16 +57,6 @@ export interface ControlSpec {
   clear?: boolean;
 }
 
-/** Inputs a cartesian visual turns into its Recharts series. */
-export interface SeriesContext {
-  viz: VizSettings;
-  palette: string[];
-  /** Plotted keys: metric columns, or the split dim's values. */
-  keys: string[];
-  /** True when keys are series-split dim values rather than measures. */
-  split: boolean;
-}
-
 export interface VisualMeta {
   label: string;
   icon: JSX.Element;
@@ -76,30 +66,19 @@ export interface VisualMeta {
   titled?: boolean;
   /** Element fields seeded on insert, beyond id/type/layout/title/query. */
   seed?: () => Partial<DashElement>;
-  /** Present = the visual runs a DUX query. */
-  data?: DataSpec;
   options?: OptionSpec[];
   controls?: ControlSpec;
-  /** Set by visuals rendered through CartesianChart. */
-  cartesian?: {
-    /** Honors viz.orientation (category on the y axis). */
-    orientable?: boolean;
-  };
-  series?: (ctx: SeriesContext) => SeriesSpec[];
   /** Transparent element container (the map paints its own surface). */
   bare?: boolean;
-  /** Live-refresh probe: is a fetch for this element in flight? Visuals with a
-   *  `data` spec are covered by the shared element query and need not declare
-   *  it; the ones running their own queries (slicer, map) do. Hits the same
-   *  cache entry the body already reads, so it costs no extra request. */
-  useFetching?: (el: DashElement) => boolean;
+  /** Status for visuals that run their own queries (map and slicer). */
+  RefreshStatus?: ComponentType<StaticBodyProps>;
 }
 
 export interface StaticBodyProps {
   el: DashElement;
 }
 
-/** Props every query-backed body receives. The shared pipeline in ElementBody
+/** Props every query-backed body receives. The shared useVisualData pipeline
  *  does the column inference, empty-row drop, chart pivot and cross-filter
  *  wiring once, so a body only renders. */
 export interface DataBodyProps extends StaticBodyProps {
@@ -120,11 +99,18 @@ export interface DataBodyProps extends StaticBodyProps {
   /** Resolved legend visibility (viz.legend, else multi-series). */
   legend: boolean;
   interaction: Interaction;
-  meta: VisualMeta;
 }
 
-export interface VisualDef extends VisualMeta {
+export interface QueryVisualDef extends VisualMeta {
   type: ElementType;
-  /** Query visuals get DataBodyProps; the rest only receive `el`. */
-  Body: ComponentType<DataBodyProps> | ComponentType<StaticBodyProps>;
+  data: DataSpec;
+  Body: ComponentType<DataBodyProps>;
 }
+
+export interface StaticVisualDef extends VisualMeta {
+  type: ElementType;
+  data?: undefined;
+  Body: ComponentType<StaticBodyProps>;
+}
+
+export type VisualDef = QueryVisualDef | StaticVisualDef;

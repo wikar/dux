@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { RefreshIndicator } from "../components/ElementControls";
 import styles from "./Slicer.module.css";
 import { applySlicerSelection, dropStaleSlicerValues } from "../actions";
-import { useSlicerOptions } from "../data";
+import { useRefreshInterval, useSlicerOptions } from "../data";
 import { S, stroke } from "../glyphs";
 import { useUiStore } from "../store";
 import type { DashElement, SlicerSelection } from "../types";
-import type { StaticBodyProps, VisualDef } from "./types";
+import type { StaticBodyProps, StaticVisualDef } from "./types";
 import { displayMessage } from "../message";
 
-const slicer: VisualDef = {
+const slicer: StaticVisualDef = {
   type: "slicer",
   label: "Slicer",
   icon: (
@@ -20,9 +21,9 @@ const slicer: VisualDef = {
   size: { w: 200, h: 240 },
   controls: { clear: true },
   // The slicer runs its own options query, not the shared element query.
-  useFetching: (el) => useSlicerOptions(el).loading,
+  RefreshStatus: SlicerRefreshStatus,
   seed: () => ({ slicer: { table: "", column: "", kind: "buttons", multi: true } }),
-  Body: ({ el }: StaticBodyProps) => <SlicerBody el={el} />,
+  Body: SlicerBody,
 };
 
 export default slicer;
@@ -101,6 +102,7 @@ function toggleValue(el: DashElement, sel: SlicerSelection | undefined, v: strin
   else next = cur.includes(v) ? [] : [v];
   applySlicerSelection(el.id, next.length > 0 ? { kind: "values", values: next } : null);
 }
+
 
 // ─── Buttons (clickable value pills) ─────────────────────────────────────────
 
@@ -290,4 +292,10 @@ function RangeSlicer({
       </label>
     </div>
   );
+}
+
+function SlicerRefreshStatus({ el }: StaticBodyProps) {
+  const live = useRefreshInterval(el.id) !== false;
+  const { loading } = useSlicerOptions(el);
+  return <RefreshIndicator live={live} fetching={loading} />;
 }

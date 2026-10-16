@@ -2,7 +2,7 @@
 import { formatValue } from "@dux/core";
 import styles from "../components/ElementBody.module.css";
 import { S } from "../glyphs";
-import type { DataBodyProps, VisualDef } from "./types";
+import type { DataBodyProps, QueryVisualDef } from "./types";
 
 function KpiBody({ el, data, metricCols, formats, viz }: DataBodyProps) {
   const col = metricCols[0] ?? data.columns[data.columns.length - 1];
@@ -30,7 +30,7 @@ function KpiBody({ el, data, metricCols, formats, viz }: DataBodyProps) {
   );
 }
 
-const kpiCard: VisualDef = {
+const kpiCard: QueryVisualDef = {
   type: "kpi",
   label: "KPI card",
   icon: (

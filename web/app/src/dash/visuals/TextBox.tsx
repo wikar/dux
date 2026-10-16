@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import styles from "../components/ElementBody.module.css";
 import { S } from "../glyphs";
-import type { StaticBodyProps, VisualDef } from "./types";
+import type { StaticBodyProps, StaticVisualDef } from "./types";
 
 function TextBody({ el }: StaticBodyProps) {
   return (
@@ -13,7 +13,7 @@ function TextBody({ el }: StaticBodyProps) {
   );
 }
 
-const textBox: VisualDef = {
+const textBox: StaticVisualDef = {
   type: "text",
   label: "Text",
   icon: (

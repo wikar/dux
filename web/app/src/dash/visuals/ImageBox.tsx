@@ -2,7 +2,7 @@
 import { imageUrl } from "../api";
 import styles from "../components/ElementBody.module.css";
 import { S, stroke } from "../glyphs";
-import type { StaticBodyProps, VisualDef } from "./types";
+import type { StaticBodyProps, StaticVisualDef } from "./types";
 
 const icon = (
   <svg {...S}>
@@ -33,7 +33,7 @@ function ImageBody({ el }: StaticBodyProps) {
   );
 }
 
-const imageBox: VisualDef = {
+const imageBox: StaticVisualDef = {
   type: "image",
   label: "Image",
   icon,

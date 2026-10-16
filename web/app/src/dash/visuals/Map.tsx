@@ -5,14 +5,16 @@
 // stylesheet, which most dashboards never use. Loading it on first render keeps
 // that weight out of the dash bundle.
 import { lazy, Suspense } from "react";
+import { RefreshIndicator } from "../components/ElementControls";
+import { useRefreshInterval } from "../data";
 import styles from "../components/ElementBody.module.css";
 import { S, stroke } from "../glyphs";
 import { useMapLayerData } from "../mapData";
-import type { StaticBodyProps, VisualDef } from "./types";
+import type { StaticBodyProps, StaticVisualDef } from "./types";
 
 const MapBody = lazy(() => import("./MapBody"));
 
-const mapVisual: VisualDef = {
+const mapVisual: StaticVisualDef = {
   type: "map",
   label: "Map",
   icon: (
@@ -31,16 +33,27 @@ const mapVisual: VisualDef = {
   bare: true,
   // Layers are fetched per layer rather than through the shared query
   // pipeline, so the map carries filters without a `data` spec — and declares
-  // its own live-refresh probe. The hook lives in mapData, not the lazy body:
+  // its own live-refresh status. The hook lives in mapData, not the lazy body:
   // the registry entry has to stay statically importable.
-  useFetching: (el) => useMapLayerData(el).loading,
+  RefreshStatus: MapRefreshStatus,
   seed: () => ({
     query: { mode: "builder", filters: [] },
     viz: { layers: [{ id: "layer-1", kind: "circle" }] },
   }),
-  // A failed chunk load throws past Suspense into the element's error boundary,
-  // which is the same place a broken body lands.
-  Body: ({ el }: StaticBodyProps) => (
+  Body: MapVisualBody,
+};
+
+export default mapVisual;
+
+function MapRefreshStatus({ el }: StaticBodyProps) {
+  const live = useRefreshInterval(el.id) !== false;
+  const { loading } = useMapLayerData(el);
+  return <RefreshIndicator live={live} fetching={loading} />;
+}
+
+// Failed chunk loads reach the element error boundary through Suspense.
+function MapVisualBody({ el }: StaticBodyProps) {
+  return (
     <Suspense
       fallback={
         <div className={styles.overlay}>
@@ -50,7 +63,5 @@ const mapVisual: VisualDef = {
     >
       <MapBody el={el} />
     </Suspense>
-  ),
-};
-
-export default mapVisual;
+  );
+}

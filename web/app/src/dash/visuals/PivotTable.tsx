@@ -11,11 +11,11 @@ import { S, stroke } from "../glyphs";
 import { markKey, useUiStore } from "../store";
 import type { DashElement } from "../types";
 import { DATA_CONTROLS, SHOW_EMPTY, VALUES } from "./common";
-import type { DataBodyProps, VisualDef } from "./types";
+import type { QueryVisualDef } from "./types";
 import { formatValue } from "@dux/core";
 import type { MeasureFormat, QueryResponse } from "@dux/core";
 
-const pivotTable: VisualDef = {
+const pivotTable: QueryVisualDef = {
   type: "pivot",
   label: "Pivot",
   icon: (
@@ -42,7 +42,7 @@ const pivotTable: VisualDef = {
     { key: "totalCol", label: "Total column", kind: "check", default: true },
     { key: "collapsed", label: "Start collapsed", kind: "check", default: true },
   ],
-  Body: ({ el, data, formats }: DataBodyProps) => <PivotBody el={el} data={data} formats={formats} />,
+  Body: PivotBody,
 };
 
 export default pivotTable;

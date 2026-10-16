@@ -1,6 +1,7 @@
 // Registry fragments shared by more than one visual. A visual composes these
 // into its own entry rather than restating them.
-import type { OptionSpec, SeriesContext, WellSpec } from "./types";
+import type { SeriesContext } from "../charts/seriesTypes";
+import type { OptionSpec, WellSpec } from "./types";
 
 const SERIES_HINT = "Drop a column — Splits the first Values measure into one series per value";
 

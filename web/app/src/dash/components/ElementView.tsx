@@ -1,10 +1,11 @@
 import { useRef, useState } from "react";
 import styles from "./ElementView.module.css";
 import { applyGesture, type GestureKind } from "../docOps";
-import { updateElement, useDocStore, useUiStore } from "../store";
+import { updateElement, useUiStore } from "../store";
 import type { CanvasSpec, DashElement, Layout } from "../types";
 import { VISUALS } from "../visuals";
-import ElementBody, { ClearButton, ControlsBoundary, CsvButton, FunnelButton, RefreshDot } from "./ElementBody";
+import ElementBody from "./ElementBody";
+import ElementFrame from "./ElementFrame";
 
 const HANDLES: GestureKind[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 
@@ -20,16 +21,13 @@ interface Props {
   onContextMenu: (x: number, y: number) => void;
 }
 
-/** Base element container: title bar, selection ring, drag/resize gestures,
- *  spinner/error overlays. During a gesture the layout lives in local state
- *  (the ghost) and is committed to the document once on release — one undo
+/** Canvas selection and drag/resize gestures. During a gesture the layout
+ *  lives in local state (the ghost) and is committed to the document once on release — one undo
  *  step per drag. */
 export default function ElementView({ el, canvas, scale, onContextMenu }: Props) {
   const mode = useUiStore((s) => s.mode);
   const selected = useUiStore((s) => s.selectedId === el.id);
   const select = useUiStore((s) => s.select);
-  const showFunnel = useDocStore((s) => s.doc?.controls?.funnel) !== false;
-  const showCsv = useDocStore((s) => s.doc?.controls?.csv) !== false;
   const [ghost, setGhost] = useState<Layout | null>(null);
   const gesture = useRef<{
     kind: GestureKind;
@@ -78,14 +76,13 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
     }
   };
 
-  const showTitle = el.type !== "kpi" && el.title?.show !== false && !!el.title?.text;
-  const meta = VISUALS[el.type];
-
   return (
-    <div
-      data-element-id={el.id}
-      className={`${styles.el} ${meta?.bare ? styles.map : ""} ${el.viz?.transparent ? styles.transparent : ""} ${editing ? styles.editing : ""} ${selected ? styles.selected : ""}`}
-      style={{ left: layout.x, top: layout.y, width: layout.w, height: layout.h, zIndex: layout.z ?? 0 }}
+    <ElementFrame
+      el={el}
+      meta={VISUALS[el.type]}
+      layout={layout}
+      editing={editing}
+      selected={selected}
       onPointerDown={(e) => begin(e, "move")}
       onPointerMove={move}
       onPointerUp={end}
@@ -96,36 +93,17 @@ export default function ElementView({ el, canvas, scale, onContextMenu }: Props)
         select(el.id);
         onContextMenu(e.clientX, e.clientY);
       }}
+      editorOverlay={editing && selected && HANDLES.map((dir) => (
+        <div
+          key={dir}
+          className={`${styles.handle} ${styles[`h_${dir}`]}`}
+          onPointerDown={(e) => begin(e, dir)}
+          onPointerMove={move}
+          onPointerUp={end}
+        />
+      ))}
     >
-      {showTitle && (
-        <div className={styles.titleBar}>
-          <span className={styles.titleText}>{el.title!.text}</span>
-          <div className={styles.titleActions}>
-            <ControlsBoundary el={el}>
-              {meta?.controls?.clear && <ClearButton el={el} className={styles.titleCsv} />}
-              {meta?.controls?.funnel && showFunnel && <FunnelButton el={el} />}
-              {meta?.controls?.csv && showCsv && <CsvButton el={el} className={styles.titleCsv} />}
-              <RefreshDot el={el} />
-            </ControlsBoundary>
-          </div>
-        </div>
-      )}
-      <div className={styles.body}>
-        <ElementBody el={el} />
-      </div>
-      {editing && selected && (
-        <>
-          {HANDLES.map((dir) => (
-            <div
-              key={dir}
-              className={`${styles.handle} ${styles[`h_${dir}`]}`}
-              onPointerDown={(e) => begin(e, dir)}
-              onPointerMove={move}
-              onPointerUp={end}
-            />
-          ))}
-        </>
-      )}
-    </div>
+      <ElementBody el={el} />
+    </ElementFrame>
   );
 }

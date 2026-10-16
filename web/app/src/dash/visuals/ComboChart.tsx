@@ -1,11 +1,12 @@
 // Combo chart: bars plus lines, the lines optionally on a secondary right axis.
-import type { SeriesSpec } from "../charts/ChartKit";
+import { renderBarSeries, renderLineSeries } from "../charts/series";
+import type { SeriesContext, SeriesSpec } from "../charts/seriesTypes";
 import { S, stroke } from "../glyphs";
-import CartesianBody from "./CartesianBody";
+import CartesianFrame from "../charts/CartesianFrame";
 import { AXIS, color, DATA_CONTROLS, LEGEND, SHOW_EMPTY } from "./common";
-import type { VisualDef } from "./types";
+import type { DataBodyProps, QueryVisualDef } from "./types";
 
-const comboChart: VisualDef = {
+const comboChart: QueryVisualDef = {
   type: "combo",
   label: "Combo chart",
   icon: (
@@ -24,28 +25,39 @@ const comboChart: VisualDef = {
     sortByDims: true,
   },
   options: [SHOW_EMPTY, { key: "zoomY", label: "Fit vertical range to data", kind: "check", default: false }, { key: "smoothLines", label: "Smooth lines", kind: "check", default: false }, { key: "lineY2", label: "Lines on right axis", kind: "check", default: true }, LEGEND],
-  series: (ctx) => {
-    const lineKeys = (ctx.viz.lines ?? []).filter((n) => ctx.keys.includes(n));
-    const barKeys = ctx.keys.filter((k) => !lineKeys.includes(k));
-    const right = (ctx.viz.lineY2 ?? true) && lineKeys.length > 0;
-    const bars: SeriesSpec[] = barKeys.map((key, i) => ({
-      key,
-      kind: "bar",
-      color: color(ctx.palette, i),
-      radius: 2,
-    }));
-    // Lines continue the palette where the bars left off.
-    const lines: SeriesSpec[] = lineKeys.map((key, i) => ({
-      key,
-      kind: "line",
-      color: color(ctx.palette, barKeys.length + i),
-      axis: right ? "right" : "left",
-      smooth: ctx.viz.smoothLines,
-      dot: { base: "auto", highlight: true },
-    }));
-    return [...bars, ...lines];
-  },
-  Body: CartesianBody,
+  Body: ComboChartBody,
 };
 
 export default comboChart;
+
+export function buildComboSeries(ctx: SeriesContext): SeriesSpec[] {
+  const lineKeys = (ctx.viz.lines ?? []).filter((n) => ctx.keys.includes(n));
+  const barKeys = ctx.keys.filter((k) => !lineKeys.includes(k));
+  const right = (ctx.viz.lineY2 ?? true) && lineKeys.length > 0;
+  const bars: SeriesSpec[] = barKeys.map((key, i) => ({
+    key,
+    kind: "bar",
+    color: color(ctx.palette, i),
+    radius: 2,
+  }));
+  // Lines continue the palette where the bars left off.
+  const lines: SeriesSpec[] = lineKeys.map((key, i) => ({
+    key,
+    kind: "line",
+    color: color(ctx.palette, barKeys.length + i),
+    axis: right ? "right" : "left",
+    smooth: ctx.viz.smoothLines,
+    dot: { base: "auto", highlight: true },
+  }));
+  return [...bars, ...lines];
+}
+
+function ComboChartBody({ rows, keys, formats, palette, textColor, viz, legend, interaction }: DataBodyProps) {
+  const series = buildComboSeries({ viz, palette, keys, split: !!interaction.seriesDim });
+  return (
+    <CartesianFrame data={rows} series={series} formats={formats} legend={legend} interaction={interaction} zoomY={viz.zoomY}>
+      {series.filter((s) => s.kind === "bar").map((s) => renderBarSeries(s, { data: rows, interaction, markStroke: textColor }))}
+      {series.filter((s) => s.kind === "line").map((s) => renderLineSeries(s, { data: rows, interaction, markStroke: textColor }))}
+    </CartesianFrame>
+  );
+}

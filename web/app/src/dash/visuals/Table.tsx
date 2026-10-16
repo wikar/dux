@@ -8,13 +8,13 @@ import { splitElementFields } from "../data";
 import { S, stroke } from "../glyphs";
 import { markKey, updateElement, useUiStore } from "../store";
 import type { DashElement } from "../types";
-import type { ChartDim } from "../charts/ChartKit";
+import type { ChartDim } from "../charts/chartData";
 import { DATA_CONTROLS, SHOW_EMPTY } from "./common";
-import type { DataBodyProps, VisualDef } from "./types";
+import type { QueryVisualDef } from "./types";
 import { formatValue } from "@dux/core";
 import type { MeasureFormat, QueryResponse } from "@dux/core";
 
-const table: VisualDef = {
+const table: QueryVisualDef = {
   type: "table",
   label: "Table",
   icon: (
@@ -28,7 +28,7 @@ const table: VisualDef = {
   controls: DATA_CONTROLS,
   data: { wells: [{ id: "fields", label: "Columns" }] },
   options: [SHOW_EMPTY],
-  Body: ({ el, data, formats }: DataBodyProps) => <TableBody el={el} data={data} formats={formats} />,
+  Body: TableBody,
 };
 
 export default table;
