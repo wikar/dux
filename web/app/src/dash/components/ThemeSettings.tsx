@@ -219,9 +219,27 @@ function PaletteEditor({ colors, onChange }: { colors: string[]; onChange: (c: s
 }
 
 function GlobalThemeModal({ onClose }: { onClose: () => void }) {
-  const { data } = useGlobalTheme();
+  const { data, isLoading, error } = useGlobalTheme();
+  if (isLoading) return <Modal title="Global theme" onClose={onClose}><p>Loading theme…</p></Modal>;
+  if (error || !data) return (
+    <Modal title="Global theme" onClose={onClose}>
+      <div className={modalStyles.error}>{error ? displayMessage(error) : "The global theme could not be loaded."}</div>
+      <button className={modalStyles.btn} onClick={onClose}>Close</button>
+    </Modal>
+  );
+  return <GlobalThemeEditor snapshot={data} onClose={onClose} />;
+}
+
+function GlobalThemeEditor({
+  snapshot,
+  onClose,
+}: {
+  snapshot: { tokens: Record<string, unknown>; etag: string | null };
+  onClose: () => void;
+}) {
   const queryClient = useQueryClient();
-  const [tokens, setTokens] = useState<Record<string, unknown>>(() => ({ ...(data?.tokens ?? {}) }));
+  const [initial] = useState(() => ({ tokens: { ...snapshot.tokens }, etag: snapshot.etag }));
+  const [tokens, setTokens] = useState<Record<string, unknown>>(() => ({ ...initial.tokens }));
   const [error, setError] = useState<string | null>(null);
 
   const onToken = (key: keyof ThemeTokens, value: string | string[] | undefined) =>
@@ -234,7 +252,7 @@ function GlobalThemeModal({ onClose }: { onClose: () => void }) {
 
   const save = async () => {
     try {
-      await putTheme(tokens, data?.etag ?? null);
+      await putTheme(tokens, initial.etag);
       await queryClient.invalidateQueries({ queryKey: ["dash-theme"] });
       onClose();
     } catch (e) {

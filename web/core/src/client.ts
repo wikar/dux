@@ -261,6 +261,15 @@ export class DuxClient {
     if (!res.ok) throw new Error(await errorText(res));
   }
 
+  async replaceRelationship(request: { original: RelInput; replacement: RelInput }): Promise<void> {
+    const res = await fetch("/relationships/replace", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    if (!res.ok) throw new Error(await errorText(res));
+  }
+
   async deleteRelationship(rel: RelInput): Promise<void> {
     const res = await fetch("/relationships", {
       method: "DELETE",

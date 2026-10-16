@@ -7,7 +7,7 @@
 
 .layout {
   display: grid;
-  grid-template-columns: 22% 23% 1fr;
+  grid-template-columns: 260px 280px minmax(0, 1fr);
   flex: 1;
   overflow: hidden;
 }

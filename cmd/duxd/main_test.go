@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -463,6 +464,86 @@ func TestRejectedRelationshipUpdatePreservesStoredValue(t *testing.T) {
 	}
 	if len(loaded.Relationships) != 3 || loaded.Relationships[2].Bidirectional {
 		t.Fatalf("stored relationship was not preserved: %#v", loaded.Relationships)
+	}
+}
+
+func TestReplaceRelationshipValidatesAndPersistsFinalGraph(t *testing.T) {
+	metaDB, err := semantic.OpenMetadataDB(t.TempDir() + "/dux.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = metaDB.Close() })
+	old := relationshipRequest{FromTable: "a", FromColumn: "id", ToTable: "b", ToColumn: "a_id"}
+	other := &semantic.Relationship{FromTable: "b", FromColumn: "id", ToTable: "c", ToColumn: "b_id"}
+	if err := metaDB.SaveRelationship(old.FromTable, old.FromColumn, old.ToTable, old.ToColumn, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := metaDB.SaveRelationship(other.FromTable, other.FromColumn, other.ToTable, other.ToColumn, false); err != nil {
+		t.Fatal(err)
+	}
+	schema := semantic.NewSchema()
+	schema.Relationships = []*semantic.Relationship{
+		{FromTable: old.FromTable, FromColumn: old.FromColumn, ToTable: old.ToTable, ToColumn: old.ToColumn}, other,
+	}
+	req := replaceRelationshipRequest{
+		Original:    old,
+		Replacement: relationshipRequest{FromTable: "a", FromColumn: "id", ToTable: "c", ToColumn: "a_id", Bidirectional: true},
+	}
+	body, _ := json.Marshal(req)
+	rec := httptest.NewRecorder()
+	replaceRelationshipHandler(metaDB, schema, &sync.RWMutex{})(rec, httptest.NewRequest(http.MethodPost, "/relationships/replace", bytes.NewReader(body)))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("replace failed: %d %s", rec.Code, rec.Body.String())
+	}
+	if len(schema.Relationships) != 2 || schema.Relationships[1].ToTable != "c" || !schema.Relationships[1].Bidirectional {
+		t.Fatalf("in-memory graph was not replaced: %#v", schema.Relationships)
+	}
+	loaded := semantic.NewSchema()
+	if err := metaDB.LoadIntoSchema(loaded); err != nil {
+		t.Fatal(err)
+	}
+	replaced := false
+	for _, rel := range loaded.Relationships {
+		if rel.FromTable == "a" && rel.ToTable == "c" && rel.Bidirectional {
+			replaced = true
+		}
+	}
+	if len(loaded.Relationships) != 2 || !replaced {
+		t.Fatalf("stored graph was not replaced: %#v", loaded.Relationships)
+	}
+}
+
+func TestRejectedRelationshipReplacementPreservesOriginal(t *testing.T) {
+	metaDB, err := semantic.OpenMetadataDB(t.TempDir() + "/dux.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = metaDB.Close() })
+	old := relationshipRequest{FromTable: "a", FromColumn: "id", ToTable: "b", ToColumn: "a_id"}
+	reverse := &semantic.Relationship{FromTable: "c", FromColumn: "id", ToTable: "a", ToColumn: "a_id"}
+	if err := metaDB.SaveRelationship(old.FromTable, old.FromColumn, old.ToTable, old.ToColumn, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := metaDB.SaveRelationship(reverse.FromTable, reverse.FromColumn, reverse.ToTable, reverse.ToColumn, false); err != nil {
+		t.Fatal(err)
+	}
+	schema := semantic.NewSchema()
+	schema.Relationships = []*semantic.Relationship{
+		{FromTable: old.FromTable, FromColumn: old.FromColumn, ToTable: old.ToTable, ToColumn: old.ToColumn}, reverse,
+	}
+	req := replaceRelationshipRequest{Original: old, Replacement: relationshipRequest{FromTable: "a", FromColumn: "a_id", ToTable: "c", ToColumn: "id"}}
+	body, _ := json.Marshal(req)
+	rec := httptest.NewRecorder()
+	replaceRelationshipHandler(metaDB, schema, &sync.RWMutex{})(rec, httptest.NewRequest(http.MethodPost, "/relationships/replace", bytes.NewReader(body)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected reverse collision conflict, got %d: %s", rec.Code, rec.Body.String())
+	}
+	loaded := semantic.NewSchema()
+	if err := metaDB.LoadIntoSchema(loaded); err != nil {
+		t.Fatal(err)
+	}
+	if len(schema.Relationships) != 2 || len(loaded.Relationships) != 2 || schema.Relationships[0].ToTable != "b" || loaded.Relationships[0].ToTable != "b" {
+		t.Fatalf("rejected replacement removed original: memory=%#v stored=%#v", schema.Relationships, loaded.Relationships)
 	}
 }
 

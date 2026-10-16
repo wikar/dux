@@ -294,6 +294,34 @@ func (m *MetadataDB) SaveRelationship(fromTable, fromColumn, toTable, toColumn s
 	return tx.Commit()
 }
 
+// ReplaceRelationship atomically swaps an existing relationship for another.
+func (m *MetadataDB) ReplaceRelationship(old, next *Relationship) error {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return fmt.Errorf("replace relationship: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	result, err := tx.Exec(`DELETE FROM dux_meta.dux_relationships
+		WHERE from_table = ? AND from_column = ? AND to_table = ? AND to_column = ?`,
+		old.FromTable, old.FromColumn, old.ToTable, old.ToColumn)
+	if err != nil {
+		return fmt.Errorf("replace relationship: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("replace relationship: %w", err)
+	}
+	if count == 0 {
+		return fmt.Errorf("relationship being replaced no longer exists")
+	}
+	if _, err := tx.Exec(`INSERT INTO dux_meta.dux_relationships
+		(from_table, from_column, to_table, to_column, bidirectional) VALUES (?, ?, ?, ?, ?)`,
+		next.FromTable, next.FromColumn, next.ToTable, next.ToColumn, next.Bidirectional); err != nil {
+		return fmt.Errorf("replace relationship: %w", err)
+	}
+	return tx.Commit()
+}
+
 // SaveMeasure inserts or replaces a measure in the metadata DB.
 // expression should be the raw DUX expression string (e.g. "SUM(analytics.Sales[_NetSalesAmount])").
 // format is the optional display format; nil clears any stored format.

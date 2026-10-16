@@ -215,11 +215,13 @@ export function createDashboard(path: string) {
 
 // ─── Save / conflicts ────────────────────────────────────────────────────────
 
-export async function save(): Promise<void> {
+export async function save(expectedPath?: string): Promise<void> {
   const ui = useUiStore.getState();
   const path = ui.path;
   const doc = useDocStore.getState().doc;
-  if (!path || !doc || ui.saving) return;
+  // The URL changes before openDashboard finishes. Never pair that new path
+  // with the previous dashboard's document or ETag during that window.
+  if (!path || (expectedPath !== undefined && expectedPath !== path) || path !== ui.loadedPath || !doc || ui.saving) return;
   ui.setSaving(true);
   try {
     const r = await putDashboard(path, doc, ui.etag);
@@ -243,7 +245,7 @@ export async function overwriteConflict(): Promise<void> {
   const path = ui.path;
   const doc = useDocStore.getState().doc;
   const conflict = ui.conflict;
-  if (!path || !doc || !conflict) return;
+  if (!path || path !== ui.loadedPath || !doc || !conflict) return;
   try {
     const r = await putDashboard(path, doc, conflict.currentEtag);
     if (useUiStore.getState().path !== path) return;

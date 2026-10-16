@@ -213,7 +213,7 @@ function DataSection({ el }: { el: DashElement }) {
           Raw DUX
         </button>
       </div>
-      {mode === "raw" ? <RawSection el={el} /> : <BuilderSection el={el} />}
+      {mode === "raw" ? <RawSection key={`${el.id}:${el.query?.raw ?? ""}`} el={el} /> : <BuilderSection el={el} />}
       <IgnoreSlicers el={el} />
     </div>
   );

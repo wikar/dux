@@ -10,8 +10,9 @@ import { displayMessage } from "../message";
 
 /** Top-bar actions while the Dash tab is active: dashboard picker, new,
  *  save, undo/redo, edit/view mode. Rendered inside the shared TopBar. */
-export default function DashActions() {
+export default function DashActions({ routePath }: { routePath: string }) {
   const path = useUiStore((s) => s.path);
+  const loadedPath = useUiStore((s) => s.loadedPath);
   const mode = useUiStore((s) => s.mode);
   const setMode = useUiStore((s) => s.setMode);
   const saving = useUiStore((s) => s.saving);
@@ -36,11 +37,11 @@ export default function DashActions() {
       <button className={styles.actionBtn} onClick={() => setNewOpen(true)} title="New dashboard">
         + New
       </button>
-      {path && (
+      {path && path === loadedPath && path === routePath && (
         <>
           <button
             className={styles.actionBtn}
-            onClick={() => void save()}
+            onClick={() => void save(routePath)}
             disabled={!dirty || saving}
             title="Save (Ctrl+S)"
           >

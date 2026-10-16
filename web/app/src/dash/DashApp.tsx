@@ -96,7 +96,7 @@ export default function DashApp({ path, showHidden }: Props) {
 
       if (mod && e.key.toLowerCase() === "s") {
         e.preventDefault();
-        void save();
+        void save(path);
         return;
       }
       if (inField) return;
@@ -137,18 +137,18 @@ export default function DashApp({ path, showHidden }: Props) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [path]);
 
   if (!path) return <Home />;
 
   return (
     <div className={styles.main} onPointerMove={fullscreen ? revealExit : undefined}>
-      {mode === "edit" && doc && (
+      {mode === "edit" && path === loadedPath && doc && (
         <CollapsiblePanel title="Schema" side="left" width={260} storageKey="dux.dash.schema">
           <SchemaTree bare showHidden={showHidden} />
         </CollapsiblePanel>
       )}
-      {mode === "edit" && doc && (
+      {mode === "edit" && path === loadedPath && doc && (
         <CollapsiblePanel title="Elements" side="left" width={280} storageKey="dux.dash.elements">
           <ElementsPane />
         </CollapsiblePanel>
@@ -168,13 +168,13 @@ export default function DashApp({ path, showHidden }: Props) {
             <h2>Can't open “{path}”</h2>
             <p>{displayMessage(loadError)}</p>
           </div>
-        ) : doc ? (
+        ) : doc && path === loadedPath ? (
           <Canvas />
         ) : (
           <div className={styles.loading}>Loading…</div>
         )}
       </div>
-      {conflict && <ConflictDialog />}
+      {conflict && path === loadedPath && <ConflictDialog />}
     </div>
   );
 }

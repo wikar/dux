@@ -617,6 +617,10 @@ POST /relationships          (bidirectional)
 {"from_table": "Bridge", "from_column": "DimBKey", "to_table": "DimB", "to_column": "DimBKey", "bidirectional": true}
 → 201 Created
 
+POST /relationships/replace
+{"original": {"from_table": "Sales", "from_column": "OldKey", "to_table": "Product", "to_column": "ProductKey"}, "replacement": {"from_table": "Sales", "from_column": "ProductKey", "to_table": "Product", "to_column": "ProductKey", "bidirectional": false}}
+→ 204 No Content (409 if the original is missing or a reverse edge already exists)
+
 DELETE /relationships
 {"from_table": "Sales", "from_column": "ProductKey", "to_table": "Product", "to_column": "ProductKey"}
 → 204 No Content

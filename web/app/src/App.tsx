@@ -245,7 +245,7 @@ export default function App() {
           actions={
             tab === "home" ? homeActions
             : tab === "explorer" ? explorerActions
-            : dashEnabled ? <Suspense fallback={null}><DashActions /></Suspense>
+            : dashEnabled ? <Suspense fallback={null}><DashActions routePath={dashPath} /></Suspense>
             : undefined
           }
         />

@@ -110,6 +110,7 @@ Endpoints served on :80:
   DELETE /measures/{table}/{name}  Delete a measure
   GET  /relationships  List all relationships
   POST /relationships  Add a relationship
+  POST /relationships/replace  Atomically replace a relationship
   DELETE /relationships  Delete a relationship
   POST /datetable      Designate the model's date table
   DELETE /datetable    Clear the date-table designation
@@ -182,6 +183,7 @@ func main() {
 	mux.HandleFunc("DELETE /measures/{table}/{name}", deleteMeasureHandler(metaDB, schema, &schemaMu))
 	mux.HandleFunc("GET /relationships", listRelationshipsHandler(schema, &schemaMu))
 	mux.HandleFunc("POST /relationships", addRelationshipHandler(metaDB, schema, &schemaMu))
+	mux.HandleFunc("POST /relationships/replace", replaceRelationshipHandler(metaDB, schema, &schemaMu))
 	mux.HandleFunc("DELETE /relationships", deleteRelationshipHandler(metaDB, schema, &schemaMu))
 	mux.HandleFunc("POST /datetable", setDateTableHandler(metaDB, schema, &schemaMu))
 	mux.HandleFunc("DELETE /datetable", deleteDateTableHandler(metaDB, schema, &schemaMu))
@@ -914,6 +916,11 @@ type relationshipRequest struct {
 	Bidirectional bool   `json:"bidirectional"`
 }
 
+type replaceRelationshipRequest struct {
+	Original    relationshipRequest `json:"original"`
+	Replacement relationshipRequest `json:"replacement"`
+}
+
 // matches reports whether rel joins the same table/column pair as the request.
 func (req relationshipRequest) matches(rel *semantic.Relationship) bool {
 	return rel.FromTable == req.FromTable && rel.FromColumn == req.FromColumn &&
@@ -1007,6 +1014,67 @@ func addRelationshipHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema
 		mu.Unlock()
 
 		w.WriteHeader(http.StatusCreated)
+	}
+}
+
+// replaceRelationshipHandler validates and persists the final relationship
+// graph as one operation. The original remains intact on validation or storage
+// failure; an existing reverse edge is reported as a conflict for explicit
+// resolution by the user.
+func replaceRelationshipHandler(metaDB *semantic.MetadataDB, schema *semantic.Schema, mu *sync.RWMutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req replaceRelationshipRequest
+		if err := decodeJSONBody(w, r, &req); err != nil {
+			writeError(w, err.Error(), bodyErrorStatus(err))
+			return
+		}
+		valid := func(rel relationshipRequest) bool {
+			return rel.FromTable != "" && rel.FromColumn != "" && rel.ToTable != "" && rel.ToColumn != ""
+		}
+		if !valid(req.Original) || !valid(req.Replacement) {
+			writeError(w, "original and replacement relationship endpoints are required", http.StatusBadRequest)
+			return
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		found := false
+		candidate := &semantic.Schema{Tables: schema.Tables}
+		candidate.Relationships = make([]*semantic.Relationship, 0, len(schema.Relationships))
+		for _, rel := range schema.Relationships {
+			if req.Original.matches(rel) {
+				found = true
+				continue
+			}
+			if rel.FromTable == req.Replacement.ToTable && rel.FromColumn == req.Replacement.ToColumn &&
+				rel.ToTable == req.Replacement.FromTable && rel.ToColumn == req.Replacement.FromColumn {
+				writeError(w, "the reverse relationship already exists; remove or edit it first", http.StatusConflict)
+				return
+			}
+			candidate.Relationships = append(candidate.Relationships, rel)
+		}
+		if !found {
+			writeError(w, "the relationship being replaced no longer exists", http.StatusConflict)
+			return
+		}
+		candidate.Relationships = append(candidate.Relationships, &semantic.Relationship{
+			FromTable: req.Replacement.FromTable, FromColumn: req.Replacement.FromColumn,
+			ToTable: req.Replacement.ToTable, ToColumn: req.Replacement.ToColumn,
+			Bidirectional: req.Replacement.Bidirectional,
+		})
+		if err := semantic.ValidateFilterPaths(candidate); err != nil {
+			writeError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		original := &semantic.Relationship{FromTable: req.Original.FromTable, FromColumn: req.Original.FromColumn, ToTable: req.Original.ToTable, ToColumn: req.Original.ToColumn}
+		replacement := candidate.Relationships[len(candidate.Relationships)-1]
+		if err := metaDB.ReplaceRelationship(original, replacement); err != nil {
+			writeError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		removeRelationship(schema, req.Original)
+		schema.Relationships = append(schema.Relationships, candidate.Relationships[len(candidate.Relationships)-1])
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

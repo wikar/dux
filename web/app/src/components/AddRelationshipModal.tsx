@@ -73,31 +73,29 @@ export default function AddRelationshipModal(props: {
           orig.ToTable !== toTable ||
           orig.ToColumn !== toCol);
 
-      // Check if the exact reverse already exists and delete it.
-      const reverseExists = (props.schema.Relationships ?? []).some(
-        (r) =>
-          r.FromTable === toTable &&
-          r.FromColumn === toCol &&
-          r.ToTable === fromTable &&
-          r.ToColumn === fromCol
-      );
-      if (reverseExists) {
-        await client.deleteRelationship({
-          from_table: toTable, from_column: toCol,
-          to_table: fromTable, to_column: fromCol,
-        });
-      }
-      await client.addRelationship({
+      const replacement = {
         from_table: fromTable, from_column: fromCol,
         to_table: toTable, to_column: toCol,
         bidirectional: bidi,
-      });
-      // Only delete the old relationship after the new one is saved.
+      };
       if (changed) {
-        await client.deleteRelationship({
-          from_table: orig!.FromTable, from_column: orig!.FromColumn,
-          to_table: orig!.ToTable, to_column: orig!.ToColumn,
+        await client.replaceRelationship({
+          original: {
+            from_table: orig!.FromTable, from_column: orig!.FromColumn,
+            to_table: orig!.ToTable, to_column: orig!.ToColumn,
+          },
+          replacement,
         });
+      } else {
+        const reverseExists = (props.schema.Relationships ?? []).some((r) =>
+          r.FromTable === toTable && r.FromColumn === toCol &&
+          r.ToTable === fromTable && r.ToColumn === fromCol
+        );
+        if (reverseExists) {
+          setError("The reverse relationship already exists; edit or remove it first.");
+          return;
+        }
+        await client.addRelationship(replacement);
       }
       props.onSaved();
     } catch (e) {
