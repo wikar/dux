@@ -1,0 +1,36 @@
+/* App colors: edit this file to recolor the shell, query editor, model explorer,
+   and dashboard builder. Dashboard content uses its separate --th-* theme.
+   Keep the palette names stable; translucent UI colors derive from it below. */
+:root {
+  /* Catppuccin Mocha */
+  --base:     #1e1e2e;
+  --mantle:   #181825;
+  --crust:    #11111b;
+  --surface0: #313244;
+  --surface1: #45475a;
+  --surface2: #585b70;
+  --subtext0: #a6adc8;
+  --subtext1: #bac2de;
+  --text:     #cdd6f4;
+  --blue:     #89b4fa;
+  --lavender: #b4befe;
+  --mauve:    #cba6f7;
+  --red:      #f38ba8;
+  --peach:    #fab387;
+  --green:    #a6e3a1;
+  --teal:     #94e2d5;
+  --sky:      #89dceb;
+  --yellow:   #f9e2af;
+
+  /* App highlights and overlays. */
+  --drop-highlight: color-mix(in srgb, var(--blue) 6%, transparent);
+  --error-highlight: color-mix(in srgb, var(--red) 12%, transparent);
+  --error-highlight-subtle: color-mix(in srgb, var(--red) 8%, transparent);
+  --border-subtle: color-mix(in srgb, var(--surface1) 40%, transparent);
+  --focus-ring: color-mix(in srgb, var(--blue) 30%, transparent);
+  --caret-hover: rgba(127, 127, 127, 0.15);
+  --modal-backdrop: rgba(0, 0, 0, 0.55);
+  --shadow-card: rgba(0, 0, 0, 0.35);
+  --shadow-canvas: rgba(0, 0, 0, 0.45);
+  --shadow-popup: rgba(0, 0, 0, 0.5);
+}

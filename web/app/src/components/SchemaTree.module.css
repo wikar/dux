@@ -154,13 +154,13 @@
 }
 
 .hideBtn:hover {
-  color: var(--yellow, #f9e2af);
+  color: var(--yellow);
   background: var(--surface1);
 }
 
 .hideBtnActive,
 .hideBtnActive:hover {
-  color: var(--yellow, #f9e2af);
+  color: var(--yellow);
   opacity: 1;
 }
 

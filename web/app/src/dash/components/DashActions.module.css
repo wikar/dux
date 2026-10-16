@@ -127,7 +127,7 @@
   background: var(--mantle);
   border: 1px solid var(--surface1);
   border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 8px 24px var(--shadow-popup);
   z-index: 100;
   padding: 4px 0;
 }

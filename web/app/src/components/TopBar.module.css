@@ -79,6 +79,6 @@
    toggle's active accent */
 .actionBtnActive,
 .actionBtnActive:hover {
-  color: var(--yellow, #f9e2af);
-  border-color: var(--yellow, #f9e2af);
+  color: var(--yellow);
+  border-color: var(--yellow);
 }

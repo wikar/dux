@@ -41,7 +41,7 @@
 
 .errorBanner {
   padding: 8px 12px;
-  background: rgba(243, 139, 168, 0.12);
+  background: var(--error-highlight);
   color: var(--red);
   font-size: 12px;
   white-space: pre-wrap;

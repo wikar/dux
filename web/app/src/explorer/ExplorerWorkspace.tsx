@@ -311,15 +311,15 @@ export default function ExplorerWorkspace(props: { showHidden?: boolean }) {
                 >
                   {!line.bidirectional && (
                     <>
-                      <stop offset="0%"   stopColor="#fab387" />
-                      <stop offset="50%"  stopColor="#89b4fa" />
+                      <stop offset="0%"   stopColor="var(--peach)" />
+                      <stop offset="50%"  stopColor="var(--blue)" />
                     </>
                   )}
                   {line.bidirectional && (
                     <>
-                      <stop offset="0%"   stopColor="#a6e3a1" />
-                      <stop offset="50%"  stopColor="#89b4fa" />
-                      <stop offset="100%" stopColor="#a6e3a1" />
+                      <stop offset="0%"   stopColor="var(--green)" />
+                      <stop offset="50%"  stopColor="var(--blue)" />
+                      <stop offset="100%" stopColor="var(--green)" />
                     </>
                   )}
                 </linearGradient>

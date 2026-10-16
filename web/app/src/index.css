@@ -1,24 +1,6 @@
-:root {
-  /* Catppuccin Mocha */
-  --base:     #1e1e2e;
-  --mantle:   #181825;
-  --crust:    #11111b;
-  --surface0: #313244;
-  --surface1: #45475a;
-  --surface2: #585b70;
-  --subtext0: #a6adc8;
-  --subtext1: #bac2de;
-  --text:     #cdd6f4;
-  --blue:     #89b4fa;
-  --lavender: #b4befe;
-  --mauve:    #cba6f7;
-  --red:      #f38ba8;
-  --peach:    #fab387;
-  --green:    #a6e3a1;
-  --teal:     #94e2d5;
-  --sky:      #89dceb;
-  --yellow:   #f9e2af;
+@import "./app-theme.css";
 
+:root {
   /* ── Dashboard theme tokens ──
      Canvas overwrites the six base tokens on <html> from the resolved theme
      cascade (defaults ← theme.json ← dashboard.theme). They live on the root

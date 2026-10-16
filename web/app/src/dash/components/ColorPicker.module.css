@@ -11,7 +11,7 @@
 
 .pop :global(.w-color-sketch) {
   --sketch-background: var(--mantle) !important;
-  --sketch-box-shadow: 0 0 0 1px var(--surface1), 0 8px 24px rgba(0, 0, 0, 0.45) !important;
+  --sketch-box-shadow: 0 0 0 1px var(--surface1), 0 8px 24px var(--shadow-canvas) !important;
   --sketch-swatch-box-shadow: 0 0 0 1px var(--surface1) inset !important;
   --sketch-alpha-box-shadow: 0 0 0 1px var(--surface1) inset !important;
   --sketch-swatch-border-top: 1px solid var(--surface1) !important;

@@ -20,5 +20,5 @@
 
 *:hover > .caret {
   opacity: 1;
-  background: rgba(127, 127, 127, 0.15);
+  background: var(--caret-hover);
 }

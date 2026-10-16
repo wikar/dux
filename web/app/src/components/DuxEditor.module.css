@@ -79,7 +79,7 @@
 .errorMark {
   position: absolute;
   height: 3px;
-  background-image: linear-gradient(135deg, transparent 40%, var(--red, #f38ba8) 40%, var(--red, #f38ba8) 60%, transparent 60%);
+  background-image: linear-gradient(135deg, transparent 40%, var(--red) 40%, var(--red) 60%, transparent 60%);
   background-size: 6px 3px;
   background-repeat: repeat-x;
 }

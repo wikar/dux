@@ -4,7 +4,7 @@
   border: 1px solid var(--surface1);
   border-radius: 8px;
   width: 240px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 4px 16px var(--shadow-card);
   display: flex;
   flex-direction: column;
 }
@@ -58,14 +58,14 @@
 /* Active date-table designation — calendar lights up yellow */
 .dateBtnActive,
 .dateBtnActive:hover {
-  color: var(--yellow, #f9e2af);
+  color: var(--yellow);
 }
 
 /* Active hidden designation — eye-off lights up yellow (same accent pattern
    as the date-table toggle) */
 .hiddenBtnActive,
 .hiddenBtnActive:hover {
-  color: var(--yellow, #f9e2af);
+  color: var(--yellow);
 }
 
 /* Whole card muted when the table/view is hidden (visible via "Show hidden") */
@@ -144,13 +144,13 @@
 }
 
 .colCalBtn:hover {
-  color: var(--yellow, #f9e2af);
+  color: var(--yellow);
   background: var(--surface1);
 }
 
 .colCalBtnActive,
 .colCalBtnActive:hover {
-  color: var(--yellow, #f9e2af);
+  color: var(--yellow);
 }
 
 /* Per-column hidden toggle — same shape as the date-column picker; revealed
@@ -175,13 +175,13 @@
 }
 
 .colHideBtn:hover {
-  color: var(--yellow, #f9e2af);
+  color: var(--yellow);
   background: var(--surface1);
 }
 
 .colHideBtnActive,
 .colHideBtnActive:hover {
-  color: var(--yellow, #f9e2af);
+  color: var(--yellow);
   opacity: 1;
 }
 
@@ -212,5 +212,5 @@
 
 .colDot:hover {
   background: var(--blue) !important;
-  box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.3);
+  box-shadow: 0 0 0 2px var(--focus-ring);
 }
