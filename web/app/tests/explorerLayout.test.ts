@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Schema } from "@dux/core";
-import { computeRelationshipLayout, countRelationshipCrossings } from "../src/components/Explorer";
+import { computeRelationshipLayout, countRelationshipCrossings } from "../src/explorer/layout";
 
 function crossings(
   layout: Record<string, { x: number; y: number }>,

@@ -13,6 +13,8 @@ const TEXT_OPS: FilterOp[] = ["=", "<>", "contains"];
 interface FieldPillProps {
   field: DropField | FilterField;
   zone: "fields" | "filters";
+  /** Identity of the full list, since multiple wells can share a visual zone. */
+  listId?: string;
   index: number;
   onRemove: () => void;
   /** Invoked with the dragged pill's index when another pill is dropped here. */
@@ -43,10 +45,10 @@ export default function FieldPill(props: FieldPillProps) {
     }, 150);
   }
 
-  // Reorder via drag within the same zone — encode index in dataTransfer
+  // Reorder via drag within the same list, carrying source identity with index.
   function handleDragStart(e: DragEvent) {
     e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("application/dux-index", String(props.index));
+    e.dataTransfer.setData("application/dux-index", JSON.stringify({ list: props.listId ?? props.zone, index: props.index }));
   }
 
   function handleDragOver(e: DragEvent) {
@@ -63,10 +65,15 @@ export default function FieldPill(props: FieldPillProps) {
     if (!e.dataTransfer.types.includes("application/dux-index")) return;
     e.preventDefault();
     e.stopPropagation();
-    const fromStr = e.dataTransfer.getData("application/dux-index");
-    if (fromStr === "") return;
-    const from = Number(fromStr);
-    if (!isNaN(from) && from !== props.index) {
+    let payload: { list: string; index: number };
+    try {
+      payload = JSON.parse(e.dataTransfer.getData("application/dux-index")) as { list: string; index: number };
+    } catch {
+      return;
+    }
+    if ((props.listId ?? props.zone) !== payload.list) return;
+    const from = payload.index;
+    if (Number.isInteger(from) && from >= 0 && from !== props.index) {
       props.onReorder(from);
     }
   }

@@ -1,7 +1,7 @@
 // Flat result table: header sorting plus a virtualized row window, so an
 // unbounded result stays responsive.
 import { useMemo, useRef, useState } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import VirtualRows from "../../components/VirtualRows";
 import styles from "../components/ElementBody.module.css";
 import { compareCellsDir } from "../../compare";
 import { splitElementFields } from "../data";
@@ -148,16 +148,6 @@ function TableBody({
   }, [data, formats]);
   const tableWidth = colWidths.reduce((a, b) => a + b, 0);
 
-  const virtualizer = useVirtualizer({
-    count: rows.length,
-    getScrollElement: () => wrapRef.current,
-    estimateSize: () => TABLE_ROW_H,
-    overscan: 12,
-  });
-  const items = virtualizer.getVirtualItems();
-  const padTop = items.length > 0 ? items[0].start : 0;
-  const padBottom = items.length > 0 ? virtualizer.getTotalSize() - items[items.length - 1].end : 0;
-
   return (
     <div className={styles.tableWrap} ref={wrapRef}>
       <table className={styles.table} style={{ width: tableWidth, minWidth: "100%" }}>
@@ -192,18 +182,12 @@ function TableBody({
             ))}
           </tr>
         </thead>
-        <tbody>
-          {padTop > 0 && (
-            <tr>
-              <td colSpan={data.columns.length} style={{ height: padTop, padding: 0, border: "none" }} />
-            </tr>
-          )}
-          {items.map((vi) => {
-            const r = rows[vi.index];
+        <VirtualRows rows={rows} scrollRef={wrapRef} columnCount={data.columns.length} rowHeight={TABLE_ROW_H}>
+          {(r, rowIndex) => {
             const selected = canCross && selectedKeys.size > 0 && selectedKeys.has(markKey({ dims: rowDims(r) }));
             return (
               <tr
-                key={vi.index}
+                key={rowIndex}
                 style={{ height: TABLE_ROW_H, cursor: canCross ? "pointer" : undefined }}
                 className={selected ? styles.rowSelected : undefined}
                 onClick={canCross ? (e) => toggleCrossMark(el.id, { dims: rowDims(r) }, e.ctrlKey || e.metaKey) : undefined}
@@ -227,13 +211,8 @@ function TableBody({
                 })}
               </tr>
             );
-          })}
-          {padBottom > 0 && (
-            <tr>
-              <td colSpan={data.columns.length} style={{ height: padBottom, padding: 0, border: "none" }} />
-            </tr>
-          )}
-        </tbody>
+          }}
+        </VirtualRows>
       </table>
     </div>
   );

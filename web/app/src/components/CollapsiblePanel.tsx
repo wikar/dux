@@ -18,10 +18,9 @@ export default function CollapsiblePanel({ title, side, width, storageKey, child
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(storageKey) === "1");
 
   const toggle = () => {
-    setCollapsed((c) => {
-      localStorage.setItem(storageKey, c ? "0" : "1");
-      return !c;
-    });
+    const next = !collapsed;
+    localStorage.setItem(storageKey, next ? "1" : "0");
+    setCollapsed(next);
   };
 
   const sideClass = side === "left" ? styles.left : styles.right;

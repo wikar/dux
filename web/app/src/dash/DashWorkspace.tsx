@@ -5,7 +5,7 @@
 // entry imports from src/dash. This keeps a future dash-only duxuid bundle a
 // matter of adding a second Vite entry over src/dash + src/components.
 import { useEffect, useRef, useState } from "react";
-import styles from "./DashApp.module.css";
+import styles from "./DashWorkspace.module.css";
 import { fullscreenFromUrl, openDashboard, redo, save, seedSlicerSelections, setFullscreen, undo } from "./actions";
 import { nudgeElement, removeElement } from "./docOps";
 import { useDirty, useDocStore, useUiStore } from "./store";
@@ -16,7 +16,7 @@ import Canvas from "./components/Canvas";
 import ConflictDialog from "./components/ConflictDialog";
 import { displayMessage } from "./message";
 import ElementsPane from "./components/ElementsPane";
-import Home from "./components/Home";
+import DashboardList from "./components/DashboardList";
 
 interface Props {
   /** Dashboard identity from the URL ("" = landing list). */
@@ -24,7 +24,7 @@ interface Props {
   showHidden: boolean;
 }
 
-export default function DashApp({ path, showHidden }: Props) {
+export default function DashWorkspace({ path, showHidden }: Props) {
   const search = useSearch();
   const loadedPath = useUiStore((s) => s.loadedPath);
   const loadError = useUiStore((s) => s.loadError);
@@ -139,7 +139,7 @@ export default function DashApp({ path, showHidden }: Props) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [path]);
 
-  if (!path) return <Home />;
+  if (!path) return <DashboardList />;
 
   return (
     <div className={styles.main} onPointerMove={fullscreen ? revealExit : undefined}>

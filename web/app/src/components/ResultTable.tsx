@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { QueryResponse, MeasureFormat } from "@dux/core";
 import { duxClient as client, QueryFailedError, formatValue } from "@dux/core";
 import { compareCellsDir } from "../compare";
+import VirtualRows from "./VirtualRows";
 import styles from "./ResultTable.module.css";
 
 type SortDir = "asc" | "desc";
@@ -15,12 +16,13 @@ function isNumericCell(v: string | number | null): boolean {
 
 export default function ResultTable(props: {
   query: string;
+  /** Explicit run identity lets the same query text be retried/refreshed. */
+  runId?: number;
   includeEmpty: boolean;
-  /** Called with a getter that returns the displayed dataset as
-   *  Excel-pasteable TSV (header + filtered/sorted rows), or null if empty. */
-  registerCopyProvider?: (fn: () => string | null) => void;
+  /** Compose the query editor with access to this table's displayed results. */
+  children?: (copyResults: () => Promise<boolean>) => ReactNode;
   /** Reports the current query failure (null when the query succeeds or clears). */
-  onQueryError?: (err: QueryFailedError | null) => void;
+  onQueryError?: (err: QueryFailedError | null, executedQuery: string) => void;
 }) {
   const [data, setData] = useState<QueryResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -29,6 +31,7 @@ export default function ResultTable(props: {
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   // Measure display formats by measure name, loaded once per query run.
   const [formats, setFormats] = useState<Record<string, MeasureFormat>>({});
+  const tableWrapRef = useRef<HTMLDivElement>(null);
 
   /** Set of column indices where every non-null value is numeric. */
   const numericCols = useMemo(() => {
@@ -48,16 +51,18 @@ export default function ResultTable(props: {
     if (!props.query) {
       setData(null);
       setError(null);
-      onQueryErrorRef.current?.(null);
+      setLoading(false);
+      onQueryErrorRef.current?.(null, props.query);
       return;
     }
     let stale = false;
+    const controller = new AbortController();
     const debounceTimer = setTimeout(async () => {
       setLoading(true);
       setError(null);
       try {
         const [json, measures] = await Promise.all([
-          client.executeQuery(props.query),
+          client.executeQuery(props.query, { signal: controller.signal }),
           client.fetchMeasures().catch(() => []),
         ]);
         if (stale) return;
@@ -65,16 +70,16 @@ export default function ResultTable(props: {
         for (const m of measures) if (m.format) fmts[m.name] = m.format;
         setFormats(fmts);
         setData(json);
-        onQueryErrorRef.current?.(null);
+        onQueryErrorRef.current?.(null, props.query);
       } catch (err) {
         if (stale) return;
         if (err instanceof QueryFailedError) {
           const pos = err.line > 0 ? ` (line ${err.line}, column ${err.column})` : "";
           setError(`${err.stage ? err.stage + ": " : ""}${err.message}${pos}`);
-          onQueryErrorRef.current?.(err);
+          onQueryErrorRef.current?.(err, props.query);
         } else {
           setError(err instanceof Error ? err.message : String(err));
-          onQueryErrorRef.current?.(null);
+          onQueryErrorRef.current?.(null, props.query);
         }
         setData(null);
       } finally {
@@ -84,8 +89,9 @@ export default function ResultTable(props: {
     return () => {
       stale = true;
       clearTimeout(debounceTimer);
+      controller.abort();
     };
-  }, [props.query]);
+  }, [props.query, props.runId]);
 
   // Default sort for each new result: DESC by the first numeric column.
   useEffect(() => {
@@ -130,23 +136,15 @@ export default function ResultTable(props: {
     return [...visibleRows].sort((a, b) => compareCellsDir(a[sortCol], b[sortCol], sortDir));
   }, [visibleRows, sortCol, sortDir]);
 
-  // Expose the displayed dataset as TSV so the Copy Results button
-  // (in the query toolbar) can put it on the clipboard for Excel.
-  const copyStateRef = useRef({ data, sortedRows });
-  copyStateRef.current = { data, sortedRows };
-  useEffect(() => {
-    props.registerCopyProvider?.(() => {
-      const { data: d, sortedRows: rows } = copyStateRef.current;
-      if (!d) return null;
-      // Tabs/newlines inside a cell would break the grid shape on paste.
-      const esc = (v: string | number | null) =>
-        v === null ? "" : String(v).replace(/[\t\r\n]+/g, " ");
-      const lines = [d.columns.map(esc).join("\t")];
-      for (const row of rows) lines.push(row.map(esc).join("\t"));
-      return lines.join("\r\n");
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  async function copyResults(): Promise<boolean> {
+    if (!data) return false;
+    // Tabs/newlines inside a cell would break the grid shape when pasted.
+    const esc = (v: string | number | null) => v === null ? "" : String(v).replace(/[\t\r\n]+/g, " ");
+    const lines = [data.columns.map(esc).join("\t")];
+    for (const row of sortedRows) lines.push(row.map(esc).join("\t"));
+    await navigator.clipboard.writeText(lines.join("\r\n"));
+    return true;
+  }
 
   /** Render a cell without changing the raw value used by sort/copy. */
   function renderCell(cell: string | number | null, ci: number) {
@@ -157,6 +155,8 @@ export default function ResultTable(props: {
   }
 
   return (
+    <>
+    {props.children?.(copyResults)}
     <div className={styles.panel}>
       <div className={styles.header}>
         Results
@@ -172,7 +172,7 @@ export default function ResultTable(props: {
       {error && <div className={styles.errorBanner}>{error}</div>}
 
       {data && !loading && (
-        <div className={styles.tableWrap}>
+        <div className={styles.tableWrap} ref={tableWrapRef}>
           <table className={styles.table}>
             <thead>
               <tr>
@@ -204,8 +204,8 @@ export default function ResultTable(props: {
                 ))}
               </tr>
             </thead>
-            <tbody>
-              {sortedRows.map((row, ri) => (
+            <VirtualRows rows={sortedRows} scrollRef={tableWrapRef} columnCount={data.columns.length}>
+              {(row, ri) => (
                 <tr key={ri}>
                   {row.map((cell, ci) => (
                     <td key={ci} className={numericCols.has(ci) ? styles.numeric : undefined}>
@@ -213,11 +213,12 @@ export default function ResultTable(props: {
                     </td>
                   ))}
                 </tr>
-              ))}
-            </tbody>
+              )}
+            </VirtualRows>
           </table>
         </div>
       )}
     </div>
+    </>
   );
 }

@@ -1,12 +1,15 @@
 import { useMemo } from "react";
 import { keepPreviousData, useQueries } from "@tanstack/react-query";
+import type { UseQueryResult } from "@tanstack/react-query";
 import { duxClient, generateQuery } from "@dux/core";
-import type { DropField, QueryResponse } from "@dux/core";
+import type { DropField, FilterField, FilterOp, QueryResponse } from "@dux/core";
 import { elementFilters, useExternalFilters, useRefreshInterval } from "./data";
 import { markKey, type CrossMark } from "./store";
 import type { DashElement, MapLayer, ThemeTokens } from "./types";
 
 const LIGHT_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
+const NO_MAP_LAYERS: MapLayer[] = [];
+const NO_QUERY_FILTERS: NonNullable<NonNullable<DashElement["query"]>["filters"]> = [];
 
 function rgba(color: string): [number, number, number, number] | null {
   const hex = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(color.trim())?.[1];
@@ -71,8 +74,12 @@ export function layerFields(layer: MapLayer): DropField[] {
 }
 
 export function layerDux(el: DashElement, layer: MapLayer): string {
+  return layerDuxWithFilters(layer, elementFilters(el));
+}
+
+function layerDuxWithFilters(layer: MapLayer, filters: FilterField[]): string {
   const fields = layerFields(layer);
-  return fields.length ? generateQuery(fields, elementFilters(el)) : "";
+  return fields.length ? generateQuery(fields, filters) : "";
 }
 
 export function useMapLayerData(el: DashElement): {
@@ -80,12 +87,34 @@ export function useMapLayerData(el: DashElement): {
   loading: boolean;
   error: Error | null;
 } {
-  const layers = el.viz?.layers ?? [];
-  const specs = layers.map((layer) => ({ id: layer.id, dux: layerDux(el, layer) }));
+  const layers = el.viz?.layers ?? NO_MAP_LAYERS;
+  const storedFilters = el.query?.filters ?? NO_QUERY_FILTERS;
+  const queryFilters = useMemo(
+    () => storedFilters.map((filter) => ({
+      table: filter.table,
+      name: filter.name,
+      dataType: filter.dataType ?? "",
+      op: (filter.op ?? "=") as FilterOp,
+      value: filter.value ?? "",
+    })),
+    [storedFilters]
+  );
+  const specs = useMemo(
+    () => layers.map((layer) => ({ id: layer.id, dux: layerDuxWithFilters(layer, queryFilters) })),
+    [layers, queryFilters]
+  );
   const filters = useExternalFilters(el);
   const filterKey = JSON.stringify(filters);
   const refetchInterval = useRefreshInterval(el.id);
-  const results = useQueries({
+  const combine = useMemo(
+    () => (results: UseQueryResult<QueryResponse, Error>[]) => ({
+      byLayer: Object.fromEntries(specs.map((spec, i) => [spec.id, results[i]?.data])),
+      loading: results.some((result) => result.isFetching),
+      error: results.find((result) => result.error)?.error ?? null,
+    }),
+    [specs]
+  );
+  return useQueries({
     queries: specs.map((spec) => ({
       queryKey: ["eldata", spec.dux, filterKey],
       enabled: spec.dux !== "",
@@ -96,12 +125,8 @@ export function useMapLayerData(el: DashElement): {
       refetchInterval,
       refetchIntervalInBackground: true,
     })),
+    combine,
   });
-  return {
-    byLayer: Object.fromEntries(specs.map((spec, i) => [spec.id, results[i]?.data])),
-    loading: results.some((r) => r.isFetching),
-    error: (results.find((r) => r.error)?.error as Error | undefined) ?? null,
-  };
 }
 
 export interface MapFeatureProperties {

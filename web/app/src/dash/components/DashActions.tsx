@@ -147,15 +147,6 @@ function DashboardPicker() {
     enabled: open,
   });
 
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    window.addEventListener("mousedown", onDown);
-    return () => window.removeEventListener("mousedown", onDown);
-  }, [open]);
-
   // Folders are collapsed by default. While a search is active every folder on
   // a hit path is expanded, and `searchToggled` records folders the user flipped
   // during that search — so clearing it restores the hand-expanded set.
@@ -163,11 +154,23 @@ function DashboardPicker() {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [searchToggled, setSearchToggled] = useState<ReadonlySet<string>>(new Set());
   const q = search.trim().toLowerCase();
-  useEffect(() => setSearchToggled(new Set()), [q]);
-  useEffect(() => { if (!open) setSearch(""); }, [open]);
+  const close = () => {
+    setOpen(false);
+    setSearch("");
+    setSearchToggled(new Set());
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) close();
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [open]);
 
   const pick = (p: string) => {
-    setOpen(false);
+    close();
     void queryClient.invalidateQueries({ queryKey: ["dashboards"] });
     gotoDashboard(p);
   };
@@ -187,7 +190,7 @@ function DashboardPicker() {
 
   return (
     <div className={styles.picker} ref={ref}>
-      <button className={styles.pickerBtn} onClick={() => setOpen((o) => !o)}>
+      <button className={styles.pickerBtn} onClick={() => open ? close() : setOpen(true)}>
         <span className={styles.pickerLabel}>{path || "Open dashboard"}</span>
         <span className={styles.caret}>▾</span>
       </button>
@@ -200,8 +203,12 @@ function DashboardPicker() {
               type="search"
               placeholder="Search dashboards…"
               value={search}
-              onChange={(e) => setSearch(e.currentTarget.value)}
-              onKeyDown={(e) => { if (e.key === "Escape") setOpen(false); }}
+              onChange={(e) => {
+                const value = e.currentTarget.value;
+                if (value.trim().toLowerCase() !== q) setSearchToggled(new Set());
+                setSearch(value);
+              }}
+              onKeyDown={(e) => { if (e.key === "Escape") close(); }}
             />
           </div>
           {isLoading && <div className={styles.dim}>Loading…</div>}

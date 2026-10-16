@@ -67,7 +67,7 @@ test("clearing a preset slicer in view mode stays All after URL reseeding", () =
 
   seedSlicerSelections(doc);
   applySlicerSelection("year", null);
-  seedSlicerSelections(doc); // DashApp reacts to the updated query string.
+  seedSlicerSelections(doc); // DashWorkspace reacts to the updated query string.
 
   expect(useUiStore.getState().slicerSelections.year).toBeUndefined();
   expect(JSON.parse(url.searchParams.get("f")!)).toEqual({ year: [] });

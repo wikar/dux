@@ -2,8 +2,8 @@ import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import DuxEditor from "./DuxEditor";
 import styles from "./QueryPreview.module.css";
-import { duxClient as client } from "@dux/core";
 import type { QueryFailedError } from "@dux/core";
+import { schemaQuery } from "../model/modelQueries";
 
 export default function QueryPreview(props: {
   query: string;
@@ -17,10 +17,7 @@ export default function QueryPreview(props: {
   /** Current query failure, marked at its source position in the editor. */
   error?: QueryFailedError | null;
 }) {
-  const { data: schema } = useQuery({
-    queryKey: ["schema"],
-    queryFn: () => client.fetchSchema(),
-  });
+  const { data: schema } = useQuery(schemaQuery);
   const [copied, setCopied] = useState(false);
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 

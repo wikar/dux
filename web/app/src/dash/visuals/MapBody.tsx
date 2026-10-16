@@ -315,7 +315,6 @@ export default function MapBody({ el }: { el: DashElement }) {
     syncData();
   }, [layers, palette, theme.text, theme.elementBackground, theme.border]);
   useEffect(() => {
-    syncLayers();
     syncData();
   }, [byLayer]);
   useEffect(() => { syncData(); }, [selectedKeys]);

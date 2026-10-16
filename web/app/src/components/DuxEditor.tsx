@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ChangeEvent, KeyboardEvent, MouseEvent, UIEvent } from "react";
 import hljs from "highlight.js/lib/core";
 import type { Schema, QueryFailedError } from "@dux/core";
@@ -27,16 +27,16 @@ export default function DuxEditor(props: {
 }) {
   const highlightEl = useRef<HTMLPreElement>(null);
   const rulerEl = useRef<HTMLSpanElement>(null);
-  const charW = useRef(7.5); // measured after mount
+  const [charW, setCharW] = useState(7.5); // measured before the first paint
 
   const [ghost, setGhost] = useState("");
   const [ghostCursor, setGhostCursor] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const w = rulerEl.current?.getBoundingClientRect().width;
-    if (w && w > 0) charW.current = w;
+    if (w && w > 0) setCharW(w);
   }, []);
 
   const highlighted = useMemo(
@@ -49,9 +49,9 @@ export default function DuxEditor(props: {
     const before = props.value.slice(0, ghostCursor);
     const lines = before.split("\n");
     const top = 8 + (lines.length - 1) * (12.5 * 1.55) - scrollTop; // padTop + line * lineHeight
-    const left = 12 + lines[lines.length - 1].length * charW.current - scrollLeft; // padLeft + col * charWidth
+    const left = 12 + lines[lines.length - 1].length * charW - scrollLeft; // padLeft + col * charWidth
     return { display: "block", top, left };
-  }, [ghost, ghostCursor, props.value, scrollTop, scrollLeft]);
+  }, [ghost, ghostCursor, props.value, scrollTop, scrollLeft, charW]);
 
   // Red underline from the error's column to the end of that line.
   const errorStyle = useMemo<CSSProperties>(() => {
@@ -61,9 +61,9 @@ export default function DuxEditor(props: {
     const col = Math.min(Math.max(e.column, 1), lineText.length + 1);
     const chars = Math.max(lineText.length - (col - 1), 2);
     const top = 8 + (e.line - 1) * (12.5 * 1.55) + 15 - scrollTop; // baseline of the line
-    const left = 12 + (col - 1) * charW.current - scrollLeft;
-    return { display: "block", top, left, width: chars * charW.current };
-  }, [props.error, props.value, scrollTop, scrollLeft]);
+    const left = 12 + (col - 1) * charW - scrollLeft;
+    return { display: "block", top, left, width: chars * charW };
+  }, [props.error, props.value, scrollTop, scrollLeft, charW]);
 
   function refreshGhost(text: string, pos: number) {
     setGhost(getCompletion(text, pos, props.schema, { excludeMetaTables: props.excludeMetaTables }));

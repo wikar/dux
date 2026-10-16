@@ -1,12 +1,7 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { duxClient as client, generateQuery, isMetricField, isNumeric } from "@dux/core";
-import type { QueryFailedError, DropField, FilterField, DragPayload, Aggregate, FilterOp } from "@dux/core";
-import SchemaTree from "./components/SchemaTree";
-import DropZone from "./components/DropZone";
-import QueryPreview from "./components/QueryPreview";
-import ResultTable from "./components/ResultTable";
+import { duxClient as client } from "@dux/core";
 import TopBar from "./components/TopBar";
 import { dashPathFromPathname, navigate, tabFromPathname, usePathname } from "./router";
 // The dash section is composed here and only here — src/components must never
@@ -20,14 +15,13 @@ import { dashPathFromPathname, navigate, tabFromPathname, usePathname } from "./
 // loads).
 import { encodePath } from "./dash/api";
 import { useUiStore } from "./dash/store";
+import HomeWorkspace from "./home/HomeWorkspace";
+import { refreshModel } from "./model/modelQueries";
 import styles from "./App.module.css";
 
-const Explorer = lazy(() => import("./components/Explorer"));
-const DashApp = lazy(() => import("./dash/DashApp"));
+const ExplorerWorkspace = lazy(() => import("./explorer/ExplorerWorkspace"));
+const DashWorkspace = lazy(() => import("./dash/DashWorkspace"));
 const DashActions = lazy(() => import("./dash/components/DashActions"));
-
-// A field is a "metric" if it's a pre-defined measure or a numeric column
-// (isMetricField from @dux/core). Non-metric (group-by) columns sort first.
 
 export default function App() {
   const queryClient = useQueryClient();
@@ -40,143 +34,6 @@ export default function App() {
   const dashFullscreen = useUiStore((s) => s.fullscreen);
   const importInputRef = useRef<HTMLInputElement>(null);
   const [showHidden, setShowHidden] = useState(false);
-  const [includeEmpty, setIncludeEmpty] = useState(false);
-  const [queryError, setQueryError] = useState<QueryFailedError | null>(null);
-  const [fields, setFields] = useState<DropField[]>([]);
-  const [filters, setFilters] = useState<FilterField[]>([]);
-
-  const query = useMemo(() => generateQuery(fields, filters), [fields, filters]);
-
-  // activeQuery mirrors what is shown in the Query panel.
-  // committedQuery is what ResultTable actually executes.
-  // When the generated query changes (drag-drop), both update and isDirty resets.
-  // When the user edits manually, only activeQuery updates and isDirty becomes true.
-  const [activeQuery, setActiveQuery] = useState("");
-  const [committedQuery, setCommittedQuery] = useState("");
-  const [isDirty, setIsDirty] = useState(false);
-
-  useEffect(() => {
-    setActiveQuery(query);
-    setCommittedQuery(query);
-    setIsDirty(false);
-  }, [query]);
-
-  function handleQueryChange(q: string) {
-    setActiveQuery(q);
-    setIsDirty(true);
-    // The marker position refers to the text as it was when the query ran.
-    setQueryError(null);
-  }
-
-  function commitQuery() {
-    setCommittedQuery(activeQuery);
-    setIsDirty(false);
-  }
-
-  // Getter registered by ResultTable; returns the displayed dataset as TSV.
-  const resultsTsv = useRef<(() => string | null) | undefined>(undefined);
-
-  async function copyResults(): Promise<boolean> {
-    const tsv = resultsTsv.current?.();
-    if (!tsv) return false;
-    await navigator.clipboard.writeText(tsv);
-    return true;
-  }
-
-  function addToFields(payload: DragPayload) {
-    setFields((prev) => {
-      if (prev.some((f) => f.table === payload.table && f.name === payload.name)) return prev;
-      const field: DropField = {
-        table: payload.table,
-        name: payload.name,
-        kind: payload.kind,
-        dataType: payload.dataType,
-        aggregate: payload.kind === "column" && isNumeric(payload.dataType) ? "SUM" : undefined,
-      };
-      if (isMetricField(field)) {
-        // Metrics go at the end.
-        return [...prev, field];
-      }
-      // Non-metric columns insert before the first metric.
-      const insertAt = prev.findIndex(isMetricField);
-      if (insertAt === -1) return [...prev, field];
-      const next = [...prev];
-      next.splice(insertAt, 0, field);
-      return next;
-    });
-  }
-
-  function addToFilters(payload: DragPayload) {
-    setFilters((prev) => {
-      if (prev.some((f) => f.table === payload.table && f.name === payload.name)) return prev;
-      const filter: FilterField = {
-        table: payload.table,
-        name: payload.name,
-        dataType: payload.dataType,
-        op: "=",
-        value: "",
-      };
-      return [...prev, filter];
-    });
-  }
-
-  function handleAggChange(i: number, agg: Aggregate) {
-    setFields((prev) => {
-      const updated: DropField = { ...prev[i], aggregate: agg };
-      const wasMetric = isMetricField(prev[i]);
-      const nowMetric = isMetricField(updated);
-      const arr = [...prev];
-      arr[i] = updated;
-      if (wasMetric === nowMetric) {
-        // No positional change needed — just update the value.
-        return arr;
-      }
-      // The field crossed the dimension/metric boundary — update and reposition.
-      const [item] = arr.splice(i, 1);
-      if (nowMetric) {
-        // Became a metric: move to after the last non-metric.
-        arr.push(item);
-      } else {
-        // Became a dimension (VALUES): insert before the first metric.
-        const insertAt = arr.findIndex(isMetricField);
-        if (insertAt === -1) arr.push(item);
-        else arr.splice(insertAt, 0, item);
-      }
-      return arr;
-    });
-  }
-
-  function reorderFields(from: number, to: number) {
-    setFields((prev) => {
-      const item = prev[from];
-      // Non-metric columns always precede metrics. Clamp target to enforce this.
-      let clamped = to;
-      // Count of non-metric items excluding the dragged item.
-      const nonMetricCount = prev.filter((f, i) => i !== from && !isMetricField(f)).length;
-      if (isMetricField(item)) {
-        // Metric: cannot go before a non-metric column.
-        clamped = Math.max(to, nonMetricCount);
-      } else {
-        // Non-metric: cannot go after a metric.
-        clamped = Math.min(to, nonMetricCount);
-      }
-      if (clamped === from) return prev;
-      const arr = [...prev];
-      const [moved] = arr.splice(from, 1);
-      arr.splice(clamped, 0, moved);
-      return arr;
-    });
-  }
-
-  function reorderFilters(from: number, to: number) {
-    setFilters((prev) => {
-      const arr = [...prev];
-      const [item] = arr.splice(from, 1);
-      arr.splice(to, 0, item);
-      return arr;
-    });
-  }
-
   function handleExportToml() {
     const a = document.createElement("a");
     a.href = client.exportTomlUrl();
@@ -194,11 +51,7 @@ export default function App() {
   }
 
   async function handleRefresh() {
-    await client.refresh();
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["schema"] }),
-      queryClient.invalidateQueries({ queryKey: ["measures"] }),
-    ]);
+    await refreshModel(queryClient);
   }
 
   function handleTabChange(id: string) {
@@ -250,71 +103,16 @@ export default function App() {
           }
         />
       )}
-      {/* The Home workspace stays mounted so switching tabs never loses the
-          in-progress query; Explorer and Dash manage their own state. */}
-      <div
-        className={styles.layout}
-        style={tab === "home" ? undefined : { display: "none" }}
-      >
-        {/* Column 1 — Schema tree */}
-        <div className={styles.col1}>
-          <SchemaTree showHidden={showHidden} />
-        </div>
-
-        {/* Column 2 — Drop zones */}
-        <div className={styles.col2}>
-          <DropZone
-            label="Columns / Measures"
-            id="fields"
-            items={fields}
-            onDrop={addToFields}
-            onRemove={(i) => setFields((prev) => prev.filter((_, idx) => idx !== i))}
-            onAggChange={(i, agg) => handleAggChange(i, agg as Aggregate)}
-            onReorder={reorderFields}
-          />
-          <DropZone
-            label="Filters"
-            id="filters"
-            items={filters}
-            onDrop={addToFilters}
-            onRemove={(i) => setFilters((prev) => prev.filter((_, idx) => idx !== i))}
-            onValueChange={(i, val) =>
-              setFilters((prev) => prev.map((f, idx) => (idx === i ? { ...f, value: val } : f)))}
-            onOpChange={(i, op) =>
-              setFilters((prev) => prev.map((f, idx) => (idx === i ? { ...f, op: op as FilterOp } : f)))}
-            onReorder={reorderFilters}
-          />
-        </div>
-
-        {/* Column 3 — Query + results */}
-        <div className={styles.col3}>
-          <QueryPreview
-            query={activeQuery}
-            isDirty={isDirty}
-            onQueryChange={handleQueryChange}
-            onRun={commitQuery}
-            includeEmpty={includeEmpty}
-            onToggleIncludeEmpty={() => setIncludeEmpty((v) => !v)}
-            onCopyResults={copyResults}
-            error={queryError}
-          />
-          <ResultTable
-            query={committedQuery}
-            includeEmpty={includeEmpty}
-            registerCopyProvider={(fn) => (resultsTsv.current = fn)}
-            onQueryError={setQueryError}
-          />
-        </div>
-      </div>
+      <HomeWorkspace active={tab === "home"} showHidden={showHidden} />
       {tab === "explorer" && (
         <Suspense fallback={<div className={styles.chunkLoading}>Loading…</div>}>
-          <Explorer showHidden={showHidden} />
+          <ExplorerWorkspace showHidden={showHidden} />
         </Suspense>
       )}
       {tab === "dash" &&
         (dashEnabled || version === undefined ? (
           <Suspense fallback={<div className={styles.chunkLoading}>Loading…</div>}>
-            <DashApp path={dashPath} showHidden={showHidden} />
+            <DashWorkspace path={dashPath} showHidden={showHidden} />
           </Suspense>
         ) : (
           <div className={styles.dashDisabled}>

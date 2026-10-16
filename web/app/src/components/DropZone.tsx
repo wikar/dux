@@ -53,9 +53,10 @@ export default function DropZone(props: DropZoneProps) {
               key={`${item.table}\0${item.name}`}
               field={item}
               zone={props.id}
+              listId={props.id}
               index={idx}
               onRemove={() => props.onRemove(idx)}
-              onReorder={(draggedIdx) => props.onReorder(idx, draggedIdx)}
+              onReorder={(draggedIdx) => props.onReorder(draggedIdx, idx)}
               onAggChange={(agg) => props.onAggChange?.(idx, agg)}
               onValueChange={(val) => props.onValueChange?.(idx, val)}
               onOpChange={(op) => props.onOpChange?.(idx, op)}

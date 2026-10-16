@@ -1,12 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import styles from "./Home.module.css";
+import styles from "./DashboardList.module.css";
 import { listDashboards } from "../api";
 import { gotoDashboard } from "../actions";
 import { displayMessage } from "../message";
 
 /** Landing view at /dash/ — pick an existing dashboard or start from the
  *  "+ New" button in the top bar. */
-export default function Home() {
+export default function DashboardList() {
   const { data: entries, isLoading, error } = useQuery({
     queryKey: ["dashboards"],
     queryFn: listDashboards,

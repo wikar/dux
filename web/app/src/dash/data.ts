@@ -17,16 +17,17 @@ import { getTheme } from "./api";
 import { useDocStore, useUiStore } from "./store";
 import type { CrossMark } from "./store";
 import type { Dashboard, DashElement, SlicerSelection, ThemeTokens } from "./types";
+import { measuresQuery, schemaQuery } from "../model/modelQueries";
 
 // ─── Schema / formats ────────────────────────────────────────────────────────
 
 export function useDuxSchema(): Schema | undefined {
-  return useQuery({ queryKey: ["schema"], queryFn: () => duxClient.fetchSchema() }).data;
+  return useQuery(schemaQuery).data;
 }
 
 /** Measure display formats keyed by output column name (= measure name). */
 export function useFormats(): Record<string, MeasureFormat> {
-  const { data } = useQuery({ queryKey: ["measures"], queryFn: () => duxClient.fetchMeasures() });
+  const { data } = useQuery(measuresQuery);
   return useMemo(() => {
     const map: Record<string, MeasureFormat> = {};
     for (const m of data ?? []) {
